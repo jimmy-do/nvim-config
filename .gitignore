@@ -1,5 +1,4 @@
-# Lazy.nvim local plugin installs/cache
-/lazy-lock.json
+# Local Lazy.nvim cache/plugin installs
 /.lazy/
 
 # Local editor/session files
