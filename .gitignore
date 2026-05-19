@@ -1,0 +1,11 @@
+# Lazy.nvim local plugin installs/cache
+/lazy-lock.json
+/.lazy/
+
+# Local editor/session files
+*.swp
+*.swo
+Session.vim
+
+# OS junk
+.DS_Store
