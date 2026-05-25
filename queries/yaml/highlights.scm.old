@@ -1,0 +1,25 @@
+; extends
+
+; Colons after mapping keys
+":" @punctuation.delimiter
+
+; List item hyphens at the start of sequence items
+"-" @punctuation.special
+
+; Block scalar indicators
+"|" @punctuation.special
+">" @punctuation.special
+
+; Flow collection delimiters (inline arrays and objects)
+"[" @punctuation.bracket
+"]" @punctuation.bracket
+"{" @punctuation.bracket
+"}" @punctuation.bracket
+"," @punctuation.delimiter
+
+; Anchors and aliases for YAML references
+(anchor_name) @label
+(alias_name) @label
+
+; Tags like !!str, !!int, custom !tags
+(tag) @type

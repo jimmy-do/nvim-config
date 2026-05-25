@@ -15,6 +15,11 @@ return {
       },
     },
     opts = {
+      filesystem = {
+        follow_current_file = {
+          enabled = false,
+        },
+      },
       window = {
         mappings = {
           -- Disable dangerous basename rename key
