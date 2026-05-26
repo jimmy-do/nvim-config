@@ -1,10 +1,27 @@
 -- ── Tuning knobs ─────────────────────────────────────────────────────────────
-local sepia_amount = 5 -- 0-100, sepia intensity. 0 = off, 50 = half sepia, 100 = full sepia
-local bg_transparency = 40 -- 0 = opaque, 50 = default (0.20 base + 1.00 extra for core groups), 100 = fully transparent
+local sepia_amount = 0 -- 0-100, sepia intensity. 0 = off, 50 = half sepia, 100 = full sepia
+local bg_transparency = 100 -- 0 = opaque, 50 = default (0.20 base + 1.00 extra for core groups), 100 = fully transparent
 local fg_lightness = 50 -- 0-100, HSL L channel. 50 = original, <50 = darker, >50 = brighter
 local fg_saturation = 40 -- 0-100, HSL S channel. 50 = original, 0 = grayscale, 100 = max vivid
-local darken_background = 52 -- 0-100, bg luminance. 50 = original, 0 = #000000, 100 = #cccccc
+local darken_background = 0 -- 0-100, bg luminance. 50 = original, 0 = #000000, 100 = #cccccc
 local normalize_background = 0 -- 0-100, bg saturation toward neutral gray (same luminance). 0 = original hue, 100 = fully neutral
+local chrome_darken = 50 -- 0 = pure black, 50 = original theme bg, 100 = fully transparent
+local gruvbox_red_saturation = 100 -- gruvbox only: 100 = vivid GruvboxRed (if/end/keywords), lower = muted toward gray
+local gruvbox_orange_saturation = 100 -- gruvbox only: 100 = vivid GruvboxOrange (Values/nindent/builtins), lower = muted toward gray
+
+-- Chrome groups: tab bar (top), NeoTree title (side), status line (bottom).
+-- Controlled exclusively by chrome_darken; bg_transparency does NOT touch these.
+-- fg is still protected by fg_protected_groups (fg colors are never altered).
+local chrome_groups = {
+  "^TabLine",
+  "^TabLineFill$",
+  "^TabLineSel$",
+  "^BufferLine",
+  "^BufferLineFill$",
+  "^WinBar$",
+  "^WinBarNC$",
+  "^NeoTreeTitleBar$",
+}
 
 -- Extra transparent groups applied only when habamax is active
 local habamax_extra_transparent = {
@@ -31,6 +48,11 @@ local transparent_bg_groups = {
 -- Color used globally for periods, {{}} and [[]] (catppuccin blue / soft periwinkle)
 -- Change this one constant to re-tune all three features at once.
 local PUNCT_BLUE = "#9bb0e0"
+
+-- The color used as the "behind nvim" reference when simulating transparency
+-- via bg color blending. Default is pure black — matches Ghostty's default bg
+-- and most terminals when nvim's bg is set to nil.
+local TERMINAL_BG = "#000000"
 
 -- Groups that must stay opaque regardless of transparency setting
 -- fzf-lua is explicitly listed here so it is never blurred/transparent
@@ -59,10 +81,19 @@ local opaque_groups = {
   "^Telescope",
 }
 
+-- Lualine accent pill groups use "colored bg + dark fg" design.
+-- darken_background must NOT touch their bg — darkening the pill bg
+-- makes the dark fg invisible. Protected from darken_background only;
+-- sepia, normalize, and transparency still apply normally.
+local darken_bg_protected_groups = {
+  "^lualine_a_",
+  "^lualine_z_",
+}
+
 -- Groups excluded from FG adjustments (sepia fg, fg_lightness, fg_saturation).
 -- These still receive BG adjustments (darken_background, bg_transparency).
--- Tab/bufferline groups have their own carefully-tuned fg colors that break
--- visually when our global fg knobs touch them.
+-- Tab/bufferline and statusline groups have carefully-tuned fg colors that break
+-- visually when the global fg knobs touch them.
 local fg_protected_groups = {
   "^TabLine",
   "^TabLineFill",
@@ -71,6 +102,32 @@ local fg_protected_groups = {
   "^BufferLineFill",
   "^WinBar",
   "^WinBarNC",
+  "^StatusLine",
+  "^StatusLineNC",
+  "^lualine_a_normal$",
+  "^lualine_a_insert$",
+  "^lualine_a_visual$",
+  "^lualine_a_command$",
+  "^lualine_a_replace$",
+  "^lualine_a_terminal$",
+  "^lualine_a_inactive$",
+  "^lualine_z_normal$",
+  "^lualine_z_insert$",
+  "^lualine_z_visual$",
+  "^lualine_z_command$",
+  "^lualine_z_replace$",
+  "^lualine_z_terminal$",
+  "^lualine_z_inactive$",
+  "^MiniStatusline",
+}
+
+-- Comment groups excluded from the fg_saturation knob only (fg_lightness still
+-- applies). Keeps comments at their colorscheme-native saturation globally.
+local saturation_protected_groups = {
+  "^Comment$",
+  "^SpecialComment$",
+  "^@comment",
+  "^@lsp%.type%.comment",
 }
 
 -- ── Color math ───────────────────────────────────────────────────────────────
@@ -171,6 +228,26 @@ local function adjust_fg_hsl(hex, lightness_level, saturation_level)
   return rgb_to_hex(hsl_to_rgb(h, s, l))
 end
 
+-- Scale a color's HSL saturation by keep% (100 = unchanged, 0 = grayscale). Hue/Lightness preserved.
+local function desaturate_hex(hex, keep)
+  local r, g, b = hex_to_rgb(hex)
+  local h, s, l = rgb_to_hsl(r, g, b)
+  s = s * (math.max(0, math.min(100, keep)) / 100)
+  return rgb_to_hex(hsl_to_rgb(h, s, l))
+end
+
+-- Lift fg's HSL Lightness to min_lightness if below that floor; H and S unchanged.
+-- bg_hex is accepted for interface consistency but lightness floor is sufficient here.
+local function ensure_readable_fg(fg_hex, _bg_hex, min_lightness)
+  local r, g, b = hex_to_rgb(fg_hex)
+  local h, s, l = rgb_to_hsl(r, g, b)
+  if l < min_lightness then
+    l = min_lightness
+    return rgb_to_hex(hsl_to_rgb(h, s, l))
+  end
+  return fg_hex
+end
+
 local function resolve_transparency()
   if bg_transparency <= 50 then
     local f = bg_transparency / 50
@@ -204,6 +281,12 @@ local function darken_bg_adjust(hex, level)
     end
   end
   return rgb_to_hex(adj(r, 0xcc), adj(g, 0xcc), adj(b, 0xcc))
+end
+
+local function blend_to_terminal(hex, alpha)
+  local r, g, b = hex_to_rgb(hex)
+  local tr, tg, tb = hex_to_rgb(TERMINAL_BG)
+  return rgb_to_hex(r + (tr - r) * alpha, g + (tg - g) * alpha, b + (tb - b) * alpha)
 end
 
 local function color_to_hex(color)
@@ -353,6 +436,15 @@ local function get_highlights()
   return merged
 end
 
+-- ── Single source of truth for all theme transformations ─────────────────────
+-- Every highlight group passes through this pipeline on each run:
+--   bg:  normalize_background → sepia → darken_background → transparency blend
+--   fg:  sepia → HSL (lightness + saturation)  [skipped for fg_protected_groups]
+--   sp:  sepia
+-- transparent_bg_groups get bg blended toward TERMINAL_BG (or nil at t=1).
+-- opaque_groups get bg forced to fallback_opaque_bg with blend=0.
+-- All historical per-theme "manually fix tab/winbar bg" patches have been
+-- removed — this pipeline handles them uniformly via transparent_bg_groups.
 local function adjust_all_highlights()
   local fallback_opaque_bg = darken_bg_adjust(
     sepia_hex(normalize_bg_adjust(opaque_ui_bg(), normalize_background), sepia_amount / 100),
@@ -384,10 +476,13 @@ local function adjust_all_highlights()
             adj[key] = sepia_hex(hex, sepia_amount / 100)
           end
           if key == "bg" and darken_background ~= 50 then
-            adj[key] = darken_bg_adjust(adj[key], darken_background)
+            if not matches(group, darken_bg_protected_groups) then
+              adj[key] = darken_bg_adjust(adj[key], darken_background)
+            end
           end
           if key == "fg" and not fg_protected and (fg_lightness ~= 50 or fg_saturation ~= 50) then
-            adj[key] = adjust_fg_hsl(adj[key], fg_lightness, fg_saturation)
+            local sat = matches(group, saturation_protected_groups) and 50 or fg_saturation
+            adj[key] = adjust_fg_hsl(adj[key], fg_lightness, sat)
           end
           changed = true
         end
@@ -399,10 +494,30 @@ local function adjust_all_highlights()
         changed = true
       end
 
-      -- Transparency
+      -- Transparency / chrome
       if matches(group, opaque_groups) then
         adj.bg = adj.bg or fallback_opaque_bg
         adj.blend = 0
+        changed = true
+      elseif matches(group, chrome_groups) then
+        -- chrome_darken owns the bg for these groups entirely; bg_transparency is skipped.
+        -- Exception: pill groups with "colored bg + dark fg" design keep their theme-native bg.
+        if adj.bg then
+          if chrome_darken < 50 then
+            local factor = (50 - chrome_darken) / 50
+            local r, g, b = hex_to_rgb(adj.bg)
+            adj.bg = rgb_to_hex(r * (1 - factor), g * (1 - factor), b * (1 - factor))
+          elseif chrome_darken > 50 then
+            local factor = (chrome_darken - 50) / 50
+            if factor >= 1 then
+              adj.bg = nil
+            else
+              adj.bg = blend_to_terminal(adj.bg, factor)
+              adj.blend = math.floor(factor * 100 + 0.5)
+            end
+          end
+          -- chrome_darken == 50: leave adj.bg as-is (theme default after pipeline)
+        end
         changed = true
       elseif adj.bg then
         local base_transp, extra_transp_val = resolve_transparency()
@@ -412,8 +527,12 @@ local function adjust_all_highlights()
           t = math.min(t + extra_transp_val, 1)
         end
         if t >= 1 then
+          -- Fully transparent: nil out bg entirely
           adj.bg = nil
         elseif t > 0 then
+          -- Simulate gradient transparency by blending bg toward TERMINAL_BG
+          adj.bg = blend_to_terminal(adj.bg, t)
+          -- Also set blend for float groups that actually respect it (Pmenu border, etc.)
           adj.blend = math.max(adj.blend or 0, math.floor(t * 100 + 0.5))
         end
         changed = true
@@ -430,22 +549,6 @@ local function adjust_all_highlights()
   vim.o.pumblend = 0
 end
 
--- ── Shared helper: transparent top bar ───────────────────────────────────────
-local function apply_transparent_top_bar()
-  for _, group in ipairs({ "TabLine", "TabLineSel", "TabLineFill", "NeoTreeTitleBar", "WinBar", "WinBarNC" }) do
-    local ok, hl = pcall(vim.api.nvim_get_hl, 0, { name = group, link = false })
-    if ok then
-      local adj = {}
-      for k, v in pairs(hl) do
-        adj[k] = v
-      end
-      adj.bg = nil
-      adj.blend = nil
-      pcall(vim.api.nvim_set_hl, 0, group, adj)
-    end
-  end
-end
-
 -- ── Habamax-specific overrides ───────────────────────────────────────────────
 local function apply_habamax_overrides()
   if vim.g.colors_name ~= "habamax" then
@@ -453,22 +556,42 @@ local function apply_habamax_overrides()
   end
   -- Black thin separator bar between Neo-tree and editor
   pcall(vim.api.nvim_set_hl, 0, "WinSeparator", { fg = "#000000", bg = "#000000" })
-  apply_transparent_top_bar()
 end
 
--- ── Catppuccin-specific overrides ────────────────────────────────────────────
-local function apply_catppuccin_overrides()
-  if not (vim.g.colors_name or ""):match("^catppuccin") then
-    return
-  end
-  apply_transparent_top_bar()
-end
-
--- ── Kanagawa: soft-white fg overrides (runs after plugins reset their groups) ─
--- #c5c9c5: neutral cool gray-white, softer than Normal fg #DCD7BA, not warm/yellow
+-- ── Soft-white fg overrides for kanagawa and gruvbox ─────────────────────────
+-- Overrides NeoTree fg groups to a neutral cool gray-white (#c5c9c5) for both
+-- kanagawa and gruvbox variants — both themes' default NeoTree fg colors clash
+-- with the editor's body text in production-quality dev setups.
+-- Runs deferred at 300ms so it wins after NeoTree resets its own groups on load.
 local KANAGAWA_SOFT_WHITE = "#c5c9c5"
 
-local function apply_kanagawa_soft_overrides()
+-- Mute gruvbox's vivid red/orange accents (GruvboxRed: if/end/keywords,
+-- GruvboxOrange: Values/nindent/builtins). All such tokens link to these named
+-- groups, so adjusting their fg recolors every linked token at once. gruvbox only.
+-- Skips when saturation is 100 so the pipeline's base value (re-applied on each
+-- apply_theme_adjustments) is left intact — that's how restoring to 100 works.
+local function apply_gruvbox_accent_adjust()
+  if vim.g.colors_name ~= "gruvbox" then
+    return
+  end
+  local ok, gb = pcall(require, "gruvbox")
+  if not ok or type(gb.palette) ~= "table" then
+    return
+  end
+  if gruvbox_red_saturation ~= 100 and gb.palette.bright_red then
+    pcall(vim.api.nvim_set_hl, 0, "GruvboxRed", { fg = desaturate_hex(gb.palette.bright_red, gruvbox_red_saturation) })
+  end
+  if gruvbox_orange_saturation ~= 100 and gb.palette.bright_orange then
+    pcall(
+      vim.api.nvim_set_hl,
+      0,
+      "GruvboxOrange",
+      { fg = desaturate_hex(gb.palette.bright_orange, gruvbox_orange_saturation) }
+    )
+  end
+end
+
+local function apply_soft_white_overrides()
   local theme = vim.g.colors_name or ""
   if not (theme:match("^kanagawa") or theme:match("^gruvbox")) then
     return
@@ -492,20 +615,58 @@ local function apply_kanagawa_soft_overrides()
   end
 end
 
+-- Ensures chrome fg colors remain visible when chrome bg has been darkened or
+-- made transparent. Only touches groups matching chrome_groups; never alters
+-- editor body fg. Lifts HSL Lightness to a floor — color identity (hue) is
+-- preserved so NORMAL stays yellow-ish, INSERT stays green-ish, etc.
+local function apply_chrome_readability_fix()
+  local min_lightness
+  if chrome_darken < 50 then
+    -- Linear: 75 at chrome_darken=0, approaches 50 at chrome_darken=50 (no-op)
+    min_lightness = 75 - chrome_darken * 0.5
+  elseif chrome_darken > 50 then
+    -- Transparent zone: bg is gone, terminal (near-black) shows through
+    min_lightness = 70
+  else
+    return -- chrome_darken == 50: theme default, no fix needed
+  end
+
+  for group, hl in pairs(read_highlights()) do
+    if not hl.link and matches(group, chrome_groups) then
+      local fg_hex = hl.fg and normalize_hex(hl.fg)
+      if fg_hex then
+        local new_fg = ensure_readable_fg(fg_hex, nil, min_lightness)
+        if new_fg ~= fg_hex then
+          local adj = {}
+          for k, v in pairs(hl) do
+            adj[k] = v
+          end
+          adj.fg = new_fg
+          pcall(vim.api.nvim_set_hl, 0, group, adj)
+        end
+      end
+    end
+  end
+end
+
+-- Multiple deferred passes (immediate → schedule → 50ms → 200ms) intentionally
+-- catch highlights set late by plugins (bufferline, lualine, neo-tree, etc.).
+-- This is verbose but necessary — do NOT collapse to a single call.
 local function apply_theme_adjustments(refresh_base)
   apply_global_punct_highlights()
   if refresh_base or adjust_base_name ~= (vim.g.colors_name or "") then
     capture_base()
   end
-  -- Run immediately + 3 deferred passes to catch plugins that set highlights late
   adjust_all_highlights()
   vim.schedule(adjust_all_highlights)
   vim.defer_fn(adjust_all_highlights, 50)
   vim.defer_fn(adjust_all_highlights, 200)
   vim.defer_fn(apply_fzf_opaque_highlights, 250)
   vim.defer_fn(apply_habamax_overrides, 250)
-  vim.defer_fn(apply_catppuccin_overrides, 250)
-  vim.defer_fn(apply_kanagawa_soft_overrides, 300)
+  vim.defer_fn(apply_soft_white_overrides, 300)
+  vim.defer_fn(apply_chrome_readability_fix, 350)
+  vim.defer_fn(apply_chrome_readability_fix, 600)
+  vim.defer_fn(apply_gruvbox_accent_adjust, 300)
 end
 
 -- ── Plugin specs ─────────────────────────────────────────────────────────────
@@ -524,7 +685,7 @@ return {
         end
         return {
           Comment = { fg = blend_toward_bg(colors.theme.syn.comment, 0.45) },
-          -- NeoTreeDirectoryName is also patched via apply_kanagawa_soft_overrides at 300ms
+          -- NeoTreeDirectoryName is also patched via apply_soft_white_overrides at 300ms
           -- (kanagawa overrides alone don't stick; NeoTree resets its groups after load)
           NeoTreeDirectoryName = { fg = KANAGAWA_SOFT_WHITE },
           ["@variable.member"] = { fg = colors.theme.syn.special1 },
@@ -663,6 +824,15 @@ return {
         end
       end, { nargs = 1 })
 
+      -- :ChromeDarken <0-100> — 0 = black, 50 = theme default, 100 = transparent
+      vim.api.nvim_create_user_command("ChromeDarken", function(opts)
+        if set_fg_knob("ChromeDarken", function(v)
+          chrome_darken = v
+        end, opts.args) then
+          apply_theme_adjustments()
+        end
+      end, { nargs = 1 })
+
       -- :NormalizeBackground <0-100> — live bg hue neutralization toward gray
       vim.api.nvim_create_user_command("NormalizeBackground", function(opts)
         if
@@ -674,9 +844,61 @@ return {
         end
       end, { nargs = 1 })
 
+      -- :GruvboxRed / :GruvboxOrange <0-100> — gruvbox only, mute the vivid red/orange accents
+      vim.api.nvim_create_user_command("GruvboxRed", function(opts)
+        if set_fg_knob("GruvboxRed", function(v)
+          gruvbox_red_saturation = v
+        end, opts.args) then
+          apply_theme_adjustments()
+        end
+      end, { nargs = 1 })
+      vim.api.nvim_create_user_command("GruvboxOrange", function(opts)
+        if set_fg_knob("GruvboxOrange", function(v)
+          gruvbox_orange_saturation = v
+        end, opts.args) then
+          apply_theme_adjustments()
+        end
+      end, { nargs = 1 })
+
+      -- Per-colorscheme knob defaults applied automatically on ColorScheme event.
+      -- These OVERWRITE any manual :BgTransparency / :DarkenBackground values on theme switch.
+      -- To preserve manual values across theme switches, remove the relevant entry below.
+      local colorscheme_defaults = {
+        ["kanagawa-dragon"] = { bg_transparency = 45, darken_background = 0, chrome_darken = 0 },
+        ["gruvbox"] = {
+          bg_transparency = 45,
+          darken_background = 25,
+          fg_saturation = 50,
+          sepia_amount = 20,
+          gruvbox_red_saturation = 55,
+          gruvbox_orange_saturation = 60,
+        },
+      }
+
       vim.api.nvim_create_autocmd("ColorScheme", {
         pattern = "*",
         callback = function()
+          local key = vim.g.colors_name or ""
+          -- kanagawa.nvim sets colors_name = "kanagawa" for all variants.
+          -- Resolve the actual variant via its config to get the correct lookup key.
+          if key == "kanagawa" then
+            local ok, kanagawa = pcall(require, "kanagawa")
+            if ok and kanagawa.config and kanagawa.config.theme then
+              key = "kanagawa-" .. kanagawa.config.theme
+            end
+          end
+          local defaults = colorscheme_defaults[key]
+          if defaults then
+            -- Fall back to each knob's baseline when an entry omits a field, so
+            -- switching colorschemes resets predictably (and never assigns nil).
+            bg_transparency = defaults.bg_transparency or 100
+            darken_background = defaults.darken_background or 0
+            chrome_darken = defaults.chrome_darken or 50
+            fg_saturation = defaults.fg_saturation or 40
+            sepia_amount = defaults.sepia_amount or 0
+            gruvbox_red_saturation = defaults.gruvbox_red_saturation or 100
+            gruvbox_orange_saturation = defaults.gruvbox_orange_saturation or 100
+          end
           apply_theme_adjustments(true)
           apply_global_punct_matches()
         end,
@@ -688,6 +910,58 @@ return {
       })
     end,
   },
+
+  {
+    "nvim-lualine/lualine.nvim",
+    optional = true,
+    opts = function(_, opts)
+      -- Make lualine's middle sections (b/c, and their x/y mirrors) transparent
+      -- so they inherit StatusLine's bg, which follows darken_background. Only
+      -- the a/z pills keep an explicit colored bg. Built from whatever theme
+      -- lualine's "auto" would resolve for the active colorscheme, and rebuilt
+      -- on ColorScheme so pill colors track the active theme.
+      local function transparent_middle_theme()
+        local lok, loader = pcall(require, "lualine.utils.loader")
+        if not lok then
+          return nil
+        end
+        local ok, theme = pcall(loader.load_theme, vim.g.colors_name or "")
+        if not ok or type(theme) ~= "table" then
+          return nil
+        end
+        for _, mode in pairs(theme) do
+          if type(mode) == "table" then
+            if mode.b then
+              mode.b.bg = nil
+            end
+            if mode.c then
+              mode.c.bg = nil
+            end
+          end
+        end
+        return theme
+      end
+
+      local built = transparent_middle_theme()
+      if built then
+        opts.options = opts.options or {}
+        opts.options.theme = built
+      end
+
+      vim.api.nvim_create_autocmd("ColorScheme", {
+        callback = function()
+          vim.schedule(function()
+            local t = transparent_middle_theme()
+            local hok, hl = pcall(require, "lualine.highlight")
+            if t and hok then
+              hl.create_highlight_groups(t)
+            end
+          end)
+        end,
+      })
+    end,
+  },
+
   { "miikanissi/modus-themes.nvim", priority = 1000 },
 
   {
