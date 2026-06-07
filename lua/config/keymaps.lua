@@ -89,6 +89,11 @@ vim.keymap.set("n", "<leader>nt", "<cmd>Neotree toggle reveal left<CR>", {
   desc = "Toggle Neo-tree",
 })
 
+-- Exit terminal mode with Esc Esc
+vim.keymap.set("t", "<Esc><Esc>", [[<C-\><C-n>]], {
+  desc = "Exit terminal mode",
+})
+
 vim.keymap.set("n", "<leader>nr", "<cmd>Neotree reveal left<CR>", {
   desc = "Reveal current file in Neo-tree",
 })

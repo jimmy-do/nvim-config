@@ -1,0 +1,31 @@
+token="$$-$(date +%s)"
+tmux set-option -gq @prefix_highlight_animation_token "$token"
+
+frame=0
+while [ "$(tmux show-option -gqv @prefix_highlight_animation_token)" = "$token" ]; do
+  active=0
+  if tmux list-clients -F '#{client_prefix}' 2>/dev/null | grep -q '^1$'; then
+    active=1
+  elif tmux list-panes -a -F '#{pane_in_mode}' 2>/dev/null | grep -q '^1$'; then
+    active=1
+  fi
+
+  if [ "$active" -eq 1 ]; then
+    case "$frame" in
+      0) dots='.  ' ;;
+      1) dots='.#[fg=#323030]. ' ;;
+      *) dots='.#[fg=#323030].#[fg=#323031].' ;;
+    esac
+    tmux set-option -gq @prefix_highlight_dots "$dots"
+    tmux refresh-client -S
+    frame=$(((frame + 1) % 3))
+    sleep 0.5
+  else
+    if [ -n "$(tmux show-option -gqv @prefix_highlight_dots)" ]; then
+      tmux set-option -gq @prefix_highlight_dots ''
+      tmux refresh-client -S
+    fi
+    frame=0
+    sleep 0.25
+  fi
+done

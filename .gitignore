@@ -5,6 +5,7 @@
 *.swp
 *.swo
 Session.vim
+*.log
 
 # OS junk
 .DS_Store
