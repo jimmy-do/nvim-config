@@ -1,0 +1,667 @@
+background-opacity = .95
+background-blur = 0
+background-opacity-cells = false
+#jetbrainsmono presets
+font-style = light
+font-size = 16
+font-thicken = true
+font-thicken-strength = 0
+adjust-cell-height = -4%
+adjust-cell-width = 2%
+
+#oled
+#theme = akari-night
+#macbook
+#theme = "Gruvbox Dark"
+#theme = Tomorrow Night Eighties
+#theme = Gruvbox Material Dark
+# theme = Material
+# theme = Material Dark
+# theme = Material Darker
+# theme = Material Design Colors
+# theme = Material Ocean
+# theme = JetBrains Darcula
+# theme = Nightfox
+# theme = Nordfox
+# theme = TokyoNight
+# theme = TokyoNight Day
+# theme = TokyoNight Moon
+# theme = TokyoNight Night
+# theme = TokyoNight Storm
+# theme = Tomorrow
+
+# theme = Tomorrow Night Blue
+# theme = Tomorrow Night Bright
+# theme = Tomorrow Night Burns
+# Custom Base16 Gruvbox Material Dark-ish
+# theme = Spacegray Eighties
+# theme = Spacegray Eighties Dull
+
+background = 282828
+foreground = d4be98
+selection-background = 3c3836
+selection-foreground = d4be98
+
+palette = 0=282828
+palette = 1=ea6962
+palette = 2=a9b665
+palette = 3=d8a657
+palette = 4=7daea3
+palette = 5=d3869b
+palette = 6=89b482
+palette = 7=d4be98
+palette = 8=928374
+palette = 9=ea6962
+palette = 10=a9b665
+palette = 11=d8a657
+palette = 12=7daea3
+palette = 13=d3869b
+palette = 14=89b482
+palette = 15=ddc7a1
+
+keybind = all:super+equal=increase_font_size:0.5
+keybind = all:super+minus=decrease_font_size:0.5
+keybind = all:super+zero=reset_font_size
+
+# tmux window navigation
+keybind = cmd+shift+h=csi:5;30012~
+keybind = cmd+j=csi:5;30012~
+keybind = cmd+k=csi:5;30013~
+keybind = cmd+l=csi:5;30013~
+keybind = cmd+semicolon=csi:5;30014~
+
+# alt fallback
+keybind = alt+h=esc:h
+keybind = alt+l=esc:l
+
+# Keep Cmd+Left / Cmd+Right for shell line navigation.
+# Do NOT send Ctrl-a because tmux uses C-a as prefix.
+keybind = cmd+left=csi:H
+keybind = cmd+right=csi:F
+
+macos-option-as-alt = left
+
+# Use a Nerd Font. Critical for displaying Git branch icons, Kubernetes
+# wheel icons, and Terraform states in your prompt.
+
+#font-family =  terminess nerd font
+#font-family = DejaVuSansM Nerd Font Mono
+#font-family = MesloLGSDZ Nerd Font Mono
+font-family = jetbrainsmono nerd font
+#font-family = droidsansm Nerd Font
+#font-family = hack nerd font
+#font-family = CaskaydiaCove Nerd Font Mono
+#font-family = Iosevka Nerd Font Mono
+
+#dejavusansm
+#font-style = regular
+#font-size = 20
+#adjust-cell-width = -8%
+#adjust-cell-height = 10%
+#font-thicken = true
+#font-thicken-strength = 0
+
+
+#preset for terminess
+#font-style = bold
+#font-size = 20
+#font-thicken = true
+#font-thicken-strength = 0
+#adjust-cell-width = -6%
+#adjust-cell-height = 20%
+
+cursor-style = block
+cursor-style-blink = true
+cursor-color = d4be98
+shell-integration-features = no-cursor
+
+window-decoration = auto
+macos-titlebar-style = tabs
+
+# font-family = DroidSansM Nerd Font Mono
+# font-family = RobotoMono Nerd Font Mono
+# font-family = DejaVuSansM Nerd Font Mono
+# font-family =  jetbrainsmono nerd font
+# font-family =  hack nerd font
+# font-family = CommitMono Nerd Font Mono
+
+# font-family = MonaspiceNe Nerd Font Mono
+# font-family = MonaspiceAr Nerd Font Mono
+# font-family = MonaspiceKr Nerd Font Mono
+# font-family = MonaspiceXe Nerd Font Mono
+# font-family = MonaspiceRn Nerd Font Mono
+
+# font-family = FiraCode Nerd Font Mono
+# font-family = MesloLGS Nerd Font Mono
+# font-family = CaskaydiaCove Nerd Font Mono
+# font-family = SauceCodePro Nerd Font Mono
+# font-family = UbuntuMono Nerd Font Mono
+# font-family = Iosevka Nerd Font Mono
+# font-family = JetBrainsMono Nerd Font Mono
+# font-family = Hack Nerd Font Mono
+# font-family = CommitMono Nerd Font Mono
+# font-family = Terminess Nerd Font Mono
+# font-family = DejaVuSansM Nerd Font Mono
+# font-family = SauceCodePro Nerd Font Mono
+
+
+#theme = Kanagawa Dragon
+# theme = Tomorrow Night
+# theme = One Double Dark
+
+# theme = Monokai Pro Ristretto
+# theme = Sonokai
+# theme = Everforest Dark Hard
+# theme = Flexoki Dark
+#theme = Melange Dark
+# theme = Gruvbox Dark Hard
+
+#theme = apprentice
+# theme = duskfox
+# theme = terafox
+# theme = kanagawabones
+#theme = zenburn
+#theme = Gruber Darker
+#theme = Zenburned
+#theme = seoul256-dark
+
+
+# --- Window & UX ---
+# Adds breathing room so logs don't smash against the glass
+window-padding-x = 10
+window-padding-y = 10
+window-padding-balance = true
+
+# --- Behavior & Performance ---
+mouse-hide-while-typing = true
+copy-on-select = clipboard
+
+shell-integration = zsh
+
+# Uncomment one theme at a time, then reload Ghostty with Cmd+Shift+,
+#theme = sonokai
+#theme = everforest-dark
+#theme = posterpole
+#theme = apprentice
+# theme = 0x96f
+# theme = 12-bit Rainbow
+# theme = 3024 Day
+# theme = 3024 Night
+# theme = Aardvark Blue
+# theme = Abernathy
+# theme = Adventure
+# theme = Adventure Time
+# theme = Adwaita
+# theme = Adwaita Dark
+# theme = Afterglow
+# theme = Aizen Dark
+# theme = Aizen Light
+# theme = Alabaster
+# theme = Alien Blood
+# theme = Andromeda
+# theme = Apple Classic
+# theme = Apple System Colors
+# theme = Apple System Colors Light
+# theme = Arcoiris
+# theme = Ardoise
+# theme = Argonaut
+# theme = Arthur
+# theme = Atelier Sulphurpool
+# theme = Atom
+# theme = Atom One Dark
+# theme = Atom One Light
+# theme = Aura
+# theme = Aura Dark
+# theme = Aurora
+# theme = Ayu
+# theme = Ayu Light
+# theme = Ayu Mirage
+# theme = Banana Blueberry
+# theme = Batman
+# theme = Belafonte Day
+# theme = Belafonte Night
+# theme = Birds Of Paradise
+# theme = Black Metal
+# theme = Black Metal (Bathory)
+# theme = Black Metal (Burzum)
+# theme = Black Metal (Dark Funeral)
+# theme = Black Metal (Gorgoroth)
+# theme = Black Metal (Immortal)
+# theme = Black Metal (Khold)
+# theme = Black Metal (Marduk)
+# theme = Black Metal (Mayhem)
+# theme = Black Metal (Nile)
+# theme = Black Metal (Venom)
+# theme = Blazer
+# theme = Blue Berry Pie
+# theme = Blue Dolphin
+# theme = Blue Matrix
+# theme = Bluloco Dark
+# theme = Bluloco Light
+# theme = Borland
+# theme = Box
+# theme = branch
+# theme = Breadog
+# theme = Breeze
+# theme = Bright Lights
+# theme = Broadcast
+# theme = Brogrammer
+# theme = Builtin Dark
+# theme = Builtin Light
+# theme = Builtin Pastel Dark
+# theme = Builtin Tango Dark
+# theme = Builtin Tango Light
+# theme = C64
+# theme = Calamity
+# theme = Carbonfox
+# theme = Catppuccin Frappe
+# theme = Catppuccin Latte
+# theme = Catppuccin Macchiato
+# theme = Catppuccin Mocha
+# theme = CGA
+# theme = Chalk
+# theme = Chalkboard
+# theme = Challenger Deep
+# theme = Chester
+# theme = Ciapre
+# theme = Citruszest
+# theme = Claude
+# theme = Claude Dark
+# theme = Claude Light
+# theme = Clear Dark
+# theme = Clear Light
+# theme = CLRS
+# theme = Cobalt Neon
+# theme = Cobalt Next
+# theme = Cobalt Next Dark
+# theme = Cobalt Next Minimal
+# theme = Cobalt2
+# theme = Coffee Theme
+# theme = Cool Night
+# theme = Crayon Pony Fish
+# theme = Cursor Dark
+# theme = Cursor Light
+# theme = Cutie Pro
+# theme = Cyberdyne
+# theme = Cyberpunk
+# theme = Cyberpunk Scarlet Protocol
+# theme = Dalton Dark
+# theme = Dark Modern
+# theme = Dark Pastel
+# theme = Dark+
+# theme = Darkermatrix
+# theme = Darkmatrix
+# theme = Darkside
+# theme = Dawnfox
+# theme = Dayfox
+# theme = Deep
+# theme = Desert
+# theme = Detuned
+# theme = Dimidium
+# theme = Dimmed Monokai
+# theme = Django
+# theme = Django Reborn Again
+# theme = Django Smooth
+# theme = Dogxi Misty
+# theme = Doom One
+# theme = Doom Peacock
+# theme = Dot Gov
+# theme = Dracula
+# theme = Dracula+
+# theme = Duckbones
+# theme = Duotone Dark
+# theme = Duskfox
+# theme = Earthsong
+# theme = Electron Highlighter
+# theme = Elegant
+# theme = Elemental
+# theme = Elementary
+# theme = Embark
+# theme = Embers Dark
+# theme = Emerald Synth
+# theme = ENCOM
+# theme = Espresso
+# theme = Espresso Libre
+# theme = Everblush
+# theme = Everforest Dark Hard
+# theme = Everforest Light Med
+# theme = Fahrenheit
+# theme = Fairyfloss
+# theme = Farmhouse Dark
+# theme = Farmhouse Light
+# theme = Fideloper
+# theme = Firefly Traditional
+# theme = Firefox Dev
+# theme = Firewatch
+# theme = Fish Tank
+# theme = Flat
+# theme = Flatland
+# theme = Flexoki Dark
+# theme = Flexoki Light
+# theme = Floraverse
+# theme = Forest Blue
+# theme = Framer
+# theme = Front End Delight
+# theme = Fun Forrest
+# theme = Galaxy
+# theme = Galizur
+# theme = Ghostty Default Style Dark
+# theme = GitHub
+# theme = GitHub Dark
+# theme = GitHub Dark Colorblind
+# theme = GitHub Dark Default
+# theme = GitHub Dark Dimmed
+# theme = GitHub Dark High Contrast
+# theme = GitHub Light Colorblind
+# theme = GitHub Light Default
+# theme = GitHub Light High Contrast
+# theme = GitLab Dark
+# theme = GitLab Dark Grey
+# theme = GitLab Light
+# theme = Glacier
+# theme = Gleam
+# theme = Gleam Classic
+# theme = Grape
+# theme = Grass
+# theme = Grey Green
+
+# theme = Gruvbox Light
+# theme = Gruvbox Light Hard
+# theme = Gruvbox Material
+# theme = Gruvbox Material Light
+# theme = Guezwhoz
+# theme = Hacktober
+# theme = Hardcore
+# theme = Harper
+# theme = Havn Daggry
+# theme = Havn Skumring
+# theme = HaX0R Blue
+# theme = HaX0R Gr33N
+# theme = hazyland
+# theme = Heeler
+# theme = Highway
+# theme = Hipster Green
+# theme = Hivacruz
+# theme = Homebrew
+# theme = Hopscotch
+# theme = Hopscotch.256
+# theme = Horizon
+# theme = Horizon Bright
+# theme = Hot Dog Stand
+# theme = Hot Dog Stand (Mustard)
+# theme = Hurtado
+# theme = Hybrid
+# theme = IBM 5153 CGA
+# theme = IBM 5153 CGA (Black)
+# theme = IC Green PPL
+# theme = IC Orange PPL
+# theme = Iceberg Dark
+# theme = Iceberg Light
+# theme = Idea
+# theme = Idle Toes
+# theme = IR Black
+# theme = IRIX Console
+# theme = IRIX Terminal
+# theme = iTerm2 Dark Background
+# theme = iTerm2 Default
+# theme = iTerm2 Light Background
+# theme = iTerm2 Pastel Dark Background
+# theme = iTerm2 Smoooooth
+# theme = iTerm2 Solarized Dark
+# theme = iTerm2 Solarized Light
+# theme = iTerm2 Tango Dark
+# theme = iTerm2 Tango Light
+# theme = Jackie Brown
+# theme = Japanesque
+# theme = Jellybeans
+# theme = JetCalm Light
+# theme = Jubi
+# theme = Kanagawa Lotus
+# theme = Kanagawabones
+# theme = Kanso Ink
+# theme = Kanso Mist
+# theme = Kanso Pearl
+#theme = Kanso Zen
+# theme = Karasu Night
+# theme = Karasu Snow
+# theme = Karma Dark
+# theme = Karma Dark Dimmed
+# theme = Karma Dark HC
+# theme = Karma Light
+# theme = Karma Light Dimmed
+# theme = Karma Light HC
+# theme = Kibble
+# theme = Kitty Default
+# theme = Kitty Low Contrast
+# theme = Klein Void
+# theme = Kolorit
+# theme = Konsolas
+# theme = Kurokula
+# theme = Lab Fox
+# theme = Laser
+# theme = Later This Evening
+# theme = Lavandula
+# theme = Light Owl
+# theme = Liquid Carbon
+# theme = Liquid Carbon Transparent
+# theme = Lovelace
+# theme = Man Page
+# theme = Mariana
+
+# theme = Mathias
+# theme = Matrix
+# theme = Matte Black
+# theme = Medallion
+# theme = Melange Dark
+# theme = Melange Light
+# theme = Mellifluous
+# theme = Mellow
+# theme = Miasma
+# theme = Midnight In Mojave
+# theme = Mirage
+# theme = Misterioso
+# theme = Modus Operandi
+# theme = Modus Operandi Tinted
+# theme = Modus Vivendi
+# theme = Modus Vivendi Tinted
+# theme = Molokai
+# theme = Mona Lisa
+# theme = Monokai Classic
+# theme = Monokai Pro
+# theme = Monokai Pro Light
+# theme = Monokai Pro Light Sun
+# theme = Monokai Pro Machine
+# theme = Monokai Pro Octagon
+# theme = Monokai Pro Ristretto
+# theme = Monokai Pro Spectrum
+# theme = Monokai Remastered
+# theme = Monokai Soda
+# theme = Monokai SublimeText
+# theme = Monokai Vivid
+# theme = Monospace Dark
+# theme = Monospace Light
+# theme = Moonfly
+# theme = Moonwalk
+# theme = N0Tch2K
+# theme = Neobones Dark
+# theme = Neobones Light
+# theme = Neon
+# theme = Neopolitan
+# theme = Neutron
+# theme = Night Lion V1
+# theme = Night Lion V2
+# theme = Night Owl
+# theme = Night Owlish Light
+# theme = Niji
+# theme = No Clown Fiesta
+# theme = No Clown Fiesta Light
+# theme = Nocturnal Winter
+# theme = Nord
+# theme = Nord Light
+# theme = Nord Wave
+# theme = Nordfox
+# theme = Novel
+# theme = novmbr
+# theme = Nvim Dark
+# theme = Nvim Light
+# theme = Obsidian
+# theme = Ocean
+# theme = Oceanic Material
+# theme = Oceanic Next
+# theme = Ollie
+# theme = One Dark Two
+# theme = One Double Light
+# theme = One Half Dark
+# theme = One Half Light
+# theme = Onenord
+# theme = Onenord Light
+# theme = Operator Mono Dark
+# theme = Overnight Slumber
+# theme = owl
+# theme = Oxide
+# theme = Oxocarbon
+# theme = Pale Night Hc
+# theme = Pandora
+# theme = Paraiso Dark
+# theme = Paul Millr
+# theme = Pencil Dark
+# theme = Pencil Light
+# theme = Peppermint
+# theme = Phala Green Dark
+# theme = Piatto Light
+# theme = Pierre Dark
+# theme = Pierre Light
+# theme = Pnevma
+# theme = Poimandres
+# theme = Poimandres Darker
+# theme = Poimandres Storm
+# theme = Poimandres White
+# theme = Popping And Locking
+# theme = Powershell
+# theme = Primary
+# theme = Pro
+# theme = Pro Light
+# theme = Purple Rain
+# theme = Purplepeter
+# theme = Rapture
+# theme = Raycast Dark
+# theme = Raycast Light
+# theme = Rebecca
+# theme = Red Alert
+# theme = Red Planet
+# theme = Red Sands
+# theme = Relaxed
+# theme = Retro
+#theme = Retro Legends
+# theme = Rippedcasts
+# theme = Rose Pine
+# theme = Rose Pine Dawn
+# theme = Rose Pine Moon
+# theme = Rouge 2
+# theme = Royal
+# theme = Ryuuko
+# theme = Sakura
+# theme = Sauber
+# theme = Scarlet Protocol
+# theme = Sea Shells
+# theme = Seafoam Pastel
+# theme = SeedFlip Abyss
+# theme = SeedFlip Amethyst
+# theme = SeedFlip Canopy
+# theme = SeedFlip Carbon
+# theme = SeedFlip Coral
+# theme = SeedFlip Ember
+# theme = SeedFlip Glacier
+# theme = SeedFlip Inkwell
+# theme = SeedFlip Ivory
+# theme = SeedFlip Nightfall
+# theme = SeedFlip Phosphor
+# theme = SeedFlip Pulse
+# theme = SeedFlip Ultraviolet
+# theme = SeedFlip Voltage
+# theme = SeedFlip Wavelength
+# theme = Selenized Black
+# theme = Selenized Dark
+# theme = Selenized Light
+# theme = Seoulbones Dark
+# theme = Seoulbones Light
+# theme = Seti
+# theme = Shades Of Purple
+# theme = Shaman
+# theme = Shokunin
+# theme = Slate
+# theme = Sleepy Hollow
+# theme = Smyck
+# theme = Snazzy
+# theme = Snazzy Soft
+# theme = Soft Server
+# theme = Solarized Darcula
+# theme = Solarized Dark Higher Contrast
+# theme = Solarized Dark Patched
+# theme = Solarized Osaka Night
+# theme = Sonokai
+# theme = Spacedust
+# theme = Spacegray
+# theme = Spacegray Bright
+
+# theme = Spiderman
+# theme = Spring
+# theme = Square
+# theme = Squirrelsong Dark
+# theme = Srcery
+# theme = Starlight
+# theme = Sublette
+# theme = Subliminal
+# theme = Sugarplum
+# theme = Sundried
+# theme = Sunset Drive
+# theme = Symfonic
+# theme = Synthwave
+# theme = Synthwave Alpha
+# theme = Synthwave Everything
+# theme = Tango Adapted
+# theme = Tango Half Adapted
+# theme = Tearout
+# theme = Teerb
+# theme = Terafox
+# theme = Terminal Basic
+# theme = Terminal Basic Dark
+# theme = Thayer Bright
+# theme = The Hulk
+# theme = Tinacious Design Dark
+# theme = Tinacious Design Light
+
+# theme = Toy Chest
+# theme = traffic
+# theme = Trapped in Amber
+# theme = Treehouse
+# theme = Twilight
+# theme = Ubuntu
+# theme = Ultra Dark
+# theme = Ultra Violent
+# theme = Under The Sea
+# theme = Unikitty
+# theme = urban
+# theme = Urple
+# theme = Vague
+# theme = Vaughn
+# theme = Vercel
+# theme = Vesper
+# theme = Vibrant Ink
+# theme = Vimbones
+# theme = Violet Dark
+# theme = Violet Light
+# theme = Violite
+# theme = Warm Neon
+# theme = Wez
+# theme = Whimsy
+# theme = Wild Cherry
+# theme = Wilmersdorf
+# theme = Wombat
+# theme = Wryan
+# theme = Xcode Dark
+# theme = Xcode Dark hc
+# theme = Xcode Light
+# theme = Xcode Light hc
+# theme = Xcode WWDC
+#theme = Zenbones

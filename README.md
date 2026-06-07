@@ -2,6 +2,9 @@
 
 Personal LazyVim-based Neovim configuration for local development and temporary Linux lab environments.
 
+This `macos-dotfiles` branch adds the current Ghostty and Karabiner-Elements
+configuration. Use `main` for the cross-platform Neovim/tmux-only setup.
+
 ## Supported Environments
 
 - macOS
@@ -47,12 +50,54 @@ tmux source-file ~/.tmux.conf
 The status bar uses Nerd Font glyphs. The animated `WAIT`/`COPY` indicator runs
 only while a tmux prefix or copy mode is active.
 
+## Install macOS Dotfiles
+
+The macOS-only files are stored under `dotfiles/macos/`:
+
+- `dotfiles/macos/ghostty/config.ghostty`
+- `dotfiles/macos/karabiner/karabiner.json`
+
+Clone this branch when setting up a Mac:
+
+```bash
+rm -rf ~/.config/nvim
+git clone --branch macos-dotfiles \
+  https://github.com/jimmy-do/nvim-config.git ~/.config/nvim
+```
+
+Back up any existing configurations, then create symlinks:
+
+```bash
+mkdir -p ~/.config/karabiner
+mkdir -p "$HOME/Library/Application Support/com.mitchellh.ghostty"
+
+test ! -e ~/.config/karabiner/karabiner.json ||
+  mv ~/.config/karabiner/karabiner.json \
+    ~/.config/karabiner/karabiner.json.backup
+
+test ! -e "$HOME/Library/Application Support/com.mitchellh.ghostty/config.ghostty" ||
+  mv "$HOME/Library/Application Support/com.mitchellh.ghostty/config.ghostty" \
+    "$HOME/Library/Application Support/com.mitchellh.ghostty/config.ghostty.backup"
+
+ln -s ~/.config/nvim/dotfiles/macos/karabiner/karabiner.json \
+  ~/.config/karabiner/karabiner.json
+
+ln -s ~/.config/nvim/dotfiles/macos/ghostty/config.ghostty \
+  "$HOME/Library/Application Support/com.mitchellh.ghostty/config.ghostty"
+```
+
+Quit and reopen Karabiner-Elements after linking its configuration. Reload
+Ghostty with `Cmd+Shift+,` or restart it.
+
+See [dotfiles/macos/README.md](dotfiles/macos/README.md) for macOS-specific
+requirements and hardware notes.
+
 ## Platform Notes
 
 - The Neovim and tmux configurations work on macOS, Linux, and WSL2.
 - In WSL2, install Neovim, tmux, Git, and TPM inside the WSL distribution.
 - Configure the Nerd Font in the Windows terminal application hosting WSL2.
-- The Ghostty configuration is not included in this repository.
+- Ghostty and Karabiner are included only on the `macos-dotfiles` branch.
 - Ghostty-specific macOS `Cmd` keybindings do not apply to WSL2 terminals.
 
 ## Notes
