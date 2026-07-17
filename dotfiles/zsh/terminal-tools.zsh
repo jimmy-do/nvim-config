@@ -27,9 +27,9 @@ g() {
       [[ -n "$question" ]] || continue
       print
 
-      # Print mode cannot display tool permission prompts. Keep this casual chat
-      # tool-free so it answers inline instead of trying to act on the machine.
-      prompt="Quick-chat mode. Reply directly using only your own reasoning. Do not call tools, run commands, browse, inspect or modify files, or use MCP. User message: $question"
+      # Print mode cannot display command/file permission prompts. Web search is
+      # safe headlessly, so retain live answers without granting machine access.
+      prompt="You are a concise terminal chat assistant. Answer directly. Built-in web search is allowed and should be used for current information. Terminal commands, file tools, and MCP are unavailable. If a request needs those unavailable capabilities, say that g does not support it; do not invent settings, toggles, flags, or slash commands. User message: $question"
 
       if (( first_turn )); then
         command agy --model 'Gemini 3.5 Flash (High)' --print "$prompt"
