@@ -9,3 +9,7 @@ Session.vim
 
 # OS junk
 .DS_Store
+
+# Python bytecode (weather script)
+__pycache__/
+*.pyc

@@ -1,0 +1,27 @@
+#!/bin/sh
+# Colored full-width tmux banner.
+#
+# Usage: banner <lime|green|red> <duration_ms> <text>
+#
+# Width needs no handling here. The inline fill= below makes tmux paint the bar
+# across the whole status line no matter how short the text is -- the same
+# attribute tmux's own default message-style carries. Never drop it, or the bar
+# shrinks back to the width of its text.
+#
+# Colors follow the two-state scheme in tmux.conf:
+#   lime  #93FF12  in flight -- working, prompting, searching
+#   green #00FF33  done -- saved / reloaded / succeeded
+#   red   #FF2D2D  failed
+# The style is inlined in the message text rather than set via message-style,
+# because that option is global and would otherwise stay changed afterwards.
+#
+# A duration of 0 holds the banner until something else replaces it.
+
+case "$1" in
+  lime)  bg='#93FF12' ;;
+  green) bg='#00FF33' ;;
+  red)   bg='#FF2D2D' ;;
+  *)     bg='#00FF33' ;;
+esac
+
+tmux display-message -d "${2:-2000}" "#[bg=${bg},fg=#000000,bold,fill=${bg}] $3"

@@ -1,0 +1,53 @@
+#!/bin/sh
+
+# Toggle a two-pane YouTube column beside the pane that invoked Ctrl-y.
+# Window-scoped pane IDs prevent duplicate stacks and keep sessions independent.
+
+source_pane=$1
+window_id=$2
+
+pane_window() {
+  [ -n "$1" ] || return 0
+  tmux display-message -p -t "$1" '#{window_id}' 2>/dev/null
+}
+
+picker_pane=$(tmux show-options -w -t "$window_id" -qv @yt_picker_pane)
+video_pane=$(tmux show-options -w -t "$window_id" -qv @yt_video_pane)
+
+picker_window=$(pane_window "$picker_pane")
+video_window=$(pane_window "$video_pane")
+
+# A second Ctrl-y closes the existing pair. Also clean up a half-stale pair.
+if [ "$picker_window" = "$window_id" ] || [ "$video_window" = "$window_id" ]; then
+  zsh -f -c 'source /Users/jimmy/.config/nvim/dotfiles/zsh/terminal-tools.zsh; yt-pane-stop-external "$1"' _ "$window_id"
+  if [ "$picker_window" = "$window_id" ]; then
+    tmux kill-pane -t "$picker_pane"
+  fi
+  if [ "$video_window" = "$window_id" ]; then
+    tmux kill-pane -t "$video_pane"
+  fi
+  tmux set-option -w -t "$window_id" -u @yt_picker_pane
+  tmux set-option -w -t "$window_id" -u @yt_video_pane
+  exit 0
+fi
+
+start_directory=$(tmux display-message -p -t "$source_pane" '#{pane_current_path}')
+
+# First make the right column, initially occupied by the waiting video pane.
+video_pane=$(tmux split-window -h -p 34 -t "$source_pane" \
+  -c "$start_directory" -P -F '#{pane_id}' \
+  "zsh -f -c 'source /Users/jimmy/.config/nvim/dotfiles/zsh/terminal-tools.zsh; yt-pane-wait'") || exit 1
+
+# Split that column so the picker is above the larger 16:9-ish video area.
+picker_pane=$(tmux split-window -v -b -p 36 -t "$video_pane" \
+  -c "$start_directory" -P -F '#{pane_id}' \
+  "zsh -f -c 'source /Users/jimmy/.config/nvim/dotfiles/zsh/terminal-tools.zsh; yt-pane-picker $video_pane'") || {
+    tmux kill-pane -t "$video_pane"
+    exit 1
+  }
+
+tmux select-pane -t "$picker_pane" -T 'YouTube search'
+tmux select-pane -t "$video_pane" -T 'YouTube video'
+tmux set-option -w -t "$window_id" @yt_picker_pane "$picker_pane"
+tmux set-option -w -t "$window_id" @yt_video_pane "$video_pane"
+tmux select-pane -t "$picker_pane"

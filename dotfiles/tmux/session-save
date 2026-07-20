@@ -1,0 +1,36 @@
+#!/bin/sh
+# Save the tmux session with Resurrect, using Resurrect's own spinner animation,
+# then report the result on a full-width banner.
+#
+# Resurrect animates its spinner through plain `tmux display-message` calls, so
+# it picks up message-style. We flip that to acid lime for the duration and back
+# to pure green afterwards, matching the two-state scheme in tmux.conf. Both
+# carry fill=, which is what keeps the bar spanning the full line while the
+# spinner rewrites its text -- without it the bar resizes on every tick.
+
+LIME='bg=#93FF12,fg=#000000,bold,fill=#93FF12'
+GREEN='bg=#00FF33,fg=#000000,bold,fill=#00FF33'
+
+tmux set -g message-style "$LIME"
+
+out=$("$HOME/.tmux/plugins/tmux-resurrect/scripts/save.sh" 2>&1)
+status=$?
+
+tmux set -g message-style "$GREEN"
+
+if [ "$status" -ne 0 ]; then
+  "$HOME/.config/nvim/dotfiles/tmux/banner" red 5000 "SAVE FAILED  ·  ${out:-see resurrect output}"
+  exit "$status"
+fi
+
+# Report what actually landed on disk rather than asserting success blindly.
+last="$HOME/.local/share/tmux/resurrect/last"
+if [ -r "$last" ]; then
+  windows=$(grep -c '^window' "$last" 2>/dev/null || echo '?')
+  panes=$(grep -c '^pane' "$last" 2>/dev/null || echo '?')
+  detail="${windows} windows  ·  ${panes} panes  ·  $(date '+%H:%M:%S')"
+else
+  detail="$(date '+%H:%M:%S')"
+fi
+
+"$HOME/.config/nvim/dotfiles/tmux/banner" green 2500 "SESSION SAVED  ·  ${detail}"

@@ -1,0 +1,308 @@
+#!/usr/bin/env python3
+"""Hourly weather popup for tmux (prefix + t).
+
+Pulls from Open-Meteo (no API key) and renders an hourly strip with glyphs,
+plus today's high/low. Responses are cached briefly so repeat opens are instant.
+
+Usage: weather [--emoji] [--nocache]
+  --emoji    use emoji instead of Nerd Font glyphs
+  --nocache  bypass the cache and refetch
+"""
+
+import atexit
+import json
+import os
+import shutil
+import sys
+import time
+import urllib.parse
+import urllib.request
+from datetime import datetime
+
+# ── Location ─────────────────────────────────────────────────────────────────
+CITY = "San Jose, CA"
+LAT, LON = 37.3382, -121.8863
+TZ = "America/Los_Angeles"
+UNIT = "fahrenheit"  # or "celsius"
+
+CACHE = "/tmp/tmux-weather-cache.json"
+CACHE_TTL = 600  # seconds
+
+# ── Theme (kintsugi-ish, matched to the tmux status line) ────────────────────
+GOLD = "\033[38;2;219;173;73m"
+FG = "\033[38;2;202;202;194m"
+BRIGHT = "\033[38;2;221;221;221m"
+DIM = "\033[38;2;117;113;94m"
+BLUE = "\033[38;2;140;163;179m"
+RULE = "\033[38;2;90;90;85m"
+R = "\033[0m"
+B = "\033[1m"
+
+# ── Glyphs ───────────────────────────────────────────────────────────────────
+# Nerd Font weather set (nf-weather-*). Each is single-width.
+NERD = {
+    "clear_day": "", "clear_night": "",
+    "partly_day": "", "partly_night": "",
+    "cloudy": "", "fog": "",
+    "drizzle": "", "rain": "",
+    "snow": "", "storm": "",
+}
+EMOJI = {
+    "clear_day": "☀", "clear_night": "☾",
+    "partly_day": "⛅", "partly_night": "☁",
+    "cloudy": "☁", "fog": "\U0001f32b",
+    "drizzle": "\U0001f327", "rain": "\U0001f327",
+    "snow": "❄", "storm": "⛈",
+}
+
+# WMO weather code -> (icon key, label)
+CODES = {
+    0: ("clear", "Clear"), 1: ("clear", "Mainly clear"),
+    2: ("partly", "Partly cloudy"), 3: ("cloudy", "Overcast"),
+    45: ("fog", "Fog"), 48: ("fog", "Rime fog"),
+    51: ("drizzle", "Light drizzle"), 53: ("drizzle", "Drizzle"),
+    55: ("drizzle", "Heavy drizzle"),
+    56: ("drizzle", "Freezing drizzle"), 57: ("drizzle", "Freezing drizzle"),
+    61: ("rain", "Light rain"), 63: ("rain", "Rain"), 65: ("rain", "Heavy rain"),
+    66: ("rain", "Freezing rain"), 67: ("rain", "Freezing rain"),
+    71: ("snow", "Light snow"), 73: ("snow", "Snow"), 75: ("snow", "Heavy snow"),
+    77: ("snow", "Snow grains"),
+    80: ("rain", "Light showers"), 81: ("rain", "Showers"),
+    82: ("rain", "Heavy showers"),
+    85: ("snow", "Snow showers"), 86: ("snow", "Snow showers"),
+    95: ("storm", "Thunderstorm"), 96: ("storm", "Thunderstorm, hail"),
+    99: ("storm", "Thunderstorm, hail"),
+}
+
+BARS = "▁▂▃▄▅▆▇█"
+
+# Per-glyph colours: sun stays warm, cloud forms read white,
+# anything with a moon in it goes soft blue-white.
+SUN = "\033[38;2;232;180;72m"      # warm yellow/orange
+MOON = "\033[38;2;186;204;222m"    # soft white-blue
+WHITE = "\033[38;2;235;235;232m"   # cloud white
+COOL = "\033[38;2;168;190;212m"    # rain/snow, cooler than cloud
+
+# Temperature bands for the sparkline, hottest first.
+HOT_RED = "\033[38;2;224;70;70m"       # 100+
+RED_ORANGE = "\033[38;2;242;100;48m"   # 90-99
+ORANGE = "\033[38;2;244;147;59m"       # 80-89  (matches the status-bar orange)
+YELLOW = "\033[38;2;222;226;42m"       # 70-79  (matches the status-bar yellow)
+SOFT_BLUE = "\033[38;2;143;184;216m"   # 50-69
+COLD_WHITE = "\033[38;2;235;235;232m"  # 49 and below
+
+TEMP_BANDS = [
+    (99, HOT_RED),
+    (89, RED_ORANGE),
+    (79, ORANGE),
+    (69, YELLOW),
+    (49, SOFT_BLUE),
+]
+
+
+def temp_color(t):
+    for threshold, color in TEMP_BANDS:
+        if t > threshold:
+            return color
+    return COLD_WHITE
+
+
+ICON_COLOR = {
+    "clear_day": SUN, "partly_day": SUN,
+    "clear_night": MOON, "partly_night": MOON,
+    "cloudy": WHITE, "fog": WHITE,
+    "drizzle": COOL, "rain": COOL, "snow": COOL,
+    "storm": SUN,  # the bolt is the eye-catching part
+}
+
+
+def icon_key(code, is_day):
+    key, _ = CODES.get(code, ("cloudy", "—"))
+    if key in ("clear", "partly"):
+        key = f"{key}_{'day' if is_day else 'night'}"
+    return key
+
+
+def icon_for(code, is_day, glyphs):
+    return glyphs.get(icon_key(code, is_day), "?")
+
+
+def icon_color(code, is_day):
+    return ICON_COLOR.get(icon_key(code, is_day), WHITE)
+
+
+def label_for(code):
+    return CODES.get(code, ("cloudy", "Unknown"))[1]
+
+
+def fetch(nocache=False):
+    if not nocache and os.path.exists(CACHE):
+        try:
+            if time.time() - os.path.getmtime(CACHE) < CACHE_TTL:
+                with open(CACHE) as f:
+                    return json.load(f), True
+        except (OSError, ValueError):
+            pass
+
+    params = urllib.parse.urlencode({
+        "latitude": LAT, "longitude": LON, "timezone": TZ,
+        "temperature_unit": UNIT,
+        "current": "temperature_2m,weather_code,is_day,apparent_temperature",
+        "hourly": "temperature_2m,weather_code,precipitation_probability,is_day",
+        "daily": "temperature_2m_max,temperature_2m_min",
+        "forecast_days": 2,
+    })
+    url = f"https://api.open-meteo.com/v1/forecast?{params}"
+    with urllib.request.urlopen(url, timeout=10) as resp:
+        data = json.load(resp)
+
+    try:
+        with open(CACHE, "w") as f:
+            json.dump(data, f)
+    except OSError:
+        pass
+    return data, False
+
+
+def hour_label(dt):
+    h = dt.hour % 12 or 12
+    return f"{h}{'a' if dt.hour < 12 else 'p'}"
+
+
+def hide_cursor():
+    """Keep the popup focused for the exit keypress, but without a visible
+    cursor parked in the middle of the layout (cursor trail would smear).
+
+    Under --popup we never restore it: tmux discards the popup's terminal on
+    close, and re-showing the cursor first makes it blink at the bottom-left
+    for a frame on the way out.
+    """
+    if sys.stdout.isatty():
+        sys.stdout.write("\033[?25l")
+        sys.stdout.flush()
+        if "--popup" not in sys.argv:
+            atexit.register(show_cursor)
+
+
+def show_cursor():
+    if sys.stdout.isatty():
+        sys.stdout.write("\033[?25h")
+        sys.stdout.flush()
+
+
+def main():
+    hide_cursor()
+    glyphs = EMOJI if "--emoji" in sys.argv else NERD
+    try:
+        data, cached = fetch(nocache="--nocache" in sys.argv)
+    except Exception as e:  # network down, DNS, API change
+        print(f"\n  {GOLD}weather unavailable{R}\n  {DIM}{e}{R}\n")
+        wait()
+        return
+
+    term = shutil.get_terminal_size((80, 24))
+    width = term.columns
+
+    cur = data["current"]
+    daily = data["daily"]
+    hourly = data["hourly"]
+
+    # Find the first forecast hour at or after now
+    times = [datetime.fromisoformat(t) for t in hourly["time"]]
+    now = datetime.now()
+    start = next((i for i, t in enumerate(times) if t >= now.replace(
+        minute=0, second=0, microsecond=0)), 0)
+
+    # Fit as many hourly columns as the popup allows (5 cols each + margin)
+    slots = max(4, min(12, (width - 4) // 5))
+    idx = list(range(start, min(start + slots, len(times))))
+
+    temps = [round(hourly["temperature_2m"][i]) for i in idx]
+    codes = [hourly["weather_code"][i] for i in idx]
+    days = [hourly["is_day"][i] for i in idx]
+    pops = [hourly["precipitation_probability"][i] or 0 for i in idx]
+
+    hi, lo = round(daily["temperature_2m_max"][0]), round(daily["temperature_2m_min"][0])
+    now_t = round(cur["temperature_2m"])
+    feels = round(cur["apparent_temperature"])
+
+    # The block is 5 columns per hour; centre it in the popup.
+    block = 5 * len(idx)
+    m = " " * max(0, (width - block) // 2)
+    rule = RULE + "─" * block + R
+
+    out = []
+    stamp = now.strftime("%a %b %-d  %-I:%M") + now.strftime("%p").lower()
+    pad = max(1, block - len(CITY) - len(stamp))
+    out.append(f"{m}{B}{GOLD}{CITY}{R}{' ' * pad}{DIM}{stamp}{R}")
+    out.append(f"{m}{rule}")
+
+    cond = label_for(cur["weather_code"])
+    cur_icon = icon_for(cur["weather_code"], cur["is_day"], glyphs)
+    cur_color = icon_color(cur["weather_code"], cur["is_day"])
+    left = f"{cur_color}{B}{cur_icon}{R}  {BRIGHT}{B}{now_t}°{R} {FG}{cond}{R}"
+    right = f"{DIM}feels {feels}°   {R}{GOLD}H {hi}°{R}  {BLUE}L {lo}°{R}"
+    visible_left = len(f"{cur_icon}  {now_t}° {cond}")
+    visible_right = len(f"feels {feels}°   H {hi}°  L {lo}°")
+    gap = max(1, block - visible_left - visible_right)
+    out.append(f"{m}{left}{' ' * gap}{right}")
+    out.append(f"{m}{rule}")
+    out.append("")
+
+    # Hour labels
+    out.append(m + "".join(f"{DIM}{hour_label(times[i]):^5}{R}" for i in idx))
+    # Glyph row, coloured per condition
+    out.append(m + "".join(
+        f"{icon_color(c, d)}{icon_for(c, d, glyphs):^5}{R}"
+        for c, d in zip(codes, days)))
+    # Temperature row
+    out.append(m + "".join(f"{BRIGHT}{str(t) + '°':^5}{R}" for t in temps))
+    # Temperature sparkline: height is scaled across the visible window,
+    # colour is absolute so 90° looks hot whatever else is on screen.
+    span = max(temps) - min(temps)
+    bars = []
+    for t in temps:
+        level = 0 if span == 0 else int((t - min(temps)) / span * (len(BARS) - 1))
+        bars.append(f"{temp_color(t)}{BARS[level]:^5}{R}")
+    out.append(m + "".join(bars))
+    # Precipitation row, only when there's something worth showing
+    if max(pops) >= 10:
+        out.append(m + "".join(
+            f"{BLUE}{str(p) + '%':^5}{R}" if p >= 10 else f"{DIM}{'·':^5}{R}"
+            for p in pops))
+
+    out.append("")
+    note = "cached" if cached else "live"
+    footer = f"open-meteo · {note} · any key to close"
+    fm = " " * max(0, (width - len(footer)) // 2)
+    out.append(f"{fm}{DIM}{footer}{R}")
+
+    # Centre the block vertically in the popup too
+    top = max(0, (term.lines - len(out)) // 2)
+    print("\n" * top + "\n".join(out))
+    wait()
+
+
+def wait():
+    """Hold the popup open until a keypress. No-op when not interactive."""
+    if not sys.stdin.isatty():
+        return
+    try:
+        import termios
+        import tty
+        fd = sys.stdin.fileno()
+        old = termios.tcgetattr(fd)
+        try:
+            tty.setraw(fd)
+            sys.stdin.read(1)
+        finally:
+            termios.tcsetattr(fd, termios.TCSADRAIN, old)
+    except Exception:
+        try:
+            input()
+        except EOFError:
+            pass
+
+
+if __name__ == "__main__":
+    main()

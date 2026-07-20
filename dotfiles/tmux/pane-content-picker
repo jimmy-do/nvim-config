@@ -1,0 +1,33 @@
+#!/usr/bin/env zsh
+
+setopt pipefail
+
+pane_records=$(command mktemp "${TMPDIR:-/tmp}/tmux-pane-picker.XXXXXX") || exit 1
+trap 'command rm -f "$pane_records"' EXIT HUP INT TERM
+
+while IFS=$'\t' read -r pane_id session window pane_index pane_path title command_name; do
+  content=$(tmux capture-pane -p -t "$pane_id" -S -80 2>/dev/null |
+    command tr '\n\t' '  ' |
+    command sed 's/[[:space:]][[:space:]]*/ /g')
+  printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
+    "$pane_id" "$session" "$window" "$pane_index" "$pane_path" \
+    "$title" "$command_name" "$content" >> "$pane_records"
+done < <(tmux list-panes -a -F \
+  $'#{pane_id}\t#{session_name}\t#{window_index}:#{window_name}\t#{pane_index}\t#{pane_current_path}\t#{pane_title}\t#{pane_current_command}')
+
+selection=$(command env -u NO_COLOR fzf \
+  --delimiter=$'\t' --with-nth=2.. --nth=2.. \
+  --layout=reverse --border=rounded --info=inline-right \
+  --border-label=' PANES BY CONTENT ' \
+  --prompt='pane > ' --ghost='type text visible in any pane' \
+  --header='Enter jump  |  Esc/Ctrl-c cancel' \
+  --preview='tmux capture-pane -e -p -t {1} -S -200' \
+  --preview-window='right,60%,wrap,border-left' \
+  < "$pane_records") || exit $?
+
+pane_id="${selection%%$'\t'*}"
+session="${${selection#*$'\t'}%%$'\t'*}"
+
+tmux switch-client -t "=$session"
+tmux select-window -t "$pane_id"
+tmux select-pane -t "$pane_id"
