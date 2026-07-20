@@ -13,3 +13,7 @@ Session.vim
 # Python bytecode (weather script)
 __pycache__/
 *.pyc
+
+# Editor/tool backup copies
+*.bak-*
+*.backup.*
