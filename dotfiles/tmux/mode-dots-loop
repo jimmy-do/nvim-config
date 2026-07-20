@@ -1,13 +1,68 @@
+#!/bin/sh
+# Animates the trailing dots on the WAIT/COPY prefix-highlight indicator by
+# writing @prefix_highlight_dots, which status-left interpolates.
+#
+# This has to poll, because tmux exposes no hook for prefix-key press. Polling is
+# therefore the price of the effect, and the design goal is to make each tick as
+# cheap as possible. The previous version spawned about six processes per idle
+# tick at 4 ticks/sec -- show-option for the token, list-clients, grep,
+# list-panes -a, grep, show-option again to test the dots -- roughly 24 processes
+# a second, forever. This version spawns one.
+#
+#   * ONE tmux call per tick: token and per-client activity come back together.
+#   * Writing the dots and refreshing is one call, not two, chained with tmux's
+#     own ';' separator.
+#   * The last rendered value is held in a shell variable, so settling to "no
+#     dots" costs zero tmux calls after the first.
+#   * No forks in the hot path: activity is tested with `case`, not grep.
+#
+# Tunables. Raising IDLE_SLEEP is the single biggest saving; the cost is that the
+# dots take up to that long to appear. The WAIT/COPY label itself comes from
+# status-left and is always instant, so only the dots trail.
+FRAME_SLEEP=0.4
+IDLE_SLEEP=0.5
+
+# Claim ownership. Any older instance sees the token change and exits, which is
+# what stops `source-file` from stacking up daemons.
 token="$$-$(date +%s)"
 tmux set-option -gq @prefix_highlight_animation_token "$token"
 
 frame=0
-while [ "$(tmux show-option -gqv @prefix_highlight_animation_token)" = "$token" ]; do
-  active=0
-  if tmux list-clients -F '#{client_prefix}' 2>/dev/null | grep -q '^1$'; then
-    active=1
-  elif tmux list-panes -a -F '#{pane_in_mode}' 2>/dev/null | grep -q '^1$'; then
-    active=1
+shown=unset
+
+# Only touch tmux when the rendered value actually changes.
+write_dots() {
+  [ "$1" = "$shown" ] && return 0
+  shown=$1
+  tmux set-option -gq @prefix_highlight_dots "$1" ';' refresh-client -S
+}
+
+while :; do
+  # One call yields both the ownership token and every client's activity. Each
+  # line is "<token>|<client_prefix><pane_in_mode>", the two flags being 0 or 1.
+  #
+  # NB: the old version tested `list-panes -a`, i.e. every pane in every session,
+  # so a pane left in copy mode anywhere made the dots animate while you were
+  # looking at an unrelated pane. #{pane_in_mode} within list-clients resolves
+  # against each client's own current pane, which is what status-left shows.
+  state=$(tmux list-clients \
+    -F '#{@prefix_highlight_animation_token}|#{client_prefix}#{pane_in_mode}' \
+    2>/dev/null) || exit 0
+
+  if [ -n "$state" ]; then
+    # Everything before the first '|' is the first line's token.
+    [ "${state%%|*}" = "$token" ] || exit 0
+
+    case "$state" in
+      *'|01'*|*'|10'*|*'|11'*) active=1 ;;
+      *)                       active=0 ;;
+    esac
+  else
+    # Server is up but nothing is attached, so list-clients told us nothing.
+    # Keep checking the token directly, so a reload while detached still
+    # retires this instance instead of leaking it.
+    [ "$(tmux show-option -gqv @prefix_highlight_animation_token 2>/dev/null)" = "$token" ] || exit 0
+    active=0
   fi
 
   if [ "$active" -eq 1 ]; then
@@ -16,16 +71,12 @@ while [ "$(tmux show-option -gqv @prefix_highlight_animation_token)" = "$token" 
       1) dots='.#[fg=#323030]. ' ;;
       *) dots='.#[fg=#323030].#[fg=#323031].' ;;
     esac
-    tmux set-option -gq @prefix_highlight_dots "$dots"
-    tmux refresh-client -S
+    write_dots "$dots"
     frame=$(((frame + 1) % 3))
-    sleep 0.5
+    sleep "$FRAME_SLEEP"
   else
-    if [ -n "$(tmux show-option -gqv @prefix_highlight_dots)" ]; then
-      tmux set-option -gq @prefix_highlight_dots ''
-      tmux refresh-client -S
-    fi
+    write_dots ''
     frame=0
-    sleep 0.25
+    sleep "$IDLE_SLEEP"
   fi
 done
