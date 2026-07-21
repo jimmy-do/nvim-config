@@ -440,7 +440,20 @@ MODES = {
             # automatic label, with no separate reset key needed.
             f'#{{?#{{||:#{{==:#{{pane_title}},#{{host}}}},#{{==:#{{pane_title}},}}}},'
             f'#{{pane_current_command}} · #{{b:pane_current_path}},'
-            f'#{{pane_title}}}}'
+            # STRIP THE LEADING SPINNER. Claude Code (and anything else that
+            # drives OSC 0/2) writes its status glyph INTO the title, so the
+            # pane_title arrives as "<spinner> <task>" -- braille frames
+            # U+2800-28FF, or a sparkle U+2733/U+2739. When the task ends the
+            # spinner stops updating and the last frame just sits there, which
+            # reads as a permanently lit icon this config never added.
+            #
+            # s/^[^0-9A-Za-z] // drops one leading non-alphanumeric character
+            # and its space. Deliberately not a list of known spinner glyphs:
+            # every tool invents its own, and a title legitimately starting
+            # with punctuation is not a thing worth protecting. Hostnames and
+            # ordinary titles are untouched -- verified against all four live
+            # forms before this went in.
+            f'#{{s/^[^0-9A-Za-z] //:pane_title}}}}'
             # --- right cap, in the TITLE segment's colour ---
             f'#{{?#{{m/r:^(ssh|mosh|sudo|doas|su)$,#{{pane_current_command}}}},'
             f'#{{?pane_active,#[fg=#FF8500#,bg=default#,nobold],'
