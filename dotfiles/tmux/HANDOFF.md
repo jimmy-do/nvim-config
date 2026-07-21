@@ -22,10 +22,17 @@ re-litigate them — verify them if you doubt them, but do not assume they are w
 
 - tmux config: `~/.config/nvim/dotfiles/tmux/tmux.conf` (`~/.tmux.conf` is a symlink to it)
 - Ghostty config **that actually loads**: `~/Library/Application Support/com.mitchellh.ghostty/config.ghostty`
-  - ⚠️ There is a **decoy** at `~/.config/nvim/dotfiles/macos/ghostty/config.ghostty` that Ghostty does **not** read. Verify with `ghostty +show-config` before touching anything Ghostty-related.
+  - This is now a **symlink to `dotfiles/macos/ghostty/config.ghostty` in the dotfiles
+    repo**, so editing the tracked copy DOES reach Ghostty. It used to be a decoy that
+    Ghostty never read, and the two drifted ~250 lines apart before anyone noticed.
+    The three `custom-shader` files are symlinked into the repo the same way. Still
+    verify with `ghostty +show-config` before believing any Ghostty change.
 - nvim theme: `~/.config/nvim/lua/plugins/theme.lua`
-- **colour generator: `~/.local/bin/tmux-color`** — symlinked as `tmux-bar`, `tmux-chip`,
-  `tmux-pane`, `tmux-pane-lines`. Read §2 before touching any chrome colour.
+- **colour generator: `dotfiles/bin/tmux-color`** (tracked) — `~/.local/bin/tmux-color`
+  symlinks to it, and `tmux-bar`, `tmux-chip`, `tmux-pane`, `tmux-pane-lines` symlink to
+  that. The script picks its mode from `basename(argv[0])`, so all four names run the one
+  tracked file and an edit is live with no copying step. Read §2 before touching any
+  chrome colour.
 - colour palette: `~/.config/starship.toml` (`pill_*` + `tmux_*` tables), shared with the
   prompt's `pill` / `pill2`
 - user-facing docs for all of the above: `~/.config/nvim/dotfiles/zsh/keybind-palette.zsh`,
@@ -69,7 +76,8 @@ new pair, print both luminances and confirm active > inactive by ~4–6×.
 option in the status bar and the pane chrome is now written by a generator, not by hand.
 Editing those lines directly works until the next colour switch, then it is silently lost.
 
-**`~/.local/bin/tmux-color`**, invoked under four names (symlinks), each owning one surface:
+**`dotfiles/bin/tmux-color`** (reached via `~/.local/bin/tmux-color`), invoked under four
+names (symlinks), each owning one surface:
 
 | Command | Surface | Options it writes |
 |---|---|---|
@@ -319,8 +327,13 @@ them alone unless explicitly told otherwise.**
 - **`theme.lua`'s `WIN_DIVIDER` is still `#2ff5ff`**, a retired cyan. Its comment
   no longer claims to be synced to `pane-active-border-style`, but the value is an
   open decision: leave nvim independent, or have it read the published `@ui-dim`.
-- **`tmux-color` is untracked.** 332 lines, the source of truth for four surfaces,
-  living only in `~/.local/bin`. The repo holds its output, not the generator.
+- ~~`tmux-color` is untracked~~ — **FIXED.** It lives at `dotfiles/bin/tmux-color` and
+  is deployed by symlink. Verified through the link: all four names run, a same-colour
+  rewrite leaves `tmux.conf` byte-identical, and `tmux-bar ember` → `tmux-bar -` returns
+  the file to the same md5.
+- Ghostty's config and its three shaders are symlinked into the repo too. Remaining
+  caveat: the config references the shaders by **absolute path** under
+  `~/.config/ghostty/shaders/`, so a new machine needs those symlinks recreated by hand.
 
 ---
 
