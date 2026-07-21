@@ -71,6 +71,22 @@ B, D, S, I = "@@B@@", "@@D@@", "@@S@@", "@@I@@"
 # That is what keeps the two surfaces telling apart at a glance when they are
 # set to the same colour. Colour commands never touch these; edit here.
 LCAP, RCAP = chr(0xE0B6), chr(0xE0B4)                       # rounded: pane pill
+# ZOOMED caps. A zoomed pane is the ONLY pane on screen, so the surface has to
+# say so with no neighbour to compare against -- the lit/unlit brightness step
+# that flags the active pane cannot work when nothing else is visible. Shape
+# carries it instead: the rounded caps square off into solid wedges and the
+# lead-in rule goes heavy. Both are per-pane format conditionals, not options,
+# because pane-border-lines is global and cannot vary by zoom state.
+ZLCAP, ZRCAP = chr(0xE0B2), chr(0xE0B0)                     # solid: zoomed pill
+# The pill's INTERNAL divide, between the index segment and the title segment.
+# A shear rather than a wedge: it cuts the pill without capping either side, so
+# the two backgrounds read as one shape in two tones. Powerline Extra, U+E0BC --
+# the same glyph the bar's chips wear, used here as a join instead of an edge.
+#
+# A plain U+2502 rule was tried here (matching pane-border-lines) and rejected:
+# with a hard colour step either side of it the pill stopped reading as one
+# object. The shear carries the change of tone; a vertical rule just abuts it.
+SEP = chr(0xE0BC)                                           # shear: pill divide
 ARROW = chr(0xE0B0)                                         # wedge: retired, kept
 SLANT_L, SLANT_R = chr(0xE0BA), chr(0xE0BC)                 # solid: chips
 SLANT_THIN = chr(0xE0BB)                                    # hairline: window rail
@@ -96,6 +112,10 @@ ACT = chr(0xF111)     # solid dot -- window has unseen output
 #   U+F0721 󰜡 arrow-u-left-top U+F0141 󰅁 mdi chevron-left
 PREV = chr(0xF112)    # reply arrow -- last window, one keystroke back
 REMOTE = chr(0xF08B9)  # network -- pane is ssh/mosh/sudo, keystrokes leave here
+# MARKED is the pane tmux holds for swap-pane/join-pane (prefix m). tmux gives
+# it no visible mark of its own beyond reversing the border, which is invisible
+# on a one-cell rule -- so the badge carries it. Only ever ONE pane server-wide.
+MARKED = chr(0xF08D)   # thumbtack -- this is the marked pane
 
 MODES = {
     "tmux-bar": {
@@ -328,12 +348,55 @@ MODES = {
             #
             # ON/OFF still holds inside each case: active panes take the lit
             # value, inactive ones the dim, so brightness keeps carrying focus.
-            f'set -g pane-border-format "──'
+            # LAYOUT: ONE pill on the left -- index segment, then title.
+            #
+            # They were briefly split to opposite ends of the bar. That was
+            # wrong: the number and the name describe the SAME pane, and at
+            # opposite ends of a wide split you have to saccade across the
+            # screen to pair them up. Joined, they read as one object, and the
+            # number sits exactly where the eye already goes for the label.
+            #
+            # TWO BACKGROUNDS, joined by {SEP}. The segments have to differ or
+            # this is one slab with a number loose at the front. So the index
+            # runs one step DARKER than the title on both states:
+            #     active    index bg = dim    title bg = bright
+            #     inactive  index bg = sunk   title bg = dim
+            # and the text on the index segment is the NEXT step up (bright on
+            # dim, dim on sunk) rather than ink -- ink on the sunk 20% value is
+            # unreadable, which is what forced the ladder rather than reusing
+            # the title's ink treatment.
+            #
+            # {SEP} is drawn fg = LEFT segment's bg, bg = RIGHT segment's bg --
+            # that is what makes one solid shape with a shear through it rather
+            # than two chips with a gap. Both sides of that pair therefore have
+            # to know the ssh branch, which is why the separator carries the
+            # blast-radius conditional too.
+            #
+            # The stock [z]/[x] mouse buttons are GONE. They were the only
+            # reason this format had an #[align=right] region at all, and prefix
+            # z / prefix x do both jobs from the keyboard.
+            #
+            # Cap and rule shape are zoom-conditional throughout -- see ZLCAP.
+            f'set -g pane-border-format '
+            f'"#{{?window_zoomed_flag,━━,──}}'
+            # --- left cap, in the INDEX segment's colour ---
+            f'#{{?pane_active,#[fg={D}],#[fg={S}]}}'
+            f'#{{?window_zoomed_flag,{ZLCAP},{LCAP}}}'
+            # --- the index segment ---
+            f'#{{?pane_active,#[fg={B}#,bg={D}#,bold],#[fg={D}#,bg={S}#,bold]}}'
+            f' #{{pane_index}}#{{?pane_marked, {MARKED},}} '
+            # --- the shear: left segment's bg on the right segment's bg ---
             f'#{{?#{{m/r:^(ssh|mosh|sudo|doas|su)$,#{{pane_current_command}}}},'
-            f'#{{?pane_active,#[fg=#FF8500]{LCAP}#[fg={I}#,bg=#FF8500#,bold],'
-            f'#[fg=#7a4000]{LCAP}#[fg={I}#,bg=#7a4000]}}{REMOTE} ,'
-            f'#{{?pane_active,#[fg={B}]{LCAP}#[fg={I}#,bg={B}#,bold],'
-            f'#[fg={D}]{LCAP}#[fg={I}#,bg={D}]}}}}'
+            f'#{{?pane_active,#[fg={D}#,bg=#FF8500#,nobold],'
+            f'#[fg={S}#,bg=#7a4000#,nobold]}},'
+            f'#{{?pane_active,#[fg={D}#,bg={B}#,nobold],'
+            f'#[fg={S}#,bg={D}#,nobold]}}}}{SEP}'
+            # --- the title segment ---
+            f'#{{?#{{m/r:^(ssh|mosh|sudo|doas|su)$,#{{pane_current_command}}}},'
+            f'#{{?pane_active,#[fg={I}#,bg=#FF8500#,bold],'
+            f'#[fg={I}#,bg=#7a4000]}}{REMOTE} ,'
+            f'#{{?pane_active,#[fg={I}#,bg={B}#,bold],'
+            f'#[fg={I}#,bg={D}]}}}}'
             # A NAME set with `prefix C-S-,` (select-pane -T) wins over the
             # automatic command · path label. tmux gives every pane a title of
             # the hostname by default and offers no "unset" value, so "has a
@@ -343,14 +406,13 @@ MODES = {
             f'#{{?#{{||:#{{==:#{{pane_title}},#{{host}}}},#{{==:#{{pane_title}},}}}},'
             f'#{{pane_current_command}} · #{{b:pane_current_path}},'
             f'#{{pane_title}}}}'
+            # --- right cap, in the TITLE segment's colour ---
             f'#{{?#{{m/r:^(ssh|mosh|sudo|doas|su)$,#{{pane_current_command}}}},'
-            f'#{{?pane_active,#[fg=#FF8500#,bg=default#,nobold]{RCAP},'
-            f'#[fg=#7a4000#,bg=default#,nobold]{RCAP}}},'
-            f'#{{?pane_active,#[fg={B}#,bg=default#,nobold]{RCAP},'
-            f'#[fg={D}#,bg=default#,nobold]{RCAP}}}}}#[default]'
-            f'#{{?#{{mouse}},#[align=right]#[range=control|8]'
-            f'[#{{?#{{window_zoomed_flag}},u,z}}]#[norange]'
-            f'#[range=control|9][x]#[norange],}}"',
+            f'#{{?pane_active,#[fg=#FF8500#,bg=default#,nobold],'
+            f'#[fg=#7a4000#,bg=default#,nobold]}},'
+            f'#{{?pane_active,#[fg={B}#,bg=default#,nobold],'
+            f'#[fg={D}#,bg=default#,nobold]}}}}'
+            f'#{{?window_zoomed_flag,{ZRCAP},{RCAP}}}#[default]"',
             f'set -g display-panes-colour        "{D}"',
             f'set -g display-panes-active-colour "{B}"',
             f'set -g clock-mode-colour           "{B}"',
