@@ -51,14 +51,16 @@ STATE_DIR = os.environ.get("XDG_STATE_HOME", f"{HOME}/.local/state")
 INK = "#080808"          # knockout text on a lit slab -- never recolored
 DIM_SCALE = 0.48         # BRIGHT -> DIM
 SUNK_SCALE = 0.20        # BRIGHT -> scrollbar trough
-NUM_SCALE = 0.90         # pill colour -> the pane number's field
+NUM_SCALE = 0.75         # pill colour -> the pane number's field
 
 # Placeholders inside the templates. NOT str.format: tmux formats are full of
 # literal { } (#{?pane_active,...}) and would blow up on every brace.
 B, D, S, I = "@@B@@", "@@D@@", "@@S@@", "@@I@@"
-# The pane number's own background: the pill colour taken down 10%. Just dark
-# enough to read as a field within the pill, not so dark that it needs a shaped
-# seam to join -- which is what killed every two-tone version before it.
+# The pane number's own background: the pill colour taken down 25%. It reads as
+# a field within the pill rather than a second shape, so the boundary is a
+# plain cell edge with no shear or half-round to get wrong -- which is what
+# killed every earlier two-tone version. The LEFT CAP takes this colour too, so
+# the field starts at the pill's rounded end instead of floating inside it.
 NB, ND = "@@NB@@", "@@ND@@"
 
 # Chip edges, written as chr() -- a literal glyph in this source survives fine,
@@ -418,8 +420,8 @@ MODES = {
             # --- ONE colour decision, made once, used by cap + body + cap ---
             f'#{{?#{{||:#{{pane_dead}},'
             f'#{{m/r:^(ssh|mosh|sudo|doas|su)$,#{{pane_current_command}}}}}},'
-            f'#{{?pane_active,#[fg=#FF8500],#[fg=#7a4000]}},'
-            f'#{{?pane_active,#[fg={B}],#[fg={D}]}}}}'
+            f'#{{?pane_active,#[fg=#bf6300],#[fg=#5b3000]}},'
+            f'#{{?pane_active,#[fg={NB}],#[fg={ND}]}}}}'
             f'#{{?pane_zoomed_flag,{ZLCAP},{LCAP}}}'
             # --- the number's own field: the pill colour at 90% ---
             # A 10% step needs NO seam. That is the whole reason it works where
@@ -429,7 +431,7 @@ MODES = {
             # get wrong. Ink stays the same on both, so the text never shifts.
             f'#{{?#{{||:#{{pane_dead}},'
             f'#{{m/r:^(ssh|mosh|sudo|doas|su)$,#{{pane_current_command}}}}}},'
-            f'#{{?pane_active,#[fg={I}#,bg=#e67800#,bold],#[fg={I}#,bg=#6e3a00]}},'
+            f'#{{?pane_active,#[fg={I}#,bg=#bf6300#,bold],#[fg={I}#,bg=#5b3000]}},'
             f'#{{?pane_active,#[fg={I}#,bg={NB}#,bold],#[fg={I}#,bg={ND}]}}}}'
             f' #{{pane_index}}'
             f'#{{?pane_marked, {MARKED},}}'
