@@ -39,6 +39,11 @@ This file is invoked under both names; tmux-bar and tmux-pane are symlinks.
 import os, re, sys, shutil, subprocess, tempfile
 
 HOME = os.path.expanduser("~")
+# Baked into the pane path template as a literal. tmux's s||| is a regex, so
+# the substitution cannot read $HOME at match time -- and a generated config
+# that hardcodes this machine's home is fine, since every other line in the
+# managed blocks is generated for this machine too.
+HOMEDIR = HOME
 STARSHIP = f"{HOME}/.config/starship.toml"
 TMUX_CONF = os.path.realpath(f"{HOME}/.tmux.conf")
 STATE_DIR = os.environ.get("XDG_STATE_HOME", f"{HOME}/.local/state")
@@ -137,6 +142,7 @@ REMOTE = chr(0xF08B9)  # network -- pane is ssh/mosh/sudo, keystrokes leave here
 # MARKED is the pane tmux holds for swap-pane/join-pane (prefix m). tmux gives
 # it no visible mark of its own beyond reversing the border, which is invisible
 # on a one-cell rule -- so the badge carries it. Only ever ONE pane server-wide.
+DEAD = chr(0xF00D)     # cross -- pane's process exited (needs remain-on-exit)
 MARKED = chr(0xF08D)   # thumbtack -- this is the marked pane
 
 MODES = {
@@ -399,67 +405,91 @@ MODES = {
             # z / prefix x do both jobs from the keyboard.
             #
             # Cap and rule shape are zoom-conditional throughout -- see ZLCAP.
+            # PROGRESSIVE DISCLOSURE -- the point of this layout.
+            #
+            # Four panes shouting four full titles is four things to read and
+            # no way to tell which matters, so the labels cancel each other
+            # out. Inactive panes therefore collapse to the BADGE ALONE: index
+            # + process icon, a couple of cells. Only the active pane spends
+            # width on words. The bar goes quiet and the one line you care
+            # about is the only one carrying a sentence.
+            #
+            # A DEAD pane expands too, regardless of focus -- see below.
+            #
+            # ONE flag in the badge: pane_marked, the pane held for swap-pane /
+            # join-pane. tmux signals it only by reversing the border, which is
+            # invisible on a one-cell rule. pane_last and pane_unseen_changes
+            # were tried and removed: pane_last is pinned to one pane per
+            # window at all times, so it is never dark, and a mark that is
+            # always on is not a signal.
             f'set -g pane-border-format '
             f'"#{{?pane_zoomed_flag,━━,──}}'
-            # --- left cap, in the INDEX segment's colour ---
+            # --- left cap, in the BADGE segment's colour ---
             f'#{{?pane_active,#[fg={D}],#[fg={S}]}}'
             f'#{{?pane_zoomed_flag,{ZLCAP},{LCAP}}}'
-            # --- the index segment ---
+            # --- the badge: index + live process icon (+ marked) ---
             f'#{{?pane_active,#[fg={B}#,bg={D}#,bold],#[fg={D}#,bg={S}#,bold]}}'
-            # ONE flag only: pane_marked, the pane held for swap-pane /
-            # join-pane. tmux shows this by reversing the border, which is
-            # invisible on a one-cell rule, so the pill has to carry it.
-            #
-            # pane_last and pane_unseen_changes were tried here and REMOVED.
-            # pane_last is not a state, it is a label tmux always pins to
-            # exactly one pane per window -- in any split something always
-            # wears it, so it never means anything. pane_unseen_changes was a
-            # dot lit often enough to be wallpaper. A mark that is always on is
-            # not a signal; the pill is a label, not a dashboard. Do not add
-            # them back without a reason that survives that test.
-            f' #{{pane_index}}'
-            f'#{{?pane_marked, {MARKED},}}'
-            f' '
-            # --- the shear: left segment's bg on the right segment's bg ---
+            f' #{{pane_index}}#{{?#{{E:@pane_icon}}, #{{E:@pane_icon}},}}'
+            f'#{{?pane_marked, {MARKED},}} '
+            # --- EXPAND? active or dead. Everything to the closing cap is
+            #     inside this conditional; the else-branch just caps the badge.
+            f'#{{?#{{||:#{{pane_active}},#{{pane_dead}}}},'
+            # the shear, drawn badge-bg on title-bg, so the two tones join as
+            # one shape. Its right-hand colour has to know every title case.
+            f'#{{?pane_dead,#[fg={D}#,bg=#FF8500#,nobold],'
             f'#{{?#{{m/r:^(ssh|mosh|sudo|doas|su)$,#{{pane_current_command}}}},'
-            f'#{{?pane_active,#[fg={D}#,bg=#FF8500#,nobold],'
-            f'#[fg={S}#,bg=#7a4000#,nobold]}},'
-            f'#{{?pane_active,#[fg={D}#,bg={B}#,nobold],'
-            f'#[fg={S}#,bg={D}#,nobold]}}}}{SEP}'
+            f'#[fg={D}#,bg=#FF8500#,nobold],#[fg={D}#,bg={B}#,nobold]}}}}{SEP}'
             # --- the title segment ---
+            # DEAD wins over everything. With remain-on-exit a crashed pane is
+            # visually identical to an idle one; this is the rarest state here
+            # and the most valuable when it fires, so it takes the blast-radius
+            # orange and says what the exit code was.
+            f'#{{?pane_dead,#[fg={I}#,bg=#FF8500#,bold]{DEAD} exit '
+            f'#{{pane_dead_status}},'
+            # ssh/sudo: the one hue that always means blast radius here.
             f'#{{?#{{m/r:^(ssh|mosh|sudo|doas|su)$,#{{pane_current_command}}}},'
-            f'#{{?pane_active,#[fg={I}#,bg=#FF8500#,bold],'
-            f'#[fg={I}#,bg=#7a4000]}}{REMOTE} ,'
-            f'#{{?pane_active,#[fg={I}#,bg={B}#,bold],'
-            f'#[fg={I}#,bg={D}]}}}}'
+            f'#[fg={I}#,bg=#FF8500#,bold]{REMOTE} ,#[fg={I}#,bg={B}#,bold]}}'
             # A NAME set with `prefix C-S-,` (select-pane -T) wins over the
-            # automatic command · path label. tmux gives every pane a title of
-            # the hostname by default and offers no "unset" value, so "has a
-            # name" has to mean "title is neither the hostname nor empty" --
-            # which also makes clearing the prompt fall straight back to the
-            # automatic label, with no separate reset key needed.
-            f'#{{?#{{||:#{{==:#{{pane_title}},#{{host}}}},#{{==:#{{pane_title}},}}}},'
-            f'#{{pane_current_command}} · #{{b:pane_current_path}},'
-            # STRIP THE LEADING SPINNER. Claude Code (and anything else that
-            # drives OSC 0/2) writes its status glyph INTO the title, so the
-            # pane_title arrives as "<spinner> <task>" -- braille frames
-            # U+2800-28FF, or a sparkle U+2733/U+2739. When the task ends the
-            # spinner stops updating and the last frame just sits there, which
-            # reads as a permanently lit icon this config never added.
+            # automatic label. tmux gives every pane the hostname as a title
+            # and offers no "unset", so "has a name" means "neither the
+            # hostname nor empty" -- which also makes clearing the prompt fall
+            # straight back to the automatic label, with no reset key needed.
             #
-            # s/^[^0-9A-Za-z] // drops one leading non-alphanumeric character
-            # and its space. Deliberately not a list of known spinner glyphs:
-            # every tool invents its own, and a title legitimately starting
-            # with punctuation is not a thing worth protecting. Hostnames and
-            # ordinary titles are untouched -- verified against all four live
-            # forms before this went in.
-            f'#{{s/^[^0-9A-Za-z] //:pane_title}}}}'
-            # --- right cap, in the TITLE segment's colour ---
+            # The automatic label is now the PATH, not "cmd · basename". The
+            # command already has an icon in the badge, so repeating its name
+            # was the least informative thing on the bar; and a bare basename
+            # made three terraform panes all read "local". This form is
+            # project/…/leaf, which is the shortest one that tells them apart:
+            #   ~/k8s-gitops-delivery-platform/infra/terraform/envs/local
+            #     -> k8s-gitops-delivery-platform/…/local
+            # Short paths pass through whole (~/.config), and anything outside
+            # $HOME keeps its absolute form.
+            # "Has a name" also has to exclude PATH-SHAPED titles. zsh sets the
+            # title to ":/Users/jimmy/..." on every prompt, which is not a name
+            # anyone chose -- taking it literally printed a raw absolute path
+            # and bypassed the elision below. ^:?/ catches both that form and a
+            # plain absolute path.
+            f'#{{?#{{||:#{{==:#{{pane_title}},#{{host}}}},'
+            f'#{{||:#{{==:#{{pane_title}},}},'
+            f'#{{m/r:^:?/,#{{pane_title}}}}}}}},'
+            # The backrefs need FOUR backslashes here and survive as two in
+            # tmux.conf. Both parsers read \1 as an octal escape: Python turns
+            # it into \x01 inside this f-string, and tmux.conf rejects it
+            # outright with "invalid octal escape". \\1 in the file is what
+            # reaches the format engine as a real backref.
+            f'#{{=/40:#{{s|^~/([^/]+)/.*/([^/]+)$|\\\\1/…/\\\\2|:'
+            f'#{{s|^{HOMEDIR}|~|:pane_current_path}}}}}},'
+            # Claude Code and friends write a spinner frame into the title via
+            # OSC; strip one leading non-alphanumeric char and its space, or a
+            # frozen frame sits there looking like a permanently lit icon.
+            f'#{{s/^[^0-9A-Za-z] //:pane_title}}}}}}'
+            # --- right cap, in whichever colour the title segment ended on ---
+            f'#{{?pane_dead,#[fg=#FF8500#,bg=default#,nobold],'
             f'#{{?#{{m/r:^(ssh|mosh|sudo|doas|su)$,#{{pane_current_command}}}},'
-            f'#{{?pane_active,#[fg=#FF8500#,bg=default#,nobold],'
-            f'#[fg=#7a4000#,bg=default#,nobold]}},'
-            f'#{{?pane_active,#[fg={B}#,bg=default#,nobold],'
-            f'#[fg={D}#,bg=default#,nobold]}}}}'
+            f'#[fg=#FF8500#,bg=default#,nobold],'
+            f'#[fg={B}#,bg=default#,nobold]}}}},'
+            # --- else-branch: inactive and alive. Cap the badge and stop. ---
+            f'#[fg={S}#,bg=default#,nobold]}}'
             f'#{{?pane_zoomed_flag,{ZRCAP},{RCAP}}}#[default]"',
             f'set -g display-panes-colour        "{D}"',
             f'set -g display-panes-active-colour "{B}"',
