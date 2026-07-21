@@ -4,8 +4,8 @@ background-opacity = 1
 background = #080806
 background-blur = 0
 background-opacity-cells = true
-foreground = #7F8AAD
-# 8892B0, 6C7D9C, B4F9F8, 9BB3C2, 717FAB
+foreground = #717FAB
+# 8892B0, 6C7D9C, 717FAB
 
 
 # ---------- theme — uncomment ONE ----------

@@ -154,7 +154,7 @@ MODES = {
             f'  #[fg={D}]prefix z restores,'
             # The else-branch rule. BRIGHT, like the dividers: it is the bar's
             # baseline, and at dim it vanished into the terminal background.
-            f'#[fg={B}]#[bg=default]#{{R:─,#{{client_width}}}}}}}}}}}}"',
+            f'#[fg={B}]#[bg=default]#{{R:═,#{{client_width}}}}}}}}}}}}"',
             # Right: kube context ╱ git branch ╱ clock. Labels dim, values
             # bright, dividers bright.
             # The kube context is rendered by a helper, not inlined, because it
@@ -165,12 +165,9 @@ MODES = {
             # tmux DOES interpret #[..] emitted by a #() hook -- verified by
             # probe (inner tmux captured from an outer pane; the escape run came
             # back 38;2;8;8;8 over 48;2;255;133;0). Don't re-litigate it.
-            f'set -g status-right "#[fg={D}]⎈ '
-            f"#(~/.config/nvim/dotfiles/tmux/kube-context)"
-            f'#[fg={B}] ╱  #[fg={B}]'
-            f"#(cd '#{{pane_current_path}}' 2>/dev/null && "
-            f"git rev-parse --abbrev-ref HEAD 2>/dev/null || echo -)"
-            f'#[fg={B}] ╱ #[fg={B},bold]%H:%M#[fg={D}] "',
+            f'set -g status-right "'
+            f'#[fg={B}]#[bg=default]{LCAP}#[fg={I}]#[bg={B}]#[bold]%H:%M'
+            f'#[fg={B}]#[bg=default]#[nobold]{RCAP}"',
             # The rail between inactive windows: the hairline slant, U+E0BB.
             # It leans the same way as the chip shear, so the whole window strip
             # reads as one cut instead of a chip shape plus an unrelated ASCII-ish
@@ -470,13 +467,15 @@ def preview(bright):
                 fg(dim) + "────" + "\033[0m")
     # The preview MUST wear the same shapes the templates emit, or the picker
     # sells a bar you will not get. Chips shear, the window rail is the hairline
-    # slant, and the status-right divider stays ╱ -- it separates values, not
-    # chips. ARROW / LCAP / RCAP survive for the pane surface above.
+    # slant, and status-right is now a single filled clock chip -- git branch
+    # and kube context moved to the starship prompt, so the ╱ value-divider
+    # they separated is gone with them.
     return (swatch(bright, " DEV ") + fg(bright) + SLANT_R + " " +
             fg(bright) + SLANT_L + swatch(bright, " > 1:nvim ") +
             fg(bright) + SLANT_R +
             fg(bright) + " " + SLANT_THIN + " " + fg(dim) + "2:logs" +
-            fg(bright) + "  ╱ " + fg(dim) + "⎈ kind" + "\033[0m")
+            fg(bright) + "  " + fg(bright) + LCAP +
+            swatch(bright, "09:41") + fg(bright) + RCAP + "\033[0m")
 
 
 def build_block(bright):
