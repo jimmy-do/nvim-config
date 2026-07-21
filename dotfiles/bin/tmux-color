@@ -100,7 +100,22 @@ SLANT_THIN = chr(0xE0BB)                                    # hairline: window r
 #   U+F066 compress   U+EB81   U+F0294   U+F04DE   U+F0B2 arrows-alt
 ZOOM = chr(0xF065)    # expand -- window is zoomed
 BELL = chr(0xF0092)   # bell -- window rang
-ACT = chr(0xF111)     # solid dot -- window has unseen output
+# ACT is U+25CF BLACK CIRCLE, a plain BMP dot -- NOT U+F111, the Nerd Font
+# fa-circle it replaced. F111 is drawn at icon scale, which in this font is a
+# pinprick next to the surrounding text; it read as a speck of dirt on the bar
+# rather than a status light. 25CF is a text-weight glyph and sizes with the
+# font, so it lands as a real dot. Verified in the cmap (11,756 codepoints).
+# Checked and REJECTED because they are NOT mapped in JetBrainsMono Nerd Font
+# and ship as blank boxes: U+26AB medium-black-circle, U+2B24 large-black-circle.
+# Mapped alternates if this wants changing: U+F444, U+F0765, U+25CB (hollow).
+ACT = chr(0x25C9)     # fisheye -- unseen output (windows AND panes)
+# 25C9 FISHEYE, a dot inside a ring, over the plain 25CF disc it replaced. Both
+# size with the font; the ring is what makes it read as an indicator LIT rather
+# than as a speck the terminal failed to clear. It also survives sitting on a
+# filled slab, where a bare disc on a bright bg turns into a hole.
+# Mapped, if this wants changing:  F444  F0765 󰝥  EA71   ◉ hollow ○ 25CB.
+# NOT mapped, ships as a blank box, do not retry: 26AB 2B24 2739 2726.
+
 # Last window: a RETURN arrow, not a chevron and not a dot.
 #
 # The job of this mark is not "something happened here" -- nothing happened
@@ -110,7 +125,9 @@ ACT = chr(0xF111)     # solid dot -- window has unseen output
 # Alternates that are also in the font, if this reads wrong at size:
 #   U+F053   chevron-left     U+F0450 󰑐 history
 #   U+F0721 󰜡 arrow-u-left-top U+F0141 󰅁 mdi chevron-left
-PREV = chr(0xF112)    # reply arrow -- last window, one keystroke back
+# Used on BOTH rails -- window_last_flag on the bar, pane_last in the pill --
+# so a mark means the same thing wherever it appears. Do not fork these.
+PREV = chr(0xF112)    # reply arrow -- last window/pane, one keystroke back
 REMOTE = chr(0xF08B9)  # network -- pane is ssh/mosh/sudo, keystrokes leave here
 # MARKED is the pane tmux holds for swap-pane/join-pane (prefix m). tmux gives
 # it no visible mark of its own beyond reversing the border, which is invisible
@@ -378,13 +395,32 @@ MODES = {
             #
             # Cap and rule shape are zoom-conditional throughout -- see ZLCAP.
             f'set -g pane-border-format '
-            f'"#{{?window_zoomed_flag,━━,──}}'
+            f'"#{{?pane_zoomed_flag,━━,──}}'
             # --- left cap, in the INDEX segment's colour ---
             f'#{{?pane_active,#[fg={D}],#[fg={S}]}}'
-            f'#{{?window_zoomed_flag,{ZLCAP},{LCAP}}}'
+            f'#{{?pane_zoomed_flag,{ZLCAP},{LCAP}}}'
             # --- the index segment ---
             f'#{{?pane_active,#[fg={B}#,bg={D}#,bold],#[fg={D}#,bg={S}#,bold]}}'
-            f' #{{pane_index}}#{{?pane_marked, {MARKED},}} '
+            # THE FLAG RUN -- the same vocabulary the window rail wears, now
+            # per-pane. tmux has exact pane-level analogues of the two window
+            # flags and this config simply was not reading them:
+            #   pane_unseen_changes  output here you have not looked at   {ACT}
+            #   pane_last            the pane prefix ; goes back to       {PREV}
+            #   pane_marked          held for swap-pane/join-pane         {MARKED}
+            #
+            # pane_unseen_changes is the BETTER of the two dots, and worth
+            # preferring over the window-level monitor-activity flag: it tracks
+            # output you have not SEEN, so it clears when you actually look at
+            # the pane. monitor-activity means "anything printed since you last
+            # visited this window", which on a box running agents and logs is
+            # lit permanently and tells you nothing.
+            #
+            # Order is fixed and meaningful: state you can act on (marked)
+            # first, then history (last), then news (unseen).
+            f' #{{pane_index}}'
+            f'#{{?pane_marked, {MARKED},}}'
+            f'#{{?pane_last, {PREV},}}'
+            f'#{{?pane_unseen_changes, {ACT},}} '
             # --- the shear: left segment's bg on the right segment's bg ---
             f'#{{?#{{m/r:^(ssh|mosh|sudo|doas|su)$,#{{pane_current_command}}}},'
             f'#{{?pane_active,#[fg={D}#,bg=#FF8500#,nobold],'
@@ -412,7 +448,7 @@ MODES = {
             f'#[fg=#7a4000#,bg=default#,nobold]}},'
             f'#{{?pane_active,#[fg={B}#,bg=default#,nobold],'
             f'#[fg={D}#,bg=default#,nobold]}}}}'
-            f'#{{?window_zoomed_flag,{ZRCAP},{RCAP}}}#[default]"',
+            f'#{{?pane_zoomed_flag,{ZRCAP},{RCAP}}}#[default]"',
             f'set -g display-panes-colour        "{D}"',
             f'set -g display-panes-active-colour "{B}"',
             f'set -g clock-mode-colour           "{B}"',
