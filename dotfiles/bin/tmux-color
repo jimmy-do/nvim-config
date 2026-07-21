@@ -453,7 +453,10 @@ MODES = {
             f'#{{m/r:^(ssh|mosh|sudo|doas|su)$,#{{pane_current_command}}}}}},'
             f'#{{?pane_active,#[fg={I}#,bg=#bf6300#,bold],#[fg={I}#,bg=#5b3000#,bold]}},'
             f'#{{?pane_active,#[fg={I}#,bg={NB}#,bold],#[fg={I}#,bg={ND}#,bold]}}}}'
-            f' #{{pane_index}}'
+            # No leading space: the rounded cap already gives the number a
+            # curved left edge to sit against, so a space on top of it left
+            # the digit floating in the middle of its own field.
+            f'#{{pane_index}}'
             f'#{{?pane_marked, {MARKED},}}'
             # ONE trailing space. Two plus the label's own leading space put
             # padding on both sides of the boundary and read as a hole in the
