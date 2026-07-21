@@ -310,17 +310,17 @@ _keys_open_viewer() {
     # A third fzf layer, not a separate viewer: reusing _KEYS_FZF_STYLE is the
     # only way the rounded border, labels, padding and palette cannot drift
     # from the category and reference menus above it.
-    nav_header='j/k lines  |  h/l pages  |  g/G ends  |  / search  |  q back'
-    search_header='Type to filter lines  |  Esc leave search'
+    nav_header='j/k lines  |  u/d half  |  h/l pages  |  g/G ends  |  / search  |  q back'
+    search_header='Type to filter lines  |  Esc back to results'
     command env -u NO_COLOR fzf "${_KEYS_FZF_STYLE[@]}" \
       --height=100% --layout=reverse --border=rounded --no-hscroll --no-multi \
       --border-label=' COMMAND DETAILS ' --info=inline-right \
       --prompt='search > ' --ghost='filter these lines' \
       --header="$nav_header" --no-input \
-      --bind='q:abort' --bind='enter:abort' \
-      --bind='j:down,k:up,h:page-up,l:page-down,g:first,G:last' \
-      --bind="/:show-input+change-header($search_header)+unbind(q,j,k,h,l,g,G,/)" \
-      --bind="esc:transform:[[ \$FZF_INPUT_STATE == hidden ]] && print abort || print 'clear-query+hide-input+change-header($nav_header)+rebind(q,j,k,h,l,g,G,/)'" \
+      --bind='q:abort' --bind='enter:abort' --bind='esc:abort' \
+      --bind='j:down,k:up,u:half-page-up,d:half-page-down' \
+      --bind='h:page-up,l:page-down,g:first,G:last' \
+      --bind="/:show-input+clear-query+change-header($search_header)+unbind(q,j,k,u,d,h,l,g,G,/)" \
       < "$detail_file"
     viewer_rc=$?
     # Abort is how the reader is dismissed; it is not an error for the caller.
@@ -903,7 +903,7 @@ _keys_browse() {
   local query remainder action search_fields list_label ghost
   local -a matching_style
   local search_header='Tab navigate results  |  Enter details  |  Esc categories'
-  local results_header='j/k rows  |  h/l pages  |  g/G ends  |  Enter details  |  / search'
+  local results_header='j/k rows  |  u/d half  |  h/l pages  |  g/G ends  |  Enter details  |  / search'
   local preview_window='right,55%,wrap,border-left,hidden'
 
   terminal_columns=$(_keys_terminal_columns)
@@ -955,10 +955,11 @@ _keys_browse() {
       --preview-window="$preview_window" --expect=esc,alt-left \
       --bind="enter:execute(zsh -f -c 'source \"$_KEYS_PALETTE_FILE\"; _keys_open_viewer \"\$@\"' _ {2} {3} {4} {5} {6} {7})" \
       --bind="double-click:execute(zsh -f -c 'source \"$_KEYS_PALETTE_FILE\"; _keys_open_viewer \"\$@\"' _ {2} {3} {4} {5} {6} {7})" \
-      --bind="tab:show-preview+hide-input+change-header($results_header)+rebind(j,k,h,l,g,G,/)+unbind(tab)" \
-      --bind="/:hide-preview+show-input+change-header($search_header)+unbind(j,k,h,l,g,G,/)+rebind(tab)" \
-      --bind='j:down,k:up,h:page-up,l:page-down,g:first,G:last' \
-      --bind='start:unbind(j,k,h,l,g,G,/)')
+      --bind="tab:show-preview+hide-input+change-header($results_header)+rebind(j,k,u,d,h,l,g,G,/)+unbind(tab)" \
+      --bind="/:hide-preview+show-input+change-header($search_header)+unbind(j,k,u,d,h,l,g,G,/)+rebind(tab)" \
+      --bind='j:down,k:up,u:half-page-up,d:half-page-down' \
+      --bind='h:page-up,l:page-down,g:first,G:last' \
+      --bind='start:unbind(j,k,u,d,h,l,g,G,/)')
   rc=$?
   (( rc == 0 )) || return "$rc"
 
