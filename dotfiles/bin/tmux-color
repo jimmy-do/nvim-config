@@ -406,26 +406,20 @@ MODES = {
             f'#{{?pane_zoomed_flag,{ZLCAP},{LCAP}}}'
             # --- the index segment ---
             f'#{{?pane_active,#[fg={B}#,bg={D}#,bold],#[fg={D}#,bg={S}#,bold]}}'
-            # THE FLAG RUN -- the same vocabulary the window rail wears, now
-            # per-pane. tmux has exact pane-level analogues of the two window
-            # flags and this config simply was not reading them:
-            #   pane_unseen_changes  output here you have not looked at   {ACT}
-            #   pane_last            the pane prefix ; goes back to       {PREV}
-            #   pane_marked          held for swap-pane/join-pane         {MARKED}
+            # ONE flag only: pane_marked, the pane held for swap-pane /
+            # join-pane. tmux shows this by reversing the border, which is
+            # invisible on a one-cell rule, so the pill has to carry it.
             #
-            # pane_unseen_changes is the BETTER of the two dots, and worth
-            # preferring over the window-level monitor-activity flag: it tracks
-            # output you have not SEEN, so it clears when you actually look at
-            # the pane. monitor-activity means "anything printed since you last
-            # visited this window", which on a box running agents and logs is
-            # lit permanently and tells you nothing.
-            #
-            # Order is fixed and meaningful: state you can act on (marked)
-            # first, then history (last), then news (unseen).
+            # pane_last and pane_unseen_changes were tried here and REMOVED.
+            # pane_last is not a state, it is a label tmux always pins to
+            # exactly one pane per window -- in any split something always
+            # wears it, so it never means anything. pane_unseen_changes was a
+            # dot lit often enough to be wallpaper. A mark that is always on is
+            # not a signal; the pill is a label, not a dashboard. Do not add
+            # them back without a reason that survives that test.
             f' #{{pane_index}}'
             f'#{{?pane_marked, {MARKED},}}'
-            f'#{{?pane_last, {PREV},}}'
-            f'#{{?pane_unseen_changes, {PANE_UNSEEN},}} '
+            f' '
             # --- the shear: left segment's bg on the right segment's bg ---
             f'#{{?#{{m/r:^(ssh|mosh|sudo|doas|su)$,#{{pane_current_command}}}},'
             f'#{{?pane_active,#[fg={D}#,bg=#FF8500#,nobold],'
