@@ -51,10 +51,15 @@ STATE_DIR = os.environ.get("XDG_STATE_HOME", f"{HOME}/.local/state")
 INK = "#080808"          # knockout text on a lit slab -- never recolored
 DIM_SCALE = 0.48         # BRIGHT -> DIM
 SUNK_SCALE = 0.20        # BRIGHT -> scrollbar trough
+NUM_SCALE = 0.90         # pill colour -> the pane number's field
 
 # Placeholders inside the templates. NOT str.format: tmux formats are full of
 # literal { } (#{?pane_active,...}) and would blow up on every brace.
 B, D, S, I = "@@B@@", "@@D@@", "@@S@@", "@@I@@"
+# The pane number's own background: the pill colour taken down 10%. Just dark
+# enough to read as a field within the pill, not so dark that it needs a shaped
+# seam to join -- which is what killed every two-tone version before it.
+NB, ND = "@@NB@@", "@@ND@@"
 
 # Chip edges, written as chr() -- a literal glyph in this source survives fine,
 # but it is invisible in most diffs/editors, and a cap silently dropped from a
@@ -416,17 +421,25 @@ MODES = {
             f'#{{?pane_active,#[fg=#FF8500],#[fg=#7a4000]}},'
             f'#{{?pane_active,#[fg={B}],#[fg={D}]}}}}'
             f'#{{?pane_zoomed_flag,{ZLCAP},{LCAP}}}'
-            # --- the body: ink on that colour, one background throughout ---
+            # --- the number's own field: the pill colour at 90% ---
+            # A 10% step needs NO seam. That is the whole reason it works where
+            # the earlier two-tone versions did not: at this contrast the eye
+            # reads a field boundary, not two shapes that must be joined, so a
+            # plain cell edge is enough and there is no shear or half-round to
+            # get wrong. Ink stays the same on both, so the text never shifts.
+            f'#{{?#{{||:#{{pane_dead}},'
+            f'#{{m/r:^(ssh|mosh|sudo|doas|su)$,#{{pane_current_command}}}}}},'
+            f'#{{?pane_active,#[fg={I}#,bg=#e67800#,bold],#[fg={I}#,bg=#6e3a00]}},'
+            f'#{{?pane_active,#[fg={I}#,bg={NB}#,bold],#[fg={I}#,bg={ND}]}}}}'
+            f' #{{pane_index}}'
+            f'#{{?pane_marked, {MARKED},}}'
+            f'#{{?#{{&&:#{{pane_last}},#{{>:#{{window_panes}},1}}}}, {LAST_PANE},}} '
+            # --- back to the pill colour for the label ---
             f'#{{?#{{||:#{{pane_dead}},'
             f'#{{m/r:^(ssh|mosh|sudo|doas|su)$,#{{pane_current_command}}}}}},'
             f'#{{?pane_active,#[fg={I}#,bg=#FF8500#,bold],#[fg={I}#,bg=#7a4000]}},'
             f'#{{?pane_active,#[fg={I}#,bg={B}#,bold],#[fg={I}#,bg={D}]}}}}'
-            f' #{{pane_index}}'
-            # No space before these -- they hang directly off the index, so
-            # "3" reads as one unit rather than a number and a loose mark.
-            f'#{{?pane_marked,{MARKED},}}'
-            f'#{{?#{{&&:#{{pane_last}},#{{>:#{{window_panes}},1}}}},{LAST_PANE},}}'
-            f' {INKRULE} '
+            f' '
             f'#{{?#{{E:@pane_icon}},#{{E:@pane_icon}} ,}}'
             # DEAD first, then ssh, then the ordinary label.
             f'#{{?pane_dead,{DEAD} exit #{{pane_dead_status}},'
@@ -593,7 +606,9 @@ def build_block(bright):
            f"# dim    = {dim}   labels / inactive / unlit"]
     for ln in M["lines"]:
         out.append(ln.replace(B, bright).replace(D, dim)
-                     .replace(S, sunk).replace(I, INK))
+                     .replace(S, sunk).replace(I, INK)
+                     .replace(NB, scale(bright, NUM_SCALE))
+                     .replace(ND, scale(dim, NUM_SCALE)))
     out.append(M["end"])
     return "\n".join(out)
 
