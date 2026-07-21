@@ -485,7 +485,27 @@ MODES = {
             f'#{{?pane_dead,{DEAD} exit #{{pane_dead_status}},'
             f'#{{?#{{m/r:^(ssh|mosh|sudo|doas|su)$,#{{pane_current_command}}}},'
             f'{REMOTE} ,}}'
-            # A NAME set with `prefix C-S-,` wins over the automatic label.
+            # A NAME set with `prefix <` wins over the automatic label, and it
+            # is stored in the pane-local user option @pane_name, NOT in
+            # pane_title.
+            #
+            # WHY NOT pane_title -- it does not stay set. `allow-rename off`
+            # gates WINDOW renaming only; pane_title is still writable by any
+            # program via an OSC escape, and several here do write it: Ghostty's
+            # shell integration puts ":/Users/..." there on every prompt, and
+            # agents put a spinner frame + task line there. So a title set by
+            # hand survived only until the next prompt drew. That is the
+            # "I renamed it and it renamed itself back" behaviour.
+            #
+            # A user option has no OSC equivalent -- nothing running inside the
+            # pane can reach it -- so a name set here stays set, which is what
+            # the `# No automatic renaming. Names I set stay set.` block in
+            # tmux.conf already claims for windows.
+            #
+            # The pane_title fallbacks below are KEPT, and still matter: they
+            # are what an unnamed pane shows, and they still have to defend
+            # against exactly the OSC writers described above.
+            f'#{{?#{{E:@pane_name}},#{{E:@pane_name}},'
             # tmux gives every pane the hostname as a title and offers no
             # "unset", so "has a name" means "neither the hostname nor empty".
             # Path-shaped titles count as unset too: zsh writes ":/Users/..."
@@ -503,7 +523,7 @@ MODES = {
             # Agents write a spinner frame into the title via OSC; strip one
             # leading non-alphanumeric char and its space, or a frozen frame
             # sits there looking like a permanently lit icon.
-            f'#{{s/^[^0-9A-Za-z] //:pane_title}}}}}}'
+            f'#{{s/^[^0-9A-Za-z] //:pane_title}}}}}}}}'
             # --- right cap, same colour decision as the left ---
             f'#{{?#{{||:#{{pane_dead}},'
             f'#{{m/r:^(ssh|mosh|sudo|doas|su)$,#{{pane_current_command}}}}}},'
