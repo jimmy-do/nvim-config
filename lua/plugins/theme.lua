@@ -863,6 +863,16 @@ end
 local function apply_win_divider_highlight()
   pcall(vim.api.nvim_set_hl, 0, "WinSeparator", { fg = WIN_DIVIDER, bg = "NONE" })
   pcall(vim.api.nvim_set_hl, 0, "VertSplit", { fg = WIN_DIVIDER, bg = "NONE" })
+  -- The bufferline offset separator is the same divider crossing the tab bar
+  -- (see lua/plugins/bufferline.lua), so it has to survive the same sweeps that
+  -- would otherwise recolour every ^BufferLine group. fg only: bufferline's own
+  -- bg is the tab-bar fill, and keeping it is what makes the glyph read as a
+  -- hairline instead of a notch punched through the slab.
+  local ok, hl = pcall(vim.api.nvim_get_hl, 0, { name = "BufferLineOffsetSeparator", link = false })
+  if ok and type(hl) == "table" then
+    hl.fg = WIN_DIVIDER
+    pcall(vim.api.nvim_set_hl, 0, "BufferLineOffsetSeparator", hl)
+  end
 end
 
 local function apply_retrobox_string_lightness()
