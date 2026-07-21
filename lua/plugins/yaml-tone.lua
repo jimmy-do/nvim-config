@@ -44,7 +44,18 @@ local scope_groups = {
   "BlinkIndentScope",
 }
 
+-- Single gate for the whole file. Every entry point checks this, so nothing
+-- here touches any colorscheme but storm.
+local THEME = "base16-tokyo-night-terminal-storm"
+
+local function active()
+  return (vim.g.colors_name or "") == THEME
+end
+
 local function apply()
+  if not active() then
+    return
+  end
   for group, fg in pairs(colors) do
     pcall(vim.api.nvim_set_hl, 0, group, { fg = fg })
   end
@@ -72,8 +83,10 @@ local function clear_period_matches()
 end
 
 local function apply_period_matches()
+  -- Cleared unconditionally, then re-added only on storm: switching away from
+  -- storm must take the overlay's existing window matches down with it.
   clear_period_matches()
-  if not period_fg then
+  if not period_fg or not active() then
     return
   end
   -- Linked, not copied: resolves to Comment's live color, so the exclusion
@@ -111,6 +124,10 @@ vim.api.nvim_create_autocmd({ "BufWinEnter", "WinEnter", "FileType" }, {
 })
 
 vim.api.nvim_create_user_command("YamlTone", function()
+  if not active() then
+    vim.notify("YamlTone: only applies to " .. THEME, vim.log.levels.WARN)
+    return
+  end
   apply()
   apply_period_matches()
 end, {})
