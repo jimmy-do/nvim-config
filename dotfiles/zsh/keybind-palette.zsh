@@ -286,6 +286,10 @@ _keys_tldr_examples() {
         ;;
     esac
   done < "$source_path"
+  # See the note on _keys_preview's tail: the loop's last statement is an
+  # arithmetic test, and a zsh (( )) that evaluates to zero exits 1. A page with
+  # fewer than `limit` examples would otherwise report failure.
+  return 0
 }
 
 _keys_preview_dispatch() {
@@ -596,6 +600,15 @@ _keys_preview() {
           print rows[priority, i]
     }
   ')
+  # MUST return 0 explicitly. The loop above ends on `(( ++shown == 6 ))`, and
+  # zsh gives an arithmetic expression that evaluates to ZERO an exit status of
+  # 1 -- so any entry with FEWER than six related rows made this whole function
+  # "fail". _keys_open_viewer treats a non-zero dispatch as an error, deletes
+  # its temp file and returns without drawing anything, which is why Enter did
+  # nothing at all on the Theme rows: Theme has six entries total, so five
+  # siblings, one short of the count that happens to break out of the loop.
+  # Every larger category hit `break` (status 0) and looked perfectly fine.
+  return 0
 }
 
 _keys_render_example() {

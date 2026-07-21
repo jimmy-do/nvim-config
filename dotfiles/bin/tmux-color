@@ -203,7 +203,25 @@ MODES = {
             # Exactly one cell in every case, so labels never change width as
             # flags come and go. That jitter was the other half of the mess.
             f'set -g window-status-format "'
-            f'#[fg={D}]#[bg=default] #{{E:@window_icon}} #I:#W'
+            f'#[fg={D}]#[bg=default]'
+            # RETURN ARROW ON THE LEFT, news on the right. The two marks answer
+            # different questions and now sit on different sides of the label:
+            # left is navigation (how do I get back), right is state (what
+            # happened here). Reading inward from either edge gets you one
+            # answer without the other in the way.
+            #
+            # Two cells, always -- space + arrow, or two spaces -- so the label
+            # cannot change width as the flag moves from window to window. With
+            # the leading space that already belonged to the name, both edges
+            # carry three cells at rest, which is what keeps the row symmetric.
+            # TWO spaces after the arrow, not one. These Nerd Font marks are
+            # East-Asian-ambiguous, so tmux lays them out as one cell while the
+            # font draws them nearly two wide -- the glyph overhangs its cell and
+            # eats a single separating space, leaving the arrow welded to the
+            # window icon. Cell arithmetic says the space is there; the screen
+            # says otherwise, and the screen is the one being read.
+            f'#{{?window_last_flag,#[fg={D}] {PREV}  ,    }}'
+            f'#{{E:@window_icon}} #I:#W'
             # The activity dot is gated on the OPTION as well as the flag.
             # Turning monitor-activity off does not clear flags already set --
             # tmux keeps them until you visit the window -- so without the gate,
@@ -241,15 +259,15 @@ MODES = {
             # return mark whenever they coincided, which is exactly when you
             # most want to see both.
             #
-            #   slot 1   {BELL} bell, else {ACT} unseen output, else blank
-            #   slot 2   {PREV} last window, else blank
+            #   left slot    {PREV} last window, else blank   (see above)
+            #   right slot   {BELL} bell, else {ACT} unseen output, else blank
             #
-            # Reading left to right: what happened here, then how to get back.
-            # Each slot is always two cells (space + mark, or two spaces), so a
-            # label is the same width whether it carries none, one or both.
+            # Bell still outranks activity INSIDE the right slot -- they are both
+            # "something happened here", so they share one cell and the rarer,
+            # deliberate one wins. The return arrow was never news, which is why
+            # it no longer competes for that cell at all.
             f'#{{?window_bell_flag,#[fg={B}] {BELL},'
             f'#{{?window_activity_flag,#[fg={B}] {ACT},  }}}}'
-            f'#{{?window_last_flag,#[fg={D}] {PREV},  }}'
             f' #[default]"',
             # --- chrome that used to drift ---------------------------------
             # Popup and menu frames, the floax float, and the copy-mode mark

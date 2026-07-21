@@ -1014,9 +1014,13 @@ local function adjust_all_highlights()
               adj[key] = bg_brightness_adjust(adj[key], bg_brightness)
             end
           end
+          -- native_text_channel is deliberately absent here: base16/tokyonight
+          -- keep their native fg only while the HSL knobs sit neutral. Once
+          -- :FgAdjust sets a non-50 value the explicit knob wins, otherwise it
+          -- would silently no-op on exactly those themes. `sp` stays protected.
           if
             key == "fg"
-            and not (native_text_channel or chrome_group or editor_static_fg or fg_hsl_protected or comment_fg)
+            and not (chrome_group or editor_static_fg or fg_hsl_protected or comment_fg)
             and (fg_lightness ~= 50 or fg_saturation ~= 50)
           then
             adj[key] = adjust_fg_hsl(adj[key], fg_lightness, fg_saturation)
