@@ -406,7 +406,10 @@ MODES = {
             # says what the exit code was.
             #
             # ON/OFF holds throughout -- active panes take the lit value,
-            # inactive the dim, so brightness alone carries focus. Shape carries
+            # inactive the dim, so COLOUR alone carries focus. Weight does not:
+            # the inactive pill used to drop to nobold, which made its label
+            # thinner as well as darker and read as a rendering artefact rather
+            # than a state. Every pill is bold. Shape carries
             # zoom instead, since a zoomed pane has no neighbour to be brighter
             # than: caps square off and the lead-in rule goes heavy.
             #
@@ -431,16 +434,19 @@ MODES = {
             # get wrong. Ink stays the same on both, so the text never shifts.
             f'#{{?#{{||:#{{pane_dead}},'
             f'#{{m/r:^(ssh|mosh|sudo|doas|su)$,#{{pane_current_command}}}}}},'
-            f'#{{?pane_active,#[fg={I}#,bg=#bf6300#,bold],#[fg={I}#,bg=#5b3000]}},'
-            f'#{{?pane_active,#[fg={I}#,bg={NB}#,bold],#[fg={I}#,bg={ND}]}}}}'
+            f'#{{?pane_active,#[fg={I}#,bg=#bf6300#,bold],#[fg={I}#,bg=#5b3000#,bold]}},'
+            f'#{{?pane_active,#[fg={I}#,bg={NB}#,bold],#[fg={I}#,bg={ND}#,bold]}}}}'
             f' #{{pane_index}}'
             f'#{{?pane_marked, {MARKED},}}'
-            f'#{{?#{{&&:#{{pane_last}},#{{>:#{{window_panes}},1}}}}, {LAST_PANE},}} '
+            # Two trailing spaces, not one: the last thing in this field is
+            # often a glyph, and a glyph sits tighter to its cell edge than a
+            # digit does, so a single space read as the field clipping it.
+            f'#{{?#{{&&:#{{pane_last}},#{{>:#{{window_panes}},1}}}}, {LAST_PANE},}}  '
             # --- back to the pill colour for the label ---
             f'#{{?#{{||:#{{pane_dead}},'
             f'#{{m/r:^(ssh|mosh|sudo|doas|su)$,#{{pane_current_command}}}}}},'
-            f'#{{?pane_active,#[fg={I}#,bg=#FF8500#,bold],#[fg={I}#,bg=#7a4000]}},'
-            f'#{{?pane_active,#[fg={I}#,bg={B}#,bold],#[fg={I}#,bg={D}]}}}}'
+            f'#{{?pane_active,#[fg={I}#,bg=#FF8500#,bold],#[fg={I}#,bg=#7a4000#,bold]}},'
+            f'#{{?pane_active,#[fg={I}#,bg={B}#,bold],#[fg={I}#,bg={D}#,bold]}}}}'
             f' '
             f'#{{?#{{E:@pane_icon}},#{{E:@pane_icon}} ,}}'
             # DEAD first, then ssh, then the ordinary label.
