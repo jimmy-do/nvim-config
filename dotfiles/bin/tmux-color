@@ -160,6 +160,12 @@ REMOTE = chr(0xF08B9)  # network -- pane is ssh/mosh/sudo, keystrokes leave here
 # was briefly F0721, which renders as a mangled box at this size; there was no
 # reason to invent a second arrow when the rail already had one that works.
 LAST_PANE = PREV      # reply arrow -- the pane prefix ; goes back to
+# YOU ARE HERE. Text-weight so it sizes with the digit beside it, and a solid
+# body so it reads at a glance -- it echoes the ">" the window rail puts on the
+# current window, which is the same statement one level up. It shares a slot
+# with {LAST_PANE} and can never collide: the active pane is never the pane
+# prefix ; goes back to.
+HERE = chr(0x25B6)    # right triangle -- this is the pane you are in
 DEAD = chr(0xF00D)     # cross -- pane's process exited (needs remain-on-exit)
 MARKED = chr(0xF08D)   # thumbtack -- this is the marked pane
 
@@ -418,8 +424,19 @@ MODES = {
             # pane_last is gated on window_panes > 1, because tmux pins it to
             # one pane per window unconditionally and in a single-pane window
             # there is nowhere for prefix ; to go.
+            # NO LEAD-IN RULE. The pill used to sit behind "──", and that is
+            # what stopped it looking flush: U+2500 draws a thin stroke through
+            # the VERTICAL CENTRE of its cell while the pill fills the cell top
+            # to bottom, so the rule met the cap at its waist and the whole
+            # thing floated a couple of columns in from the pane edge. The pill
+            # now starts at column 0, flush with the pane's left edge, with
+            # nothing beside it to misalign against.
+            #
+            # Zoom therefore lives entirely in the CAP SHAPE now (rounded ->
+            # solid wedge); the heavy rule that used to double up on that
+            # signal went with the lead-in.
             f'set -g pane-border-format '
-            f'"#{{?pane_zoomed_flag,━━,──}}'
+            f'"'
             # --- ONE colour decision, made once, used by cap + body + cap ---
             f'#{{?#{{||:#{{pane_dead}},'
             f'#{{m/r:^(ssh|mosh|sudo|doas|su)$,#{{pane_current_command}}}}}},'
@@ -441,7 +458,8 @@ MODES = {
             # Two trailing spaces, not one: the last thing in this field is
             # often a glyph, and a glyph sits tighter to its cell edge than a
             # digit does, so a single space read as the field clipping it.
-            f'#{{?#{{&&:#{{pane_last}},#{{>:#{{window_panes}},1}}}}, {LAST_PANE},}}  '
+            f'#{{?pane_active, {HERE},'
+            f'#{{?#{{&&:#{{pane_last}},#{{>:#{{window_panes}},1}}}}, {LAST_PANE},}}}}  '
             # --- back to the pill colour for the label ---
             f'#{{?#{{||:#{{pane_dead}},'
             f'#{{m/r:^(ssh|mosh|sudo|doas|su)$,#{{pane_current_command}}}}}},'
