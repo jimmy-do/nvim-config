@@ -422,8 +422,10 @@ MODES = {
             f'#{{?pane_active,#[fg={I}#,bg=#FF8500#,bold],#[fg={I}#,bg=#7a4000]}},'
             f'#{{?pane_active,#[fg={I}#,bg={B}#,bold],#[fg={I}#,bg={D}]}}}}'
             f' #{{pane_index}}'
-            f'#{{?pane_marked, {MARKED},}}'
-            f'#{{?#{{&&:#{{pane_last}},#{{>:#{{window_panes}},1}}}}, {LAST_PANE},}}'
+            # No space before these -- they hang directly off the index, so
+            # "3" reads as one unit rather than a number and a loose mark.
+            f'#{{?pane_marked,{MARKED},}}'
+            f'#{{?#{{&&:#{{pane_last}},#{{>:#{{window_panes}},1}}}},{LAST_PANE},}}'
             f' {INKRULE} '
             f'#{{?#{{E:@pane_icon}},#{{E:@pane_icon}} ,}}'
             # DEAD first, then ssh, then the ordinary label.
