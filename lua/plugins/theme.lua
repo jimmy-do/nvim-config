@@ -1451,6 +1451,13 @@ local function apply_theme_adjustments(refresh_base)
   vim.defer_fn(run_adjust_all_highlights, 200)
   vim.defer_fn(apply_fzf_opaque_highlights, 250)
   vim.defer_fn(apply_habamax_overrides, 250)
+  -- Announce that the pipeline has settled, so files loaded after this one can
+  -- re-assert their own overrides. Without it, anything this pipeline repaints
+  -- (Comment, for one) silently reverts to the captured theme base whenever a
+  -- knob command like :FgAdjust runs, with no ColorScheme event to hook.
+  vim.defer_fn(function()
+    pcall(vim.api.nvim_exec_autocmds, "User", { pattern = "ThemeAdjusted" })
+  end, 400)
   -- Must run after apply_habamax_overrides (250) -- that one pins WinSeparator
   -- to black, and the cyan divider has to win.
   apply_win_divider_highlight()
@@ -1564,7 +1571,7 @@ return {
   {
     "LazyVim/LazyVim",
     opts = {
-      colorscheme = "base16-dracula",
+      colorscheme = "base16-tokyo-night-terminal-storm",
     },
     init = function()
       -- :ThemeAdjust to manually re-run the pipeline
@@ -1811,6 +1818,17 @@ return {
 
       -- To preserve manual values across theme switches, remove the relevant entry below.
       local colorscheme_defaults = {
+        ["base16-tokyo-night-terminal-storm"] = {
+          bg_base = "#0f0f0f",
+          bg_transparency = 100,
+          bg_brightness = 50,
+          bg_contrast = 50,
+          chrome_darken = 50,
+          sepia_amount = 0,
+          fg_lightness = 60,
+          fg_saturation = 50,
+          normalize_background = 0,
+        },
         ["kanagawa-dragon"] = {
           -- Raw Kanagawa Dragon values match Ghostty's Kanagawa Dragon color pool.
           bg_base = "#0f0f0f",
