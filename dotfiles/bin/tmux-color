@@ -235,9 +235,21 @@ MODES = {
             # sat hard against the last letter of the window name -- "2:foo"
             # rather than "2:foo ". Every branch is two cells (space + mark) so
             # the labels still cannot change width as flags come and go.
+            # TWO INDEPENDENT SLOTS, not one priority chain. A window can be
+            # both the one you just left AND have printed something since, and
+            # those are different facts -- the news mark used to swallow the
+            # return mark whenever they coincided, which is exactly when you
+            # most want to see both.
+            #
+            #   slot 1   {BELL} bell, else {ACT} unseen output, else blank
+            #   slot 2   {PREV} last window, else blank
+            #
+            # Reading left to right: what happened here, then how to get back.
+            # Each slot is always two cells (space + mark, or two spaces), so a
+            # label is the same width whether it carries none, one or both.
             f'#{{?window_bell_flag,#[fg={B}] {BELL},'
-            f'#{{?window_activity_flag,#[fg={B}] {ACT},'
-            f'#{{?window_last_flag,#[fg={D}] {PREV},#[fg={D}]  }}}}}}'
+            f'#{{?window_activity_flag,#[fg={B}] {ACT},  }}}}'
+            f'#{{?window_last_flag,#[fg={D}] {PREV},  }}'
             f' #[default]"',
             # --- chrome that used to drift ---------------------------------
             # Popup and menu frames, the floax float, and the copy-mode mark
@@ -307,7 +319,15 @@ MODES = {
             f'#[fg=#7a4000]{LCAP}#[fg={I}#,bg=#7a4000]}}{REMOTE} ,'
             f'#{{?pane_active,#[fg={B}]{LCAP}#[fg={I}#,bg={B}#,bold],'
             f'#[fg={D}]{LCAP}#[fg={I}#,bg={D}]}}}}'
-            f'#{{pane_current_command}} · #{{b:pane_current_path}}'
+            # A NAME set with `prefix C-S-,` (select-pane -T) wins over the
+            # automatic command · path label. tmux gives every pane a title of
+            # the hostname by default and offers no "unset" value, so "has a
+            # name" has to mean "title is neither the hostname nor empty" --
+            # which also makes clearing the prompt fall straight back to the
+            # automatic label, with no separate reset key needed.
+            f'#{{?#{{||:#{{==:#{{pane_title}},#{{host}}}},#{{==:#{{pane_title}},}}}},'
+            f'#{{pane_current_command}} · #{{b:pane_current_path}},'
+            f'#{{pane_title}}}}'
             f'#{{?#{{m/r:^(ssh|mosh|sudo|doas|su)$,#{{pane_current_command}}}},'
             f'#{{?pane_active,#[fg=#FF8500#,bg=default#,nobold]{RCAP},'
             f'#[fg=#7a4000#,bg=default#,nobold]{RCAP}}},'
