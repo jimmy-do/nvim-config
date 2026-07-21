@@ -142,7 +142,10 @@ REMOTE = chr(0xF08B9)  # network -- pane is ssh/mosh/sudo, keystrokes leave here
 # MARKED is the pane tmux holds for swap-pane/join-pane (prefix m). tmux gives
 # it no visible mark of its own beyond reversing the border, which is invisible
 # on a one-cell rule -- so the badge carries it. Only ever ONE pane server-wide.
-LAST_PANE = chr(0xF0721)  # return arrow -- the pane prefix ; goes back to
+# The SAME glyph the window rail uses for window_last_flag -- PREV above. It
+# was briefly F0721, which renders as a mangled box at this size; there was no
+# reason to invent a second arrow when the rail already had one that works.
+LAST_PANE = PREV      # reply arrow -- the pane prefix ; goes back to
 DEAD = chr(0xF00D)     # cross -- pane's process exited (needs remain-on-exit)
 MARKED = chr(0xF08D)   # thumbtack -- this is the marked pane
 
