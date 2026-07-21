@@ -1,16 +1,30 @@
 #!/bin/sh
 # Kubernetes context for status-right, styled by blast radius.
 #
-# HUE BUDGET IS FULL -- mint, green, orange and pink all already mean something,
-# so "you are pointed at production" is not expressed with a new colour. It is
-# expressed by INVERSION: a non-prod context is mint text on the void ground,
-# and a prod context flips to void text on an orange slab. Orange already means
-# "this is where the focus is" on the pane dividers; this is the same word in a
-# different sentence.
+# COLOURS ARE NOT HARDCODED HERE. The first version of this script painted the
+# context #4dffd2 -- a mint from a palette that had already been retired -- so
+# the moment the bar was set to anything else, the one value on the right hand
+# side rendered in a foreign hue. That is the exact drift this whole config
+# keeps losing time to, reintroduced by the script written to clean it up.
+#
+# The bar publishes its own palette as user options (@ui-bright / @ui-dim, set
+# in the tmux-bar-managed block), so read them at render time and follow along
+# automatically. The fallback only matters if this is somehow run outside tmux.
+#
+# The ONE fixed colour is #FF8500. It does not follow the palette on purpose:
+# it means blast radius everywhere in this config -- the ssh/sudo pane pill uses
+# it too -- and a warning that changes colour with the theme is not a warning.
+#
+# HUE BUDGET IS FULL, so "you are pointed at production" is not said with a new
+# colour. It is said with INVERSION: normal contexts are text on the void
+# ground, a prod context flips to void text on an orange slab.
 #
 # tmux DOES interpret #[...] emitted by a #() hook -- verified by probe with an
-# inner tmux captured from an outer pane (escape run was 38;2;8;8;8 over
-# 48;2;255;133;0, i.e. #080808 on #FF8500). Do not re-litigate that.
+# inner tmux captured from an outer pane (the escape run came back 38;2;8;8;8
+# over 48;2;255;133;0, i.e. #080808 on #FF8500). Do not re-litigate that.
+
+bright=$(tmux show -gv @ui-bright 2>/dev/null)
+[ -z "$bright" ] && bright="default"
 
 ctx=$(kubectl config current-context 2>/dev/null)
 [ -z "$ctx" ] && ctx="no-ctx"
@@ -20,6 +34,6 @@ case "$ctx" in
     printf '#[fg=#080808]#[bg=#FF8500]#[bold] %s #[default]' "$ctx"
     ;;
   *)
-    printf '#[fg=#4dffd2]%s' "$ctx"
+    printf '#[fg=%s]%s' "$bright" "$ctx"
     ;;
 esac
