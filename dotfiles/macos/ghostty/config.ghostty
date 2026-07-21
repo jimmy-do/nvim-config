@@ -4,8 +4,8 @@ background-opacity = 1
 background = #080806
 background-blur = 0
 background-opacity-cells = true
-foreground = #85A6A6
-# 8892B0, 6C7D9C, B4F9F8
+foreground = #7F8AAD
+# 8892B0, 6C7D9C, B4F9F8, 9BB3C2, 717FAB
 
 
 # ---------- theme — uncomment ONE ----------
@@ -202,15 +202,15 @@ palette = 0=#16161e
 palette = 1=#f7768e
 palette = 2=#41a6b5
 palette = 3=#e0af68
-palette = 4=#6b83ad
+palette = 4=#7aa2f7
 palette = 5=#bb9af7
 palette = 6=#7dcfff
-palette = 7=#787c99
+palette = 7=#9aa0c0
 palette = 8=#444b6a
 palette = 9=#f7768e
 palette = 10=#41a6b5
 palette = 11=#e0af68
-palette = 12=#7d94bd
+palette = 12=#7aa2f7
 palette = 13=#bb9af7
 palette = 14=#7dcfff
 palette = 15=#d5d6db
