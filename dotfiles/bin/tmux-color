@@ -165,7 +165,7 @@ LAST_PANE = PREV      # reply arrow -- the pane prefix ; goes back to
 # current window, which is the same statement one level up. It shares a slot
 # with {LAST_PANE} and can never collide: the active pane is never the pane
 # prefix ; goes back to.
-HERE = chr(0x25B6)    # right triangle -- this is the pane you are in
+HERE = chr(0xEEA7)    # laptop-with-code -- this is the pane you are in
 DEAD = chr(0xF00D)     # cross -- pane's process exited (needs remain-on-exit)
 MARKED = chr(0xF08D)   # thumbtack -- this is the marked pane
 
@@ -457,12 +457,23 @@ MODES = {
             # curved left edge to sit against, so a space on top of it left
             # the digit floating in the middle of its own field.
             f'#{{pane_index}}'
-            f'#{{?pane_marked, {MARKED},}}'
-            # ONE trailing space. Two plus the label's own leading space put
-            # padding on both sides of the boundary and read as a hole in the
-            # middle of the pill; none of it let the glyph touch the edge.
-            f'#{{?pane_active, {HERE},'
-            f'#{{?#{{&&:#{{pane_last}},#{{>:#{{window_panes}},1}}}}, {LAST_PANE},}}}} '
+            f'#{{?pane_marked, {MARKED} ,}}'
+            # Trailing space is CONDITIONAL, and that is the whole point: the
+            # glyph branches carry a second one, the empty branch does not.
+            #
+            # Every glyph that can land here -- HERE, LAST_PANE, MARKED -- is
+            # East-Asian width "Ambiguous", which the font draws at roughly two
+            # cells while tmux counts it as one. So the glyph bleeds into the
+            # single trailing space and the number field ends flush against the
+            # label's edge, with no padding at all. A bare digit has no such
+            # bleed and sits correctly on one space.
+            #
+            # This is why an earlier attempt at TWO unconditional spaces was
+            # wrong and was reverted: it fixed the glyph case by over-padding
+            # the bare-digit case, which read as a hole in the middle of the
+            # pill. Conditional padding fixes only the case that is broken.
+            f'#{{?pane_active, {HERE} ,'
+            f'#{{?#{{&&:#{{pane_last}},#{{>:#{{window_panes}},1}}}}, {LAST_PANE} ,}}}} '
             # --- back to the pill colour for the label ---
             f'#{{?#{{||:#{{pane_dead}},'
             f'#{{m/r:^(ssh|mosh|sudo|doas|su)$,#{{pane_current_command}}}}}},'
