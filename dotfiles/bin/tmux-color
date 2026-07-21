@@ -84,14 +84,17 @@ LCAP, RCAP = chr(0xE0B6), chr(0xE0B4)                       # rounded: pane pill
 # because pane-border-lines is global and cannot vary by zoom state.
 ZLCAP, ZRCAP = chr(0xE0B2), chr(0xE0B0)                     # solid: zoomed pill
 # The pill's INTERNAL divide, between the index segment and the title segment.
-# A shear rather than a wedge: it cuts the pill without capping either side, so
-# the two backgrounds read as one shape in two tones. Powerline Extra, U+E0BC --
-# the same glyph the bar's chips wear, used here as a join instead of an edge.
 #
-# A plain U+2502 rule was tried here (matching pane-border-lines) and rejected:
-# with a hard colour step either side of it the pill stopped reading as one
-# object. The shear carries the change of tone; a vertical rule just abuts it.
-SEP = chr(0xE0BC)                                           # shear: pill divide
+# It MUST match the caps. The caps are rounded (U+E0B6/U+E0B4) and this was a
+# shear (U+E0BC) -- a slanted cut between two round ends, which reads as two
+# different widgets welded together. U+E0B4 is the same half-round the right
+# cap uses, drawn here fg = LEFT segment's bg on bg = RIGHT segment's bg, so
+# the index segment ends in the identical curve the pill itself ends in.
+#
+# Shape vocabulary, do not mix: the BAR wears slants (E0BA/E0BC), the PANE
+# PILL wears rounds (E0B6/E0B4). That is the only thing telling the two
+# surfaces apart when they are set to the same colour.
+SEP = chr(0xE0B4)                                           # round: pill divide
 ARROW = chr(0xE0B0)                                         # wedge: retired, kept
 SLANT_L, SLANT_R = chr(0xE0BA), chr(0xE0BC)                 # solid: chips
 SLANT_THIN = chr(0xE0BB)                                    # hairline: window rail
