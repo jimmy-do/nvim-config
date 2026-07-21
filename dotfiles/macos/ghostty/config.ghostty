@@ -1,11 +1,233 @@
-background-opacity = .8
+background-opacity = 1
+#background = #080808
+#background = #0D0D0B
+background = #080806
 background-blur = 0
-background-opacity-cells = false
+background-opacity-cells = true
 
+# ---------- theme — uncomment ONE ----------
+#theme = Gruvbox Material Dark
 #oled
 #theme = akari-night
 #macbook
-theme = Gruvbox Dark
+#theme = Gruvbox Dark
+
+# ---------- SHADER — uncomment exactly ONE ----------
+#  Ghostty applies ONE shader GLOBALLY. There is NO per-display shader option, so the
+#  presets below do NOT auto-switch. Change monitors -> move the uncomment by hand.
+#
+#  ⚠️ CORRECTED 2026-07-15: this block used to claim "nothing below is display-specific"
+#     and that the monitor-specific names were "vestigial and misleading". Both wrong.
+#     Four PIXEL-measured values (SCANLINE_PX / SCANLINE_WIDTH / SOFT_RADIUS /
+#     BLOOM_RADIUS) genuinely change meaning per display, because HiDPI vs not changes
+#     what a shader pixel IS. Display-named presets are correct and are back.
+#
+#  ONE PRESET PER DISPLAY, ONE FILE EACH. Never re-tune a preset for a different
+#  monitor — copy it to a new file. Sharing one file across two displays is what
+#  silently destroyed the numbers and left comments contradicting the code.
+#
+#  amber-phosphor-321urx.glsl : ⭐ BASELINE, user-approved 2026-07-15. MSI MPG 321URX
+#       @ 2560x1440, NO HiDPI (verified via system_profiler, not assumed).
+#       Amber ramp + scanlines + rolling VBI bar w/ retrace raster + flagging.
+#       Dials: TINT / COLOR_CURVE / WASH / SCANLINE_DEPTH / BAR_* / FLAG_* / RETRACE_*
+#  amber-phosphor-v2.glsl : 🧊 FROZEN. Its numbers are a MacBook/321URX mix and fit
+#       neither. Kept only for the essay on why classifiers caused the white spots.
+#  v1 : the old 199-line classifier shader. Has the white spots. Fallback only.
+#  amber-phosphor.glsl : the 60-line ORIGINAL (2026-07-12). Reference, not a preset.
+#  ...-macbook-UNVERIFIED.glsl : never verified. Its SCANLINE_PX 9.84 constants are
+#       pure DPI arithmetic and carve ribs through glyphs. Do not enable.
+#
+#  ⚠️ CORRECTED 2026-07-15 (late): this used to say "NO MacBook preset exists yet".
+#  It DOES exist and it is the LIVE one — amber-phosphor-macbook.glsl. It is also no
+#  longer a plain copy of the 321urx baseline: it now carries four subsystems that
+#  exist NOWHERE else. Approved snapshot:
+#     amber-phosphor-macbook.glsl.bak-APPROVED-20260715-wobble-pulse-toe
+#
+#    WOBBLE_AMOUNT/FREQ/PEAK : soanvig-gist wobble. ONE offset for all 3 channels —
+#         any per-channel split decorrelates a channel and tints the whole screen
+#         (green, then yellow; both rejected). FREQ is the visibility knob, not
+#         amplitude — a uniform shift gives the eye no relative motion to read.
+#    PULSE / PULSE_RATE      : screen breathe. MUST stay two detuned sines; one sine
+#         is a metronome and reads as a slow fade, not electrical inconsistency.
+#    BAR_GAP                 : dead seconds between bar passes. The old fract() wrap
+#         made a gap structurally impossible — BAR_SPEED never controlled it.
+#    DARK_CONTRAST/DARK_PIVOT: dark-end contrast reduction, PIVOTED. Never redo this
+#         as a luma-varying pow() exponent — pow() pivots at white, so it brightens
+#         the screen. Tried and rejected.
+#
+#  Full write-ups: HANDOFF.md "SUBSYSTEMS ADDED 2026-07-15 (late)".
+#  ---- CHAIN: phosphor FIRST, cursor effects LAST. ----
+#  Shaders run in listed order, each taking the previous one's output as iChannel0.
+#
+#  ⚠️ ORDER REVERSED 2026-07-15. It was cursor-first, on my theory that the trail should
+#  live "behind the same glass". In practice that means the phosphor pass DARKENS the
+#  trail — scanlines, wash and BRIGHTNESS all multiply it down — and the user's verdict
+#  was "THE FUCKING CURSOR TRAIL IS TOO DARK". Phosphor first = the trail is drawn on the
+#  finished CRT image at full strength. Less theoretically pure, actually visible.
+#
+#  From github.com/sahaj-b/ghostty-cursor-shaders (user's own pick). These are PROVEN to
+#  compile — and they are a useful reference: they use ONLY iCurrentCursor,
+#  iPreviousCursor, iCurrentCursorColor, iTimeCursorChange, iTime, iResolution.
+#  They never touch iFocus / iCursorVisible / iBackgroundColor — the three uniforms that
+#  Ghostty 1.3.1 DOCUMENTS but that killed our compile. Strong hint: stick to this set.
+#  Tunables live at the top of each file (DURATION, MAX_TRAIL_LENGTH, COLOR, BLUR...).
+#  ---- ONE PRESET PER DISPLAY MODE. Uncomment exactly ONE of these three. ----
+#  Ghostty applies shaders GLOBALLY — there is no per-display option, so this
+#  does not auto-switch. Swap it by hand when you change monitors.
+#    321urx         = MSI MPG 321URX @ 2560x1440, NO HiDPI (shader px IS a logical px)
+#    macbook        = MacBook 16" built-in @ 2056x1329 HiDPI (backing 4112x2658, 2x)
+#    macbook-native = MacBook 16" built-in @ 1728x1117 HiDPI (backing 3456x2234, 2x)
+#  They differ ONLY in SOFT_RADIUS / BLOOM_RADIUS / SCANLINE_PX / SCANLINE_WIDTH /
+#  SCANLINE_DEPTH.  Never re-tune one for another display — copy it to a new file.
+#
+#  🔑 macbook-native REQUIRES THE DISPLAY SET TO "looks like 1728x1117" FIRST.
+#     It is WRONG at any other resolution. Its whole premise is that the 3456x2234
+#     backing store IS the physical panel — 1:1, no resample. At 2056x1329 macOS
+#     renders 4112x2658 and squeezes it 0.840x, and THAT squeeze is the root cause
+#     of BOTH the scanline beat AND the white spots. Pitch 2.0 at 2056 was tried and
+#     reads as NO SCANLINES AT ALL — the resample eats them. So: change the res in
+#     System Settings > Displays > Scaled, THEN swap this line. Not the other order.
+#     Buys: 68% more lines, 2.5x thinner, zero beat, zero shader spotting.
+#     Costs: 16% less screen area. Lines are NOT blacker, just clean — see the file.
+#     font-size ~17 here reproduces the apparent text size of font-size 20 at 2056.
+# --- clean/ = pristine 0xhckr/ghostty-shaders. ONLY change: curvature off. ---
+#     bettercrt      : no tint. amber comes from foreground=#ecad53. scan 0.25x
+#     retro-terminal : same + teal tint (r=0.0 -> kills reds). scan 0.50x
+#     crt            : Lottes CRTS. 2px beam scanlines, no mask, no vignette.
+#custom-shader = /Users/jimmy/.config/ghostty/shaders/macbook-m4max-2056-theme-friendly-sharp.glsl
+custom-shader = /Users/jimmy/.config/ghostty/shaders/321urx-monitor-preset-theme-friendly-sharp.glsl
+# hckr experiments prepared 2026-07-19. Do not enable until visual toggle test.
+# custom-shader = /Users/jimmy/.config/ghostty/shaders/hckr-retro-terminal-321urx-faithful-flat.glsl
+# custom-shader = /Users/jimmy/.config/ghostty/shaders/hckr-retro-terminal-macbook-m4max-2056-flat.glsl
+# custom-shader = /Users/jimmy/.config/ghostty/shaders/hckr-glitchy-macbook-m4max-2056.glsl
+# custom-shader = /Users/jimmy/.config/ghostty/shaders/clean/retro-terminal.glsl
+#   ^ KEEPER: amber gated to neutrals only; bg + syntax verified untouched.
+#     backup: clean/retro-terminal.glsl.bak-KEEP-20260715-amber-gated
+# custom-shader = /Users/jimmy/.config/ghostty/shaders/clean/crt.glsl
+#   ^ Lottes CRTS. static, no iTime. SCALE 0.5 / BLUR -3.0 / THIN 0.85.
+# soanvig gist — the ONLY one with the scrolling bar (iTime). warp 0.3 -> 0.0.
+# custom-shader = /Users/jimmy/.config/ghostty/shaders/clean/gist-retro-term.glsl
+#
+# --- macbook preset: DEPTH back to 0.59 + soanvig's wobble at 50%/50% ---
+# custom-shader = /Users/jimmy/.config/ghostty/shaders/amber-phosphor-321urx.glsl
+# custom-shader = /Users/jimmy/.config/ghostty/shaders/amber-phosphor-macbook-m4max-2056x1329.glsl
+# custom-shader = /Users/jimmy/.config/ghostty/shaders/amber-phosphor-macbook.glsl
+# custom-shader = /Users/jimmy/.config/ghostty/shaders/amber-phosphor-macbook-native.glsl
+# Trail ON, boom ON — 2026-07-16. Cursor trail plus Neovim mode-change boom.
+custom-shader = /Users/jimmy/.config/ghostty/shaders/cursor_tail.glsl
+custom-shader = /Users/jimmy/.config/ghostty/shaders/sonic_boom_cursor.glsl
+
+# ⚠️ COLOUR SPACE — `alpha-blending` is UNSET, so macOS default = `native` = Display P3.
+#    Ghostty's docs: "custom shaders will receive colors in the configured space."
+#    Two consequences, both bit us on 2026-07-15:
+#      1. The pipeline is NOT linear. Vendored shaders written for Linux (default
+#         `linear-corrected`) may include an sRGB->linear conversion that is WRONG here
+#         and silently darkens their output. cursor_tail.glsl had exactly this.
+#      2. Our PHOSPHOR constants are sRGB hex values being interpreted as P3 (a WIDER
+#         gamut), so they render MORE SATURATED than the hex specifies. Some of the
+#         "that shit orange" was this, not the knob.
+#    If you ever change alpha-blending, re-check every shader in the chain.
+# custom-shader = /Users/jimmy/.config/ghostty/shaders/amber-phosphor-v1.glsl
+# custom-shader = /Users/jimmy/.config/ghostty/shaders/amber-phosphor.glsl
+#
+# ⚠️ CORRECTED 2026-07-15 (late). This used to read "NEVER chain crt.glsl — it collapses
+#    the terminal into the top-left corner." The collapse was real but the DIAGNOSIS was
+#    wrong: it is a one-token bug in Lottes' no-warp path, not a consequence of feeding it
+#    a native-res frame. mainImage passes vec2(1.0) for inputSizeDivOutputSize, which must
+#    be inputSize/outputSize == SCALE. vec2(1.0) is only correct at SCALE==1; at SCALE 0.5
+#    every pos lands 2x too large and uv runs to 2.0. Nobody upstream hit it because nobody
+#    turns the warp off. Fixed in clean/crt.glsl (vec2(SCALE)) — renders fine, chainable.
+#    It IS still a pixel-art upscaler though: at SCALE 0.33333333 text is rebuilt from a
+#    third-res raster and thin glyphs turn to mush. SCALE 0.5 is the usable setting.
+custom-shader-animation = true
+
+# ---------- colours (explicit colours ALWAYS beat `theme`, order is irrelevant) ----------
+# ⚠️ CORRECTION 2026-07-19: the old heading here said "palette MUST come after theme,
+# or the theme wins". That is FALSE and cost real debugging time. Ghostty's own docs:
+# "Any additional colors specified via background, foreground, palette, etc. will
+# override the colors specified in the theme." Position in the file does not matter.
+# This is why setting a `theme =` looked like it did nothing: `background` (line 2)
+# and `foreground` below outrank it no matter where you put them.
+# ---------------------------------------------------------------------------
+# 🔧 COLOUR PATH REBUILT 2026-07-15. Read this before "fixing" the phosphor again.
+#
+# WHAT WAS WRONG: this block used to force everything WHITE —
+#     foreground = #f2f2f2 / palette 7=#f2f2f2 / palette 15=#ffffff
+#     "# Gruvbox tints its whites (#d4be98 is a cream) which bypassed the phosphor."
+# An agent hit "the phosphor doesn't show on cream text" and solved it by making the
+# text pure white so the SHADER could paint it amber — then cranked the shader's TINT
+# from its designed 0.10 to 0.85 to do that painting.
+#
+# Those two hacks propped each other up and made the look unwinnable: at low TINT the
+# text was WHITE (because it had been forced white), which justified high TINT, which
+# REPLACED every syntax colour with amber ("colors won't bleed", "that shit orange",
+# "i feel like military personnel"). Turning either knob alone always broke something.
+#
+# THE FIX — do what a real amber terminal does: THE FOREGROUND *IS* AMBER.
+# A real tube has amber PHOSPHOR. The signal is not white text getting tinted; the light
+# is simply amber. So the terminal emits amber, and the shader only has to do faint
+# phosphor cast + glow + scanlines (TINT back near its designed 0.10-0.20).
+# Result: amber text natively, syntax colours survive untouched, no knob fights another.
+#
+# ⚠️ If plain text ever looks WHITE, fix it HERE, not with the shader's TINT.
+# ---------------------------------------------------------------------------
+# ⚠️ NO TRAILING COMMENTS. Ghostty does NOT strip `#` after a value — it parses it as
+# part of the value. `foreground = #ecad53   # note` becomes an invalid colour and throws
+# a config error dialog. Comments go on their OWN LINE. (Learned the loud way 2026-07-15.)
+#
+# ===== base16 tokyo-night-terminal-dark =====================================
+# Transcribed 2026-07-19 from the canonical scheme already on disk at
+#   ~/.local/share/nvim/lazy/base16-nvim/lua/colors/tokyo-night-terminal-dark.lua
+# so nvim and the terminal are driven by the SAME source of truth.
+#
+# Scheme base colours, for reference when editing:
+#   base00 #16161e  base01 #1a1b26  base02 #2f3549  base03 #444b6a
+#   base04 #787c99  base05 #787c99  base06 #cbccd1  base07 #d5d6db
+#   base08 #f7768e  base09 #ff9e64  base0A #e0af68  base0B #41a6b5
+#   base0C #7dcfff  base0D #7aa2f7  base0E #bb9af7  base0F #d18616
+#
+# Foreground = base05, the scheme's own text colour: the soft blue-grey that
+# plain text renders in. This is what nvim uses for Normal, so the terminal and
+# the editor now match exactly. Previous value was #8E989E (neutral grey).
+# NOTE: base05 is dimmer than the old grey. If it reads too dark on #080808,
+# the brighter in-scheme alternative is base07 #d5d6db.
+foreground = #787c99
+
+# Standard base16 -> ANSI mapping (0-15). Normal and bright share hues by design;
+# base16 varies only black (base00/base03) and white (base05/base07).
+palette = 0=#16161e
+palette = 1=#f7768e
+palette = 2=#41a6b5
+palette = 3=#e0af68
+palette = 4=#7aa2f7
+palette = 5=#bb9af7
+palette = 6=#7dcfff
+palette = 7=#787c99
+palette = 8=#444b6a
+palette = 9=#f7768e
+palette = 10=#41a6b5
+palette = 11=#e0af68
+palette = 12=#7aa2f7
+palette = 13=#bb9af7
+palette = 14=#7dcfff
+palette = 15=#d5d6db
+# Slots 16-21 (base09/base0F/base01/base02/base04/base06) are deliberately NOT
+# set. base16-shell does set them, but they are real 256-colour indices that
+# other tools use, so overriding them corrupts unrelated 256-colour output.
+# ===========================================================================
+# Bright white-cyan highlight. Was #5ce6ff (a mid, saturated cyan).
+# Deliberately kept SATURATED rather than going near-#ffffff: the shader's phosphor ramp
+# keys off saturation, so a near-white selection would read as "neutral", pick up the
+# amber TINT, and come out warm instead of cyan. This stays clearly cyan while reading
+# as bright/white — the selection is the one thing that should NOT look amber.
+selection-background = #a0ffff
+selection-foreground = #000000
+
+keybind = ctrl+tab=next_tab
+keybind = ctrl+shift+tab=previous_tab
+
+
+
 
 
 
@@ -18,6 +240,7 @@ keybind = all:super+zero=reset_font_size
 keybind = cmd+shift+h=csi:5;30012~
 keybind = cmd+l=csi:5;30013~
 keybind = cmd+;=csi:5;30014~
+keybind = cmd+shift+;=csi:5;30015~
 keybind = alt+h=esc:h
 keybind = alt+l=esc:l
 
@@ -30,30 +253,56 @@ keybind = cmd+right=csi:F
 # Use a Nerd Font. Critical for displaying Git branch icons, Kubernetes 
 # wheel icons, and Terraform states in your prompt.
 
-#font-family =  terminess nerd font
-#font-family = DejaVuSansM Nerd Font Mono
+# DejaVuPill = plain DejaVuSansM Nerd Font Mono with the old `adjust-cell-height = 10%`
+# baked into its ascent/descent (1901/-483 -> 2020/-602). Outlines are IDENTICAL, and
+# cell/baseline/line-spacing are UNCHANGED at 25.61px -- ghostty centred the font in the
+# padded cell, so the cell top was already ascent+119.
+# WHY: ghostty confines glyph ink to the font's ascent..descent box, but the padded cell
+# was 1.16px TALLER than that box. That unpaintable strip is exactly what showed up as
+# black BARS above the prompt's chevrons -- no glyph shape or thickness could fill it.
+# Baking the padding in makes ascent == the cell's top edge, so glyphs can reach it.
+# Revert = restore the DejaVuSansM line below + adjust-cell-height = 10% (bars return).
+# Rebuild: ~/.local/share/pillchev/build_primary.py
+#font-family = DejaVuPill Nerd Font Mono
+#font-family = JetBrainsMono Nerd Font Mono
+
+# Starship prompt separators: the thin black ">" between pill fields.
+# Ghostty draws E0B0-E0BE from its OWN internal sprites (verified with
+# `ghostty +show-face --cp=0xE0B0`), and every one of them sweeps the full
+# cell -- which forces the black band to be exactly one cell wide. These two
+# custom glyphs are the same shape with a shorter sweep, so the band is thin.
+# Plane 16 PUA = no sprite, no nerd-font range, no icon-height constraint.
+# Rebuild/retune thickness with:  chev <px>     (see ~/.local/share/pillchev)
+#font-codepoint-map = U+10F0C0-U+10F0C1=PillChev Nerd Font Mono
+#font-family = DejaVuSansM Nerd Font Propo
 #font-family = MesloLGSDZ Nerd Font Mono
 font-family = jetbrainsmono nerd font
 #font-family = droidsansm Nerd Font
 #font-family = hack nerd font
 #font-family = CaskaydiaCove Nerd Font Mono
 #font-family = Iosevka Nerd Font Mono
+#font-family = Iosevka Nerd Font Mono
+#font-family =  terminess nerd font
+
 
 #dejavusansm
 #font-style = regular
 #font-size = 20
 #adjust-cell-width = -8%
-#adjust-cell-height = 10%
+# WAS 10%. NOT removed -- moved into DejaVuPill's ascent/descent (see font-family above).
+# The cell is still 25.61px; this must stay 0 or the padding gets applied TWICE and the
+# black bars above the chevrons come straight back.
+#adjust-cell-height = 0%
 #font-thicken = true
 #font-thicken-strength = 0
 
 
 #jetbrainsmono nerd font
 font-style = light
-font-size = 16
-font-thicken = true
-font-thicken-strength = 255
-adjust-cell-height = -10%
+font-size = 20
+font-thicken = false
+font-thicken-strength = 200
+adjust-cell-height = 0%
 adjust-cell-width = 0%
 
 
@@ -62,15 +311,19 @@ adjust-cell-width = 0%
 #font-size = 20
 #font-thicken = true
 #font-thicken-strength = 0
-#adjust-cell-width = -6%
+#adjust-cell-width = 0%
 #adjust-cell-height = 20%
 
 cursor-style = block
 cursor-style-blink = true
-cursor-color = #C6BA96
+cursor-color = #c8fff4
+cursor-text = #151515
 shell-integration-features = no-cursor
 
 window-decoration = auto
+# "tabs" is the only macOS style whose tab bar takes the terminal background
+# color (#070808). "native"/"transparent" hand the tab bar to AppKit, which
+# always draws it in system gray. Shaders never touch the titlebar.
 macos-titlebar-style = tabs
 
 # font-family = DroidSansM Nerd Font Mono
@@ -111,17 +364,16 @@ macos-titlebar-style = tabs
 
 
 #theme = Tomorrow Night Eighties
-#theme = Gruvbox Material Dark
 #theme = Kanagawa Dragon
-# theme = Tomorrow Night
+#theme = Tomorrow Night
 # theme = One Double Dark
 
 # theme = Monokai Pro Ristretto
 # theme = Sonokai
 # theme = Everforest Dark Hard
-# theme = Flexoki Dark
+#theme = Flexoki Dark
 #theme = Melange Dark
-# theme = Gruvbox Dark Hard
+#theme = Gruvbox Dark Hard
 
 #theme = apprentice
 # theme = duskfox
@@ -131,6 +383,7 @@ macos-titlebar-style = tabs
 #theme = Gruber Darker
 #theme = Zenburned
 #theme = seoul256-dark
+#theme = Cursor Dark
 
 
 # --- Window & UX ---
@@ -158,9 +411,9 @@ shell-integration = zsh
 #theme = posterpole
 #theme = apprentice
 # theme = 0x96f
-# theme = 12-bit Rainbow
+#theme = 12-bit Rainbow
 # theme = 3024 Day
-# theme = 3024 Night
+#theme = 3024 Night
 # theme = Aardvark Blue
 # theme = Abernathy
 # theme = Adventure
@@ -231,7 +484,7 @@ shell-integration = zsh
 # theme = Catppuccin Frappe
 # theme = Catppuccin Latte
 # theme = Catppuccin Macchiato
-# theme = Catppuccin Mocha
+#theme = Catppuccin Mocha
 # theme = CGA
 # theme = Chalk
 # theme = Chalkboard
@@ -253,14 +506,13 @@ shell-integration = zsh
 # theme = Coffee Theme
 # theme = Cool Night
 # theme = Crayon Pony Fish
-# theme = Cursor Dark
 # theme = Cursor Light
 # theme = Cutie Pro
 # theme = Cyberdyne
 # theme = Cyberpunk
 # theme = Cyberpunk Scarlet Protocol
 # theme = Dalton Dark
-# theme = Dark Modern
+#theme = Dark Modern
 # theme = Dark Pastel
 # theme = Dark+
 # theme = Darkermatrix
@@ -280,8 +532,8 @@ shell-integration = zsh
 # theme = Doom One
 # theme = Doom Peacock
 # theme = Dot Gov
-# theme = Dracula
-# theme = Dracula+
+#theme = Dracula
+#theme = Dracula+
 # theme = Duckbones
 # theme = Duotone Dark
 # theme = Duskfox
@@ -482,7 +734,7 @@ shell-integration = zsh
 # theme = Nordfox
 # theme = Novel
 # theme = novmbr
-# theme = Nvim Dark
+#theme = Nvim Dark
 # theme = Nvim Light
 # theme = Obsidian
 # theme = Ocean
@@ -555,7 +807,7 @@ shell-integration = zsh
 # theme = SeedFlip Inkwell
 # theme = SeedFlip Ivory
 # theme = SeedFlip Nightfall
-# theme = SeedFlip Phosphor
+#theme = SeedFlip Phosphor
 # theme = SeedFlip Pulse
 # theme = SeedFlip Ultraviolet
 # theme = SeedFlip Voltage
@@ -604,14 +856,14 @@ shell-integration = zsh
 # theme = Tango Half Adapted
 # theme = Tearout
 # theme = Teerb
-# theme = Terafox
+#theme = Terafox
 # theme = Terminal Basic
 # theme = Terminal Basic Dark
 # theme = Thayer Bright
 # theme = The Hulk
 # theme = Tinacious Design Dark
 # theme = Tinacious Design Light
-# theme = TokyoNight
+#theme = TokyoNight
 # theme = TokyoNight Day
 # theme = TokyoNight Moon
 # theme = TokyoNight Night
@@ -627,7 +879,7 @@ shell-integration = zsh
 # theme = Treehouse
 # theme = Twilight
 # theme = Ubuntu
-# theme = Ultra Dark
+#theme = Ultra Dark
 # theme = Ultra Violent
 # theme = Under The Sea
 # theme = Unikitty
