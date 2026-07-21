@@ -1,0 +1,25 @@
+#!/bin/sh
+# Kubernetes context for status-right, styled by blast radius.
+#
+# HUE BUDGET IS FULL -- mint, green, orange and pink all already mean something,
+# so "you are pointed at production" is not expressed with a new colour. It is
+# expressed by INVERSION: a non-prod context is mint text on the void ground,
+# and a prod context flips to void text on an orange slab. Orange already means
+# "this is where the focus is" on the pane dividers; this is the same word in a
+# different sentence.
+#
+# tmux DOES interpret #[...] emitted by a #() hook -- verified by probe with an
+# inner tmux captured from an outer pane (escape run was 38;2;8;8;8 over
+# 48;2;255;133;0, i.e. #080808 on #FF8500). Do not re-litigate that.
+
+ctx=$(kubectl config current-context 2>/dev/null)
+[ -z "$ctx" ] && ctx="no-ctx"
+
+case "$ctx" in
+  *prod*|*prd*|*production*|*live*)
+    printf '#[fg=#080808]#[bg=#FF8500]#[bold] %s #[default]' "$ctx"
+    ;;
+  *)
+    printf '#[fg=#4dffd2]%s' "$ctx"
+    ;;
+esac
