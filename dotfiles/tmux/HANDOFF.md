@@ -272,11 +272,24 @@ them alone unless explicitly told otherwise.**
 
 ## 7. Unbuilt ideas the user has seen and not yet rejected
 
-- ~~`monitor-activity` is **off**~~ -- **BUILT.** On, with `monitor-bell`; both
-  `visual-*` deliberately off. The signal is a brightness step in
-  `window-status-format`: idle labels sit at DIM, a window with unseen output is
-  promoted to BRIGHT and stays un-chipped. Three states (dim / lit / chipped) off
-  two brightness levels, no hue spent. A bell adds a glyph on top.
+- `monitor-activity` -- **TRIED, AND DELIBERATELY OFF AGAIN.** Do not re-propose
+  it without reading this. The flag means "emitted any output since you last
+  looked", clears only by visiting, and on this machine background windows run
+  agents, logs and builds -- so it is set on most windows most of the time and
+  cannot tell "finished" from "still scrolling". Every window wore a permanent
+  marker. Two attempts to soften it (promote the label to BRIGHT; shrink to a
+  one-cell dot) failed identically: the event is not rare, so no amount of
+  restraint in the drawing makes it informative. `monitor-silence` is the same
+  failure inverted -- an idle shell is silent forever. `monitor-bell` stays ON: a
+  bell is emitted deliberately by a program that decided you need to know.
+  Two further traps found while doing this:
+    - `window-status-activity-style` and `window-status-bell-style` ship as
+      `reverse`, applied ON TOP of `window-status-format`. A dim label became a
+      filled slab with knockout text -- identical to the active chip. Invisible
+      until `monitor-activity` is on, because nothing ever set the flag before.
+    - Switching monitoring off does NOT clear flags already set. Gate any marker
+      on `#{monitor-activity}` as well as the flag or stale markers persist with
+      nothing able to clear them.
 - ~~Zoom state as a glyph in the window label~~ -- **BUILT**, but **NOT with the
   glyph this section used to recommend.** `U+26F6` is *not mapped in JetBrainsMono
   Nerd Font* -- verified by reading the cmap directly (11,756 codepoints; U+26F6
