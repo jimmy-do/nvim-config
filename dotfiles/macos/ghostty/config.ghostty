@@ -94,8 +94,8 @@ background-opacity-cells = true
 #     bettercrt      : no tint. amber comes from foreground=#ecad53. scan 0.25x
 #     retro-terminal : same + teal tint (r=0.0 -> kills reds). scan 0.50x
 #     crt            : Lottes CRTS. 2px beam scanlines, no mask, no vignette.
-#custom-shader = /Users/jimmy/.config/ghostty/shaders/macbook-m4max-2056-theme-friendly-sharp.glsl
-custom-shader = /Users/jimmy/.config/ghostty/shaders/321urx-monitor-preset-theme-friendly-sharp.glsl
+custom-shader = /Users/jimmy/.config/ghostty/shaders/macbook-m4max-2056-theme-friendly-sharp.glsl
+#custom-shader = /Users/jimmy/.config/ghostty/shaders/321urx-monitor-preset-theme-friendly-sharp.glsl
 # hckr experiments prepared 2026-07-19. Do not enable until visual toggle test.
 # custom-shader = /Users/jimmy/.config/ghostty/shaders/hckr-retro-terminal-321urx-faithful-flat.glsl
 # custom-shader = /Users/jimmy/.config/ghostty/shaders/hckr-retro-terminal-macbook-m4max-2056-flat.glsl
@@ -298,7 +298,7 @@ font-family = jetbrainsmono nerd font
 
 
 #jetbrainsmono nerd font
-font-style = light
+font-style = regular
 font-size = 20
 font-thicken = false
 font-thicken-strength = 200
