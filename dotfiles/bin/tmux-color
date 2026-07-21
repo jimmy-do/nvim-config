@@ -1,0 +1,535 @@
+#!/usr/bin/env python3
+"""tmux-bar / tmux-chip / tmux-pane / tmux-pane-lines — reskin tmux from `pill`.
+
+    tmux-bar               list the colors, mark the active one
+    tmux-bar turquoise     status bar BODY: kube/git/clock, dividers, the rule,
+                           inactive windows -- everything but the two chips
+    tmux-bar -             back to the previous
+
+    tmux-chip synth_orange the two CHIPS: session name + active window
+    tmux-pane amber        pane TITLES: the pill, pane numbers, the clock
+    tmux-pane-lines cyan   pane DIVIDERS: the borders and the scrollbar
+
+Four surfaces, four commands, one palette. They are split where a surface can
+sensibly disagree with its neighbour -- a hot chip on a quiet bar, a lit pane
+title on a dim divider. Give them all the same colour and you get exactly what
+one command would have produced. Each keeps its own previous, so `tmux-chip -`
+never disturbs the bar and vice versa.
+
+NONE of them changes a shape or a width. The caps, wedges, glyphs and padding
+are fixed in the templates below; only colours are ever substituted.
+
+One color in, two out: BRIGHT is the color itself (active window, session cap,
+values, dividers, the lit pane border) and DIM is the same hue at 48% (labels,
+inactive windows, the unlit border). 48% is the ratio the hand-tuned pairs
+already in tmux.conf used -- #FF8500/#7a4000 and #03FC45/#017a22 are both it.
+
+Dividers deliberately take BRIGHT, not DIM: they are the bar's structure, and
+at DIM they disappeared into the background.
+
+Colors come from the same `pill_*` table in ~/.config/starship.toml that `pill`
+reads, so the prompt and the tmux chrome are always drawn from one palette.
+
+Each command rewrites ONLY the block between its own markers in tmux.conf. The
+option lines inside those blocks are generated from the templates below --
+hand-edits there are lost on the next switch. Edit this file instead.
+
+This file is invoked under both names; tmux-bar and tmux-pane are symlinks.
+"""
+import os, re, sys, shutil, subprocess, tempfile
+
+HOME = os.path.expanduser("~")
+STARSHIP = f"{HOME}/.config/starship.toml"
+TMUX_CONF = os.path.realpath(f"{HOME}/.tmux.conf")
+STATE_DIR = os.environ.get("XDG_STATE_HOME", f"{HOME}/.local/state")
+
+INK = "#080808"          # knockout text on a lit slab -- never recolored
+DIM_SCALE = 0.48         # BRIGHT -> DIM
+SUNK_SCALE = 0.20        # BRIGHT -> scrollbar trough
+
+# Placeholders inside the templates. NOT str.format: tmux formats are full of
+# literal { } (#{?pane_active,...}) and would blow up on every brace.
+B, D, S, I = "@@B@@", "@@D@@", "@@S@@", "@@I@@"
+
+# Chip edges, written as chr() -- a literal glyph in this source survives fine,
+# but it is invisible in most diffs/editors, and a cap silently dropped from a
+# template turns a shaped chip into a bare slab. Naming them keeps that from
+# happening quietly.
+#
+# NEVER write one of these as a literal character through a shell heredoc. BMP
+# private-use codepoints (U+E000-F8FF) are silently STRIPPED there, while
+# supplementary-plane ones (U+F0000+, the Nerd Font icons) pass through -- so
+# the damage looks random and lands on the caps only. That has cost this config
+# real time more than once. chr() everywhere, and assert after writing.
+#
+# All of these are Powerline EXTRA (U+E0A3, U+E0B4-U+E0D4) -- the add-on set
+# layered over Powerline's original four triangles (U+E0A0-U+E0B3) and bundled
+# into every Nerd Font patch. Verified present in JetBrainsMonoNerdFont-*.ttf by
+# reading the cmap directly; all 31 Extra glyphs are mapped.
+#
+# SURFACE SHAPES -- the bar wears slants, the pane pill wears rounded caps.
+# That is what keeps the two surfaces telling apart at a glance when they are
+# set to the same colour. Colour commands never touch these; edit here.
+LCAP, RCAP = chr(0xE0B6), chr(0xE0B4)                       # rounded: pane pill
+ARROW = chr(0xE0B0)                                         # wedge: retired, kept
+SLANT_L, SLANT_R = chr(0xE0BA), chr(0xE0BC)                 # solid: chips
+SLANT_THIN = chr(0xE0BB)                                    # hairline: window rail
+
+# State glyphs. These are Nerd Font icons (supplementary plane), not Powerline.
+#
+# ZOOM is U+F065, NOT U+26F6. U+26F6 is the "squared plus" the obvious search
+# result recommends -- and it is NOT MAPPED in JetBrainsMono Nerd Font. Verified
+# by reading the cmap: 11,756 codepoints, U+26F6 absent. It ships as a blank box.
+# Checked alternates that ARE present, if the read ever wants changing:
+#   U+F066 compress   U+EB81   U+F0294   U+F04DE   U+F0B2 arrows-alt
+ZOOM = chr(0xF065)    # expand -- window is zoomed
+BELL = chr(0xF0092)   # bell -- window rang
+ACT = chr(0xF111)     # solid dot -- window has unseen output
+# Last window: a RETURN arrow, not a chevron and not a dot.
+#
+# The job of this mark is not "something happened here" -- nothing happened
+# here, that is the point. It means "you were just in this window and prefix-;
+# takes you straight back". A return arrow says that; a dot says news, which is
+# what made the earlier version read as the exact opposite of its meaning.
+# Alternates that are also in the font, if this reads wrong at size:
+#   U+F053   chevron-left     U+F0450 󰑐 history
+#   U+F0721 󰜡 arrow-u-left-top U+F0141 󰅁 mdi chevron-left
+PREV = chr(0xF112)    # reply arrow -- last window, one keystroke back
+REMOTE = chr(0xF08B9)  # network -- pane is ssh/mosh/sudo, keystrokes leave here
+
+MODES = {
+    "tmux-bar": {
+        "begin": "# >>> tmux-bar-managed >>>",
+        "end": "# <<< tmux-bar-managed <<<",
+        "what": "top status bar",
+        "lines": [
+            # Row 1 is TRANSIENT: silent unless something is true. Branches, in
+            # priority order -- resize table, prefix pending, copy mode, zoomed,
+            # else the rule. Resize wins because you are IN it; prefix beats the
+            # rest because it is the most fleeting.
+            #
+            # Every branch is a slab + {SLANT_R} tail, the same shear the chips
+            # wear, so row 1 reads as part of the same bar rather than a popup.
+            #
+            # Styles are written as separate #[..] blocks on purpose. A comma
+            # inside #[..] that sits inside a #{?..} is read as the conditional's
+            # branch separator and has to be escaped #, -- splitting the blocks
+            # sidesteps that entirely, and this format is four conditionals deep.
+            # Every chip on this row wears the SAME shape as the prefix chip that
+            # already existed -- {LCAP} ... {RCAP}, rounded both ends. Row 0's
+            # window chips are sheared, row 1's mode chips are rounded, and that
+            # difference is the only thing distinguishing the two rows at a
+            # glance. All of them are bold, dots included.
+            f'set -g status-format[1] "#{{?#{{==:#{{client_key_table}},resize}},'
+            f'#[fg={B}]#[bg=default]{LCAP}#[fg={I}]#[bg={B}]#[bold] RESIZE #[fg={B}]#[bg=default]#[nobold]{RCAP}  '
+            f'#[fg={B}]#[bg=default]h/j/k/l#[fg={D}] 1 cell  ·  '
+            f'#[fg={B}]H/J/K/L#[fg={D}] 5 cells  ·  '
+            f'#[fg={B}]Esc / q / Enter#[fg={D}] done,'
+            # Prefix pending: the keys you would otherwise reach for prefix-/ to
+            # remember. Same pink as prefix_highlight -- MODE is pink everywhere.
+            # NO chip here. tmux-prefix-highlight's WAIT chip lives in
+            # status-left and always has; drawing a second one on this row put
+            # two mode chips on screen at once. Row 1 carries only the keys.
+            f'#{{?client_prefix,'
+            # Groups are separated by ` · `, not by spaces. With spaces alone the
+            # row read as one run of words -- "split - split o float" -- because
+            # the gap between a label and the NEXT key was the same size as the
+            # gap between a key and its OWN label. The dot is the same separator
+            # the resize row uses, so both cheatsheets parse the same way.
+            f'#[fg={B}]|#[fg={D}] split  ·  #[fg={B}]-#[fg={D}] split  ·  '
+            f'#[fg={B}]o#[fg={D}] float  ·  #[fg={B}]g#[fg={D}] sesh  ·  '
+            f'#[fg={B}]f#[fg={D}] find  ·  #[fg={B}]/#[fg={D}] keys  ·  '
+            f'#[fg={B}]r#[fg={D}] resize  ·  #[fg={B}]t#[fg={D}] weather,'
+            # Copy mode: position takes BRIGHT because it is the live value.
+            f'#{{?pane_in_mode,'
+            f'#[fg={B}]#{{scroll_position}}#[fg={D}] up  ·  '
+            f'#[fg={B}]n/N#[fg={D}] match  ·  #[fg={B}]v#[fg={D}] select  ·  '
+            f'#[fg={B}]y#[fg={D}] yank  ·  #[fg={B}]Esc#[fg={D}] out,'
+            # Zoomed: the one branch that is not about keys but about a lie the
+            # screen is telling you -- the pane you see is not its real size.
+            f'#{{?window_zoomed_flag,'
+            f'#[fg={B}]#[bg=default]{LCAP}#[fg={I}]#[bg={B}]#[bold] {ZOOM} ZOOMED '
+            f'#[fg={B}]#[bg=default]#[nobold]{RCAP}  '
+            f'#[fg={B}]#{{pane_current_command}}#[fg={D}] · #{{b:pane_current_path}}'
+            f'  #[fg={D}]prefix z restores,'
+            # The else-branch rule. BRIGHT, like the dividers: it is the bar's
+            # baseline, and at dim it vanished into the terminal background.
+            f'#[fg={B}]#[bg=default]#{{R:─,#{{client_width}}}}}}}}}}}}"',
+            # Right: kube context ╱ git branch ╱ clock. Labels dim, values
+            # bright, dividers bright.
+            # The kube context is rendered by a helper, not inlined, because it
+            # styles itself: a context matching prod/prd/production/live flips to
+            # void-on-orange instead of taking the bar colour. The hue budget is
+            # full, so "you are pointed at production" is said with INVERSION.
+            #
+            # tmux DOES interpret #[..] emitted by a #() hook -- verified by
+            # probe (inner tmux captured from an outer pane; the escape run came
+            # back 38;2;8;8;8 over 48;2;255;133;0). Don't re-litigate it.
+            f'set -g status-right "#[fg={D}]⎈ '
+            f"#(~/.config/nvim/dotfiles/tmux/kube-context)"
+            f'#[fg={B}] ╱  #[fg={B}]'
+            f"#(cd '#{{pane_current_path}}' 2>/dev/null && "
+            f"git rev-parse --abbrev-ref HEAD 2>/dev/null || echo -)"
+            f'#[fg={B}] ╱ #[fg={B},bold]%H:%M#[fg={D}] "',
+            # The rail between inactive windows: the hairline slant, U+E0BB.
+            # It leans the same way as the chip shear, so the whole window strip
+            # reads as one cut instead of a chip shape plus an unrelated ASCII-ish
+            # divider. The ╱ rails in status-right are left alone on purpose --
+            # those separate VALUES, not chips, and a chip edge there would imply
+            # a boundary that is not one.
+            # DIM, not bright. The active chip already ends in a solid shear, so
+            # a BRIGHT rail landing immediately after it read as a doubled edge
+            # -- two lit diagonals a space apart, which looks like a rendering
+            # fault rather than a divider. Dropping the rail to DIM puts one lit
+            # edge on screen (the chip's) and leaves the rail as the quiet thing
+            # it is. It also stops every gap in the window strip glowing.
+            f'set -g window-status-separator "#[fg={D}] {SLANT_THIN} #[default]"',
+            # Inactive windows stay DIM. Always.
+            #
+            # An earlier version promoted a window with unseen output to BRIGHT,
+            # on the theory that activity is news. It is not: on this machine
+            # background windows run agents, logs and builds, so at any moment
+            # roughly three windows in four carry the activity flag. Promoting
+            # them lit the whole strip, and a signal that is true most of the
+            # time is not a signal -- it is a wall. Worse, it drowned the one
+            # thing the strip exists to show, which is where you actually are.
+            #
+            # So brightness stays reserved for the current window's chip, and
+            # news is a ONE-CELL marker at the end of the label instead:
+            #   {BELL}  bell rang        BRIGHT -- rare, and asked for you
+            #   •       unseen output    BRIGHT -- common, so kept tiny
+            #   ·       last window      DIM
+            #   space   nothing
+            # Exactly one cell in every case, so labels never change width as
+            # flags come and go. That jitter was the other half of the mess.
+            f'set -g window-status-format "'
+            f'#[fg={D}]#[bg=default] #{{E:@window_icon}} #I:#W'
+            # The activity dot is gated on the OPTION as well as the flag.
+            # Turning monitor-activity off does not clear flags already set --
+            # tmux keeps them until you visit the window -- so without the gate,
+            # switching monitoring off leaves stale dots sitting on the bar with
+            # nothing able to clear them. #{monitor-activity} reads the live
+            # option, so the marker disappears the instant it is switched off and
+            # comes back the instant it is switched on.
+            # #{window_flags}, tmux's own. It already encodes every state that
+            # was hand-rolled here and then thrown away again: - last, # activity,
+            # ! bell, Z zoomed, M marked, * current. One conditional, one cell,
+            # semantics maintained upstream. The replacement markers invented
+            # here were strictly worse -- a dot keyed on window_last_flag read as
+            # "has news" while meaning "you just left this". Don't re-invent it.
+            # Flags as GLYPHS, one cell, priority-ordered. tmux's stock
+            # #{window_flags} run is right about the semantics and wrong about
+            # the typography -- # ! Z M read as punctuation dropped into the
+            # name. Same meanings, drawn properly:
+            #
+            #   {BELL}  bell rang          rare and deliberate, so it wins
+            #   {ACT}   unseen output      any output since you last looked
+            #   {PREV}  last window        a RETURN arrow, not a dot: nothing
+            #                              happened here, it just means prefix-;
+            #                              goes straight back
+            #   space   nothing
+            #
+            # Zoom is not in this cell -- the zoom glyph rides on the active
+            # window's chip, which is the only window that can be zoomed.
+            # Note the leading space inside EVERY branch. Without it the marker
+            # sat hard against the last letter of the window name -- "2:foo"
+            # rather than "2:foo ". Every branch is two cells (space + mark) so
+            # the labels still cannot change width as flags come and go.
+            f'#{{?window_bell_flag,#[fg={B}] {BELL},'
+            f'#{{?window_activity_flag,#[fg={B}] {ACT},'
+            f'#{{?window_last_flag,#[fg={D}] {PREV},#[fg={D}]  }}}}}}'
+            f' #[default]"',
+            # --- chrome that used to drift ---------------------------------
+            # Popup and menu frames, the floax float, and the copy-mode mark
+            # were all hand-set. They survived two palette migrations by being
+            # invisible at rest -- you only see them once a popup is open -- and
+            # were still holding a cyan that had been retired twice over. They
+            # are generated now, so they cannot be left behind again.
+            f'set -g popup-border-style "fg={D}"',
+            f'set -g menu-border-style  "fg={D}"',
+            f"set -g @floax-border-color '{D}'",
+            f'set -g copy-mode-mark-style "bg={B},fg={I}"',
+            # Published for anything that cannot take a generated line: the sesh
+            # picker builds its fzf --color from these at popup time, so it
+            # follows the palette without needing its own block.
+            f'set -g @ui-bright "{B}"',
+            f'set -g @ui-dim "{D}"',
+            f'set -g @ui-sunk "{S}"',
+        ],
+    },
+    "tmux-chip": {
+        "begin": "# >>> tmux-chip-managed >>>",
+        "end": "# <<< tmux-chip-managed <<<",
+        "what": "session + window chips",
+        "lines": [
+            # The session chip: a lit slab sheared off by {SLANT_R} (U+E0BC).
+            # It used to wear {ARROW}, the full U+E0B0 wedge, on the argument
+            # that its shape had to differ from the window chip's. It does not:
+            # the session chip is already unmistakable -- it is the only chip on
+            # the left, the only one in uppercase, and the only one that is lit
+            # unconditionally. Shape was doing no work there, so both chips now
+            # take the same shear and the bar reads as one cut.
+            f'set -g status-left "#[fg={I},bg={B},bold] '
+            f"#(echo '#{{session_name}}' | tr a-z A-Z) "
+            f'#[fg={B},bg=default,nobold]{SLANT_R}#[default] #{{prefix_highlight}} "',
+            # The active-window chip: sheared both ends, leading edge first.
+            f'set -g window-status-current-style "bg=default,fg={B},bold"',
+            f'set -g window-status-current-format "#[fg={B},bg=default]{SLANT_L}'
+            f'#[fg={I},bg={B},bold] > #[fg={I},bg={B},bold]'
+            f'#{{E:@window_icon}} #I:#W#{{?window_zoomed_flag, {ZOOM},}} '
+            f'#[fg={B},bg=default,nobold]{SLANT_R}#[default]"',
+        ],
+    },
+    "tmux-pane": {
+        "begin": "# >>> tmux-pane-managed >>>",
+        "end": "# <<< tmux-pane-managed <<<",
+        "what": "pane titles",
+        "lines": [
+            # The title pill only. The rules the pill sits on are a separate
+            # command (tmux-pane-lines) -- the two read as different surfaces,
+            # so they are allowed to be different colours.
+            # BLAST RADIUS IN THE PILL. Green -- or whatever this surface is set
+            # to -- means "you are on this box". When the pane's foreground
+            # process is ssh / mosh / sudo / doas / su the same keystrokes have
+            # different consequences, so the pill switches to #FF8500 and wears
+            # {REMOTE}. That is the one hue in this config that always means
+            # blast radius: the prod context chip uses it too.
+            #
+            # The match is anchored (^..$) against pane_current_command, so a
+            # pane merely sitting in a directory named "ssh" is not flagged, and
+            # it clears by itself the moment the remote session exits.
+            #
+            # ON/OFF still holds inside each case: active panes take the lit
+            # value, inactive ones the dim, so brightness keeps carrying focus.
+            f'set -g pane-border-format "──'
+            f'#{{?#{{m/r:^(ssh|mosh|sudo|doas|su)$,#{{pane_current_command}}}},'
+            f'#{{?pane_active,#[fg=#FF8500]{LCAP}#[fg={I}#,bg=#FF8500#,bold],'
+            f'#[fg=#7a4000]{LCAP}#[fg={I}#,bg=#7a4000]}}{REMOTE} ,'
+            f'#{{?pane_active,#[fg={B}]{LCAP}#[fg={I}#,bg={B}#,bold],'
+            f'#[fg={D}]{LCAP}#[fg={I}#,bg={D}]}}}}'
+            f'#{{pane_current_command}} · #{{b:pane_current_path}}'
+            f'#{{?#{{m/r:^(ssh|mosh|sudo|doas|su)$,#{{pane_current_command}}}},'
+            f'#{{?pane_active,#[fg=#FF8500#,bg=default#,nobold]{RCAP},'
+            f'#[fg=#7a4000#,bg=default#,nobold]{RCAP}}},'
+            f'#{{?pane_active,#[fg={B}#,bg=default#,nobold]{RCAP},'
+            f'#[fg={D}#,bg=default#,nobold]{RCAP}}}}}#[default]'
+            f'#{{?#{{mouse}},#[align=right]#[range=control|8]'
+            f'[#{{?#{{window_zoomed_flag}},u,z}}]#[norange]'
+            f'#[range=control|9][x]#[norange],}}"',
+            f'set -g display-panes-colour        "{D}"',
+            f'set -g display-panes-active-colour "{B}"',
+            f'set -g clock-mode-colour           "{B}"',
+        ],
+    },
+    "tmux-pane-lines": {
+        "begin": "# >>> tmux-pane-lines-managed >>>",
+        "end": "# <<< tmux-pane-lines-managed <<<",
+        "what": "pane dividers",
+        "lines": [
+            # UNLIT vs LIT is the whole point -- see the long note above these
+            # in tmux.conf. Same hue, brightness alone carries which pane is
+            # active, so bright/dim here is load-bearing, not decoration.
+            f'set -g pane-border-style        "fg={D}"',
+            f'set -g pane-active-border-style "fg={B}"',
+            # The scrollbar is a rule too: dim thumb on a sunk trough.
+            f'set -g pane-scrollbars-style "bg={S},fg={D},width=1,pad=0"',
+        ],
+    },
+}
+
+MODE = os.path.basename(sys.argv[0])
+if MODE not in MODES:
+    MODE = "tmux-bar"
+M = MODES[MODE]
+STATE = f"{STATE_DIR}/{MODE}-previous"
+
+
+def die(msg):
+    print(f"{MODE}: {msg}", file=sys.stderr)
+    sys.exit(1)
+
+
+def rgb(h):
+    h = h.lstrip("#")
+    return int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16)
+
+
+def scale(h, k):
+    r, g, b = rgb(h)
+    return "#%02x%02x%02x" % (int(r * k), int(g * k), int(b * k))
+
+
+def swatch(h, label="   "):
+    r, g, b = rgb(h)
+    ri, gi, bi = rgb(INK)
+    return f"\033[48;2;{r};{g};{b}m\033[38;2;{ri};{gi};{bi}m{label}\033[0m"
+
+
+def fg(h):
+    r, g, b = rgb(h)
+    return f"\033[0m\033[38;2;{r};{g};{b}m"
+
+
+def palette():
+    """Every color these commands offer, read live from starship.toml:
+
+        pill_*   shared with the prompt. `pill` owns this table.
+        tmux_*   tmux only -- too saturated to carry brand logos, so `pill`
+                 must not see them. See the note by the table itself.
+
+    Adding a line to either table is all it takes; nothing here is hardcoded.
+    """
+    if not os.path.isfile(STARSHIP):
+        die(f"no starship config at {STARSHIP}")
+    src = open(STARSHIP, encoding="utf-8").read()
+    out = []
+    for m in re.finditer(r"^(pill|tmux)_([a-z_]+)\s*=\s*'(#[0-9a-fA-F]{6})'",
+                         src, re.M):
+        out.append((re.sub(r"_lifted$|_white$", "", m.group(2)), m.group(3)))
+    if not out:
+        die("no pill_* or tmux_* colors found in starship.toml")
+    return out
+
+
+def read_conf():
+    if not os.path.isfile(TMUX_CONF):
+        die(f"no tmux config at {TMUX_CONF}")
+    return open(TMUX_CONF, encoding="utf-8").read()
+
+
+def current(src):
+    m = re.search(rf"^{re.escape(M['begin'])}.*?^# bright = (#[0-9a-fA-F]{{6}})",
+                  src, re.M | re.S)
+    return m.group(1) if m else None
+
+
+def resolve(want, names):
+    if want in names:
+        return want
+    hits = [n for n in names if n.startswith(want)] or [n for n in names if want in n]
+    if not hits:
+        return None
+    if len(hits) > 1:
+        die(f"'{want}' is ambiguous: {', '.join(hits)}")
+    return hits[0]
+
+
+def preview(bright):
+    """A bar-shaped sample: lit slab, active label, divider, dim label."""
+    dim = scale(bright, DIM_SCALE)
+    if MODE == "tmux-chip":
+        # Only the two chips are lit here; the bar around them stays neutral,
+        # which is the whole point of the command.
+        return (swatch(bright, " DEV ") + fg(bright) + SLANT_R + "  " +
+                fg(bright) + SLANT_L + swatch(bright, " > 1:nvim ") +
+                fg(bright) + SLANT_R + "\033[0m")
+    if MODE == "tmux-pane-lines":
+        # The split divider: lit half nearest the active pane, unlit rest.
+        return (fg(bright) + "─────────" + fg(dim) + "──────────" + "\033[0m")
+    if MODE == "tmux-pane":
+        return (fg(dim) + "──" + fg(bright) + LCAP +
+                swatch(bright, " zsh · repo ") + fg(bright) + RCAP +
+                fg(dim) + "────" + "\033[0m")
+    # The preview MUST wear the same shapes the templates emit, or the picker
+    # sells a bar you will not get. Chips shear, the window rail is the hairline
+    # slant, and the status-right divider stays ╱ -- it separates values, not
+    # chips. ARROW / LCAP / RCAP survive for the pane surface above.
+    return (swatch(bright, " DEV ") + fg(bright) + SLANT_R + " " +
+            fg(bright) + SLANT_L + swatch(bright, " > 1:nvim ") +
+            fg(bright) + SLANT_R +
+            fg(bright) + " " + SLANT_THIN + " " + fg(dim) + "2:logs" +
+            fg(bright) + "  ╱ " + fg(dim) + "⎈ kind" + "\033[0m")
+
+
+def build_block(bright):
+    dim, sunk = scale(bright, DIM_SCALE), scale(bright, SUNK_SCALE)
+    out = [M["begin"] + f"  DO NOT EDIT BY HAND -- rewritten by `{MODE}`",
+           f"# bright = {bright}   active / values / dividers",
+           f"# dim    = {dim}   labels / inactive / unlit"]
+    for ln in M["lines"]:
+        out.append(ln.replace(B, bright).replace(D, dim)
+                     .replace(S, sunk).replace(I, INK))
+    out.append(M["end"])
+    return "\n".join(out)
+
+
+def write(bright, label):
+    src = read_conf()
+    if M["begin"] not in src or M["end"] not in src:
+        die(f"{M['begin']} markers not found in {TMUX_CONF}; refusing to write")
+    prev = current(src)
+
+    head, rest = src.split(M["begin"], 1)
+    _, tail = rest.split(M["end"], 1)
+    new = head + build_block(bright) + tail
+
+    # Guard: repainting must never LOSE a glyph. The pill caps ( )
+    # and the session wedge () are invisible in a diff, so a template that
+    # drops one turns a rounded pill into a bare slab with nothing to notice.
+    # Gaining glyphs is allowed -- that is a template fix landing.
+    def glyphs(s):
+        return sum(1 for c in s if ord(c) > 0x2000)
+    # The guard cannot tell a regression from an intentional removal, so removing
+    # a glyph on purpose needs saying so out loud. Deliberately an env var and
+    # not a flag: it should be awkward enough that it is never reached for by
+    # habit, and it should not appear in the usage line as a normal option.
+    if glyphs(new) < glyphs(src) and not os.environ.get("TMUX_COLOR_ALLOW_GLYPH_DROP"):
+        die(f"would drop {glyphs(src) - glyphs(new)} glyph(s) "
+            "(pill caps? icons?); config left untouched. "
+            "If the template genuinely dropped one on purpose, re-run with "
+            "TMUX_COLOR_ALLOW_GLYPH_DROP=1")
+
+    fd, tmp = tempfile.mkstemp(dir=os.path.dirname(TMUX_CONF))
+    with os.fdopen(fd, "w", encoding="utf-8") as f:
+        f.write(new)
+    shutil.copymode(TMUX_CONF, tmp)
+    shutil.move(tmp, TMUX_CONF)
+
+    if prev:
+        os.makedirs(STATE_DIR, exist_ok=True)
+        open(STATE, "w").write(prev)
+
+    live = ""
+    if os.environ.get("TMUX"):
+        r = subprocess.run(["tmux", "source-file", TMUX_CONF],
+                           capture_output=True, text=True)
+        live = "  -> live" if r.returncode == 0 else f"  -> reload failed: {r.stderr.strip()}"
+    else:
+        live = "  -> next tmux start"
+    print(f"  {M['what']}: {label}  {preview(bright)}{live}")
+
+
+def main(arg):
+    src = read_conf()
+    colors = palette()
+    active = current(src)
+
+    if arg is None:
+        print()
+        for name, hexv in colors:
+            mark = " *" if active and hexv.lower() == active.lower() else "  "
+            print(f"{mark} {name:<14} {preview(hexv)}  {hexv}")
+        print()
+        print(f"  * = active    usage: {MODE} <name>    ({MODE} - to go back)")
+        print(f"  bright = the color, dim = 48% of it; dividers take bright.")
+        print()
+        return
+
+    if arg == "-":
+        if not os.path.isfile(STATE):
+            die("no previous recorded")
+        write(open(STATE).read().strip(), "previous")
+        return
+
+    if re.fullmatch(r"#[0-9a-fA-F]{6}", arg):
+        write(arg.lower(), arg.lower())
+        return
+
+    name = resolve(arg, [c[0] for c in colors])
+    if not name:
+        die(f"no color matching '{arg}'   (run `{MODE}` for the list)")
+    write(dict(colors)[name], name)
+
+
+if __name__ == "__main__":
+    main(sys.argv[1] if len(sys.argv) > 1 else None)
