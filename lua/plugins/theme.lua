@@ -772,10 +772,20 @@ local function get_highlights()
   for k, v in pairs(adjust_base_highlights) do
     merged[k] = vim.deepcopy(v)
   end
-  -- Add only groups that appeared AFTER the base was captured (plugin-injected groups)
-  -- Groups already in the base keep their cached version; current modified state is ignored
+  -- Add only groups that appeared AFTER the base was captured (plugin-injected
+  -- groups). Groups already in the base keep their cached version; current
+  -- modified state is ignored.
+  --
+  -- Newcomers are PROMOTED into the base cache the first time they are seen.
+  -- Without that, a group the pipeline itself created (lualine and snacks
+  -- rebuild theirs constantly, well after capture_base ran) was re-read from
+  -- live state on every pass -- so each :FgAdjust re-applied the HSL transform
+  -- on top of the previous result instead of recomputing from the theme color.
+  -- Two or three adjustments in, those groups were saturated garbage that no
+  -- further :FgAdjust could walk back, since the pristine value was gone.
   for k, v in pairs(read_highlights()) do
     if adjust_base_highlights[k] == nil then
+      adjust_base_highlights[k] = vim.deepcopy(v)
       merged[k] = v
     end
   end
@@ -1023,7 +1033,10 @@ local function adjust_all_highlights()
             and not (chrome_group or editor_static_fg or fg_hsl_protected or comment_fg)
             and (fg_lightness ~= 50 or fg_saturation ~= 50)
           then
-            adj[key] = adjust_fg_hsl(adj[key], fg_lightness, fg_saturation)
+            -- Re-normalize: the sepia branch above is what usually converts
+            -- adj[key] to a hex string, and it is skipped on native-text
+            -- themes, leaving the raw integer from nvim_get_hl.
+            adj[key] = adjust_fg_hsl(normalize_hex(adj[key]) or hex, fg_lightness, fg_saturation)
           end
           changed = true
         end
@@ -1557,6 +1570,18 @@ return {
       -- :ThemeAdjust to manually re-run the pipeline
       vim.api.nvim_create_user_command("ThemeAdjust", function()
         apply_theme_adjustments()
+      end, {})
+
+      -- :ThemeReload — reload the colorscheme from scratch and recapture the
+      -- pristine base. The escape hatch for a session whose cache has drifted:
+      -- reloading fires ColorScheme, which recaptures before anything adjusts.
+      vim.api.nvim_create_user_command("ThemeReload", function()
+        local name = vim.g.colors_name or ""
+        if name == "" then
+          vim.notify("ThemeReload: no colorscheme set", vim.log.levels.ERROR)
+          return
+        end
+        pcall(vim.cmd.colorscheme, name)
       end, {})
 
       -- :FgLightness / :FgSaturation / :FgAdjust — live HSL tuning
