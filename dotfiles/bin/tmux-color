@@ -108,7 +108,12 @@ BELL = chr(0xF0092)   # bell -- window rang
 # Checked and REJECTED because they are NOT mapped in JetBrainsMono Nerd Font
 # and ship as blank boxes: U+26AB medium-black-circle, U+2B24 large-black-circle.
 # Mapped alternates if this wants changing: U+F444, U+F0765, U+25CB (hollow).
-ACT = chr(0x25C9)     # fisheye -- unseen output (windows AND panes)
+# ACT is the WINDOW rail's activity dot and stays U+F111, untouched. It was
+# briefly changed to the fisheye below; the window rail is not this command's
+# to restyle, so it went back. Do not "unify" the two rails again.
+ACT = chr(0xF111)     # solid dot -- window has unseen output (WINDOW RAIL)
+# PANE_UNSEEN is the pane pill's own dot and is deliberately allowed to differ.
+PANE_UNSEEN = chr(0x25C9)  # fisheye -- pane has output you have not seen
 # 25C9 FISHEYE, a dot inside a ring, over the plain 25CF disc it replaced. Both
 # size with the font; the ring is what makes it read as an indicator LIT rather
 # than as a speck the terminal failed to clear. It also survives sitting on a
@@ -420,7 +425,7 @@ MODES = {
             f' #{{pane_index}}'
             f'#{{?pane_marked, {MARKED},}}'
             f'#{{?pane_last, {PREV},}}'
-            f'#{{?pane_unseen_changes, {ACT},}} '
+            f'#{{?pane_unseen_changes, {PANE_UNSEEN},}} '
             # --- the shear: left segment's bg on the right segment's bg ---
             f'#{{?#{{m/r:^(ssh|mosh|sudo|doas|su)$,#{{pane_current_command}}}},'
             f'#{{?pane_active,#[fg={D}#,bg=#FF8500#,nobold],'
