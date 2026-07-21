@@ -1,0 +1,164 @@
+KNOWN KEYBIND COLLISIONS AND OVERLAPS
+Last reviewed: 2026-07-18
+
+Scope
+-----
+Active Zsh, tmux, Ghostty conventions, and Karabiner mappings visible under
+~/.config. This is a practical collision register, not an exhaustive map of
+every shortcut used by every macOS application.
+
+ACTIVE / INTENTIONAL OVERRIDES
+------------------------------
+
+Ctrl-a
+  tmux: custom prefix (replaces the default Ctrl-b prefix).
+  shell: normally beginning-of-line.
+  Result: tmux consumes it first while attached. Prefix Ctrl-a sends a literal
+  Ctrl-a through to the application when beginning-of-line is needed.
+
+Ctrl-y
+  tmux: global toggle for the custom YouTube corner.
+  Zsh/readline-style editing: yank the most recently killed text.
+  Result: tmux wins while attached, so shell yank is unavailable there.
+
+Ctrl-h / Ctrl-j / Ctrl-k / Ctrl-l
+  tmux: global seamless pane navigation, with forwarding for detected
+  Vim/Neovim/fzf processes.
+  terminal apps: Backspace/help, newline, kill-line, and clear-screen are
+  common meanings.
+  Result: tmux routing wins unless its process detection forwards the key.
+  Prefix Ctrl-l is configured as the explicit clear-screen fallback.
+
+Cmd-h / Cmd-Shift-h
+  macOS: Cmd-h conventionally hides the frontmost application.
+  Karabiner in Ghostty: left Cmd-h becomes Cmd-Shift-h.
+  Ghostty/tmux: the resulting sequence selects the previous tmux window.
+  Result: Hide Ghostty is intentionally displaced by tmux navigation.
+
+Cmd-l
+  many macOS apps: focus location/search field.
+  Ghostty/tmux: custom sequence selects the next tmux window.
+  Result: app convention is intentionally displaced inside Ghostty.
+
+Right Cmd-h/j/k/l
+  Karabiner: global arrow keys left/down/up/right.
+  application shortcuts: any app-specific right-Command variants cannot see
+  these combinations.
+  Result: Karabiner wins globally.
+
+Caps Lock
+  Karabiner: tap sends Escape; hold acts as left Control.
+  Result: normal Caps Lock is unavailable by design.
+
+Ctrl-o
+  Zsh custom binding: edit-command-line in $EDITOR.
+  Emacs-style shell default: accept-line-and-down-history.
+  Result: the custom editor action wins at the Zsh prompt.
+
+Prefix h/j/k/l
+  tmux custom bindings: pane movement.
+  tmux defaults vary by table/version; these keys are explicitly owned by the
+  custom configuration.
+
+Prefix H/J/K/L
+  tmux custom repeatable bindings: resize panes by five cells.
+  Result: any prior prefix-table meanings are replaced.
+
+Prefix /
+  tmux custom binding: open the keybind palette popup.
+  Result: verified unused by the active custom prefix table before assignment.
+
+Prefix r
+  tmux custom binding: reload ~/.tmux.conf.
+  Result: any default/custom repeat-source meaning is replaced.
+
+Prefix m
+  tmux custom binding: terminal Messages popup.
+  Result: any default mark-pane meaning is replaced.
+
+Prefix | and Prefix -
+  tmux custom bindings: horizontal and vertical splits.
+  Result: custom replacements for the default Prefix-% and Prefix-" split
+  keys; those two defaults are explicitly unbound.
+
+Alt-h / Alt-l / Alt-;
+  tmux: global previous/next/last-window fallbacks.
+  terminal applications: Meta-based commands may use these keys.
+  Result: tmux wins while attached.
+
+Cmd-Left / Cmd-Right
+  macOS text fields: beginning/end of line or document.
+  Ghostty: custom Home/End sequences for the terminal line editor.
+  Result: similar intent, but Ghostty owns the exact emitted sequence.
+
+NON-CONFLICTING PALETTE ENTRY POINTS
+------------------------------------
+
+kk
+  Zsh alias for keys. It only expands as a shell command and does not affect
+  Vim Insert mode, Neovim mappings, macOS, Karabiner, or tmux key tables.
+
+Prefix /
+  Opens the palette in a self-closing tmux popup. This is the sole keyboard
+  shortcut for the palette; the retired Ctrl-x ? shell chord is unbound.
+
+PALETTE-LOCAL NAVIGATION
+------------------------
+
+Enter
+  Category screen: opens the selected section.
+  Reference screen: opens the selected row in the isolated details viewer.
+
+Tab
+  Reference search: enters result-navigation mode and opens the right-hand
+  details preview without changing the query.
+
+j / k, h / l, g / G
+  Result-navigation mode: move by row, page, or first/last match.
+  Details viewer: native Vim movement remains active, including visual mode
+  and yanks through the macOS clipboard.
+
+/
+  Result-navigation mode: return to the existing palette search query.
+  Details viewer: start a forward Vim search. In reference search mode, slash
+  remains ordinary query text.
+
+? / n / N
+  Details viewer: search backward, then repeat in the same/opposite direction.
+  These retain their normal Vim viewer meanings.
+
+q / Normal-mode Esc / Ctrl-c
+  Details viewer: close the viewer and return to the reference results.
+  Visual-mode Esc only cancels the selection; q closes from Visual mode.
+
+Esc / Alt-Left
+  Reference screen: return to the category screen.
+  Category screen: Esc closes the palette; Alt-Left has no special meaning.
+  Scope: these are fzf-local controls and do not create shell or tmux bindings.
+
+Ctrl-c
+  Exit the palette immediately from either fzf screen.
+
+All controls in this section are palette-local. They do not create or replace
+shell, tmux, Ghostty, Karabiner, or macOS-global bindings.
+
+USEFUL LAYOUT KEYS (NO COLLISION FOUND)
+----------------------------------------
+
+Prefix E
+  tmux built-in spread-pane/even-sizing action. This matches the preferred
+  workflow: normalize pane sizes, then use Prefix z to zoom one pane.
+
+Prefix z
+  tmux built-in pane zoom toggle.
+
+NOTES FOR FUTURE CHANGES
+------------------------
+
+1. Check all three layers before assigning a key: Karabiner -> Ghostty -> tmux
+   -> foreground application.
+2. Avoid new no-prefix tmux bindings unless losing the underlying terminal-app
+   key is an explicit tradeoff.
+3. Preserve kk and Prefix / as the palette entry points.
+4. Prefer commands and prefix-table bindings over global hotkeys.
+5. Re-audit this file after changing Karabiner, Ghostty, tmux, or Zsh bindings.

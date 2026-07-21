@@ -76,9 +76,15 @@ ghosttythemes() {
   fi
 }
 
-# Search YouTube, pick a result with fzf, play it with mpv
+# Search YouTube, pick a result with fzf, then play audio in the background.
 yt() {
   local query="$*"
+  if [[ -z "$query" ]]; then
+    print -n 'Search YouTube: '
+    IFS= read -r query
+  fi
+  [[ -n "$query" ]] || return 0
+
   local tab=$'\t'
   local results
   results=$(yt-dlp "ytsearch12:$query" \
@@ -95,13 +101,25 @@ yt() {
 
   local id
   id=$(printf '%s' "$pick" | cut -d"$tab" -f2)
-  nohup mpv --no-terminal --force-window=immediate \
-    --macos-app-activation-policy=accessory \
-    --ontop --ontop-level=system \
-    --autofit=800x450 --geometry=100%:100% \
-    --ytdl-format="bestvideo[height<=720]+bestaudio/best[height<=720]" \
+  nohup mpv --no-terminal --video=no --force-window=no \
+    --macos-app-activation-policy=prohibited \
+    --ytdl-format="bestaudio/best" \
     "https://www.youtube.com/watch?v=$id" >/dev/null 2>&1 &
+  local mpv_pid=$!
   disown
+  print "Playing audio in the background (PID $mpv_pid). Run yt-stop to stop it."
+}
+
+# Stop audio-only YouTube players launched by yt without touching other mpv
+# windows or the video renderer in the tmux YouTube panes.
+yt-stop() {
+  local yt_audio_pattern='^mpv --no-terminal --video=no .*https://www\.youtube\.com/watch\?v='
+
+  if pkill -TERM -f "$yt_audio_pattern"; then
+    print 'Stopped background YouTube audio.'
+  else
+    print 'No background YouTube audio is playing.'
+  fi
 }
 
 bindkey '^U' backward-kill-line
