@@ -1,7 +1,7 @@
 -- ── Tuning knobs ─────────────────────────────────────────────────────────────
 local sepia_amount = 0 -- -100..100, bipolar warm/cool. 0 = off, positive = sepia (warm), negative = anti-sepia (cool)
 local bg_base = "#0f0f0f" -- owned Neovim background base. #0f0f0f = rgb(15, 15, 15)
-local bg_transparency = 0 -- 0 = opaque, 50 = default (0.20 base + 1.00 extra for core groups), 100 = fully transparent
+local bg_transparency = 100 -- 0 = opaque, 50 = default (0.20 base + 1.00 extra for core groups), 100 = fully transparent
 local bg_brightness = 50 -- 0-100, sepia-aware bg brightness. 0 = dark, 50 = original, 100 = brighter
 local bg_contrast = 50 -- 0-100, background contrast. 50 = original, lower = flatter, higher = punchier
 local fg_lightness = 50 -- 0-100, HSL L channel. 50 = original, <50 = darker, >50 = brighter
@@ -182,12 +182,40 @@ local function rgb_to_hex(r, g, b)
   return string.format("#%02x%02x%02x", clamp_color(r), clamp_color(g), clamp_color(b))
 end
 
+-- Bring an out-of-range triple back into 0..255 WITHOUT changing its hue.
+--
+-- Per-channel clamping is the trap here: it moves each channel a different
+-- distance, so the ratios between them change and the hue swings. Scaling all
+-- three by one factor keeps the ratios exactly, so only brightness moves.
+local function fit_gamut(r, g, b)
+  local max = math.max(r, g, b)
+  if max > 255 then
+    local k = 255 / max
+    r, g, b = r * k, g * k, b * k
+  end
+  return r, g, b
+end
+
+-- The sepia matrix's rows sum to 1.351 / 1.203 / 0.937, so ANY light input
+-- overflows: pure white maps to (344, 306, 238). Clamping that per channel
+-- pinned R and G to 255 while B stayed low -- i.e. every light color came out
+-- YELLOW, and the brighter it was the more yellow it got. On dracula's
+-- #f8f8f2 text, `:Sepia 20` already produced #fffff0 and `:Sepia 100` #ffffe8.
+-- That is the whole bug: sepia looked like a yellow wash instead of a tint.
+--
+-- Fixed by fitting the matrix output back into gamut FIRST, so the full-sepia
+-- target is the real sepia tone (white -> #ffe3b0, the classic value), and only
+-- then interpolating toward it by `amount`. Negative amounts extrapolate the
+-- other way (cool) through the same fit, which is what makes -100 stay a clean
+-- blue instead of clipping.
 local function sepia_hex(color, amount)
   local r, g, b = hex_to_rgb(color)
-  local sr = r * 0.393 + g * 0.769 + b * 0.189
-  local sg = r * 0.349 + g * 0.686 + b * 0.168
-  local sb = r * 0.272 + g * 0.534 + b * 0.131
-  return rgb_to_hex(r + (sr - r) * amount, g + (sg - g) * amount, b + (sb - b) * amount)
+  local sr, sg, sb = fit_gamut(
+    r * 0.393 + g * 0.769 + b * 0.189,
+    r * 0.349 + g * 0.686 + b * 0.168,
+    r * 0.272 + g * 0.534 + b * 0.131
+  )
+  return rgb_to_hex(fit_gamut(r + (sr - r) * amount, g + (sg - g) * amount, b + (sb - b) * amount))
 end
 
 -- ── RGB ↔ HSL helpers ────────────────────────────────────────────────────────
@@ -257,10 +285,24 @@ local function adjust_fg_hsl(hex, lightness_level, saturation_level)
   end
   s = math.max(0, math.min(100, s))
   if lightness_level < 50 then
-    -- Dim via HSL lightness scaling: hue and saturation are preserved, so warm
-    -- gruvbox cream just gets darker (toward black) without losing its tint.
-    l = math.max(0, math.min(100, l * (lightness_level / 50)))
-    return rgb_to_hex(hsl_to_rgb(h, s, l))
+    -- Dim by scaling RGB toward black, NOT by scaling HSL lightness.
+    --
+    -- HSL's S is a ratio, not an amount of colour: actual chroma is
+    -- S x (1 - |2L - 1|), which PEAKS at L=50. So lowering L while holding S
+    -- fixed walks colours UP that curve and they get more saturated as they
+    -- dim -- the opposite of dimming. Two live examples, both at `:FgAdjust 30 50`:
+    --   #f8f8f2 near-white text  ->  #b3b373   a green-gold cast out of nowhere
+    --                                          (S is a meaningless 30% up there)
+    --   #f1fa8c dracula yellow   ->  #cfe00a   MORE neon than the original
+    -- Multiplying RGB by one factor keeps every channel ratio, so hue and real
+    -- chroma both survive and the colour just goes darker:
+    --   #f8f8f2 -> #959591   neutral, as it should be
+    --   #f1fa8c -> #919654   the same yellow, dimmer
+    -- This is also what the old comment CLAIMED to do; it just used the wrong
+    -- space to do it in.
+    local dim = lightness_level / 50
+    local dr, dg, db = hsl_to_rgb(h, s, l)
+    return rgb_to_hex(dr * dim, dg * dim, db * dim)
   elseif lightness_level > 50 then
     -- Brighten toward a WARM ceiling, not pure white. Lifting HSL L all the way
     -- to 100 (the old behavior) collapses chroma — every hue converges to white
@@ -745,6 +787,24 @@ local function apply_editor_static_colors()
     return
   end
   for group, colors in pairs(adjust_base_editor_static_colors) do
+    -- NEVER materialize a link here. Reading with link=false RESOLVES the link
+    -- into concrete values and writing that back turns a linked group into a
+    -- standalone one, frozen with whatever bg its target had at this instant.
+    --
+    -- That is exactly how `:BgTransparency 100` left an opaque gutter behind.
+    -- base16-dracula links LineNrAbove/LineNrBelow -> LineNr, so the main
+    -- pipeline skips them (it only walks unlinked groups, by design). This
+    -- function then resolved them, copied LineNr's pre-transparency #0f0f0f bg
+    -- onto them, and pinned it there -- and because the cached base still said
+    -- "link", the pipeline never came back to clear it. Every later transparency
+    -- change repainted LineNr and left the two relative-number groups opaque.
+    --
+    -- A still-linked group needs nothing from us: it already inherits the fg we
+    -- restored on its target, and it inherits the target's bg too. Skip it.
+    local linked_ok, linked = pcall(vim.api.nvim_get_hl, 0, { name = group })
+    if linked_ok and type(linked) == "table" and linked.link then
+      goto continue
+    end
     local ok, hl = pcall(vim.api.nvim_get_hl, 0, { name = group, link = false })
     local adj = {}
     if ok and type(hl) == "table" then
@@ -759,6 +819,7 @@ local function apply_editor_static_colors()
       adj.sp = colors.sp
     end
     pcall(vim.api.nvim_set_hl, 0, group, adj)
+    ::continue::
   end
 end
 
@@ -958,8 +1019,18 @@ local function adjust_all_highlights()
         adj.blend = 0
         changed = true
       elseif chrome_group then
-        -- chrome_darken owns the bg for these groups entirely; bg_transparency is skipped.
-        -- Exception: pill groups with "colored bg + dark fg" design keep their theme-native bg.
+        -- chrome_darken picks the TONE of this surface; bg_transparency then
+        -- decides how much of it survives. It used to be skipped here entirely,
+        -- which is why `:BgTransparency 100` left three opaque slabs behind on
+        -- an otherwise see-through editor -- the bufferline row, the statusline,
+        -- and Neo-tree's title bar (all chrome groups, all still #0f0f0f).
+        --
+        -- Chrome takes the BASE transparency only, never the `extra` boost that
+        -- Normal/LineNr/SignColumn get. That is what keeps the two knobs from
+        -- collapsing into one: at the default 50 chrome is blended just 20%, so
+        -- a deliberately dark tab bar (chrome_darken < 50) still reads as its
+        -- own surface over a transparent buffer. Push bg_transparency to 100 and
+        -- chrome dissolves with everything else.
         if adj.bg then
           if chrome_darken < 50 then
             local factor = (50 - chrome_darken) / 50
@@ -978,6 +1049,14 @@ local function adjust_all_highlights()
         end
         if chrome_darken >= 100 then
           clear_bg_attrs(adj)
+        elseif adj.bg then
+          local base_transp = resolve_transparency()
+          if base_transp >= 1 then
+            clear_bg_attrs(adj)
+          elseif base_transp > 0 then
+            adj.bg = blend_to_terminal(adj.bg, base_transp)
+            adj.blend = math.max(adj.blend or 0, math.floor(base_transp * 100 + 0.5))
+          end
         end
         changed = true
       elseif adj.bg then
@@ -1449,7 +1528,7 @@ return {
   {
     "LazyVim/LazyVim",
     opts = {
-      colorscheme = "dracula",
+      colorscheme = "base16-dracula",
     },
     init = function()
       -- :ThemeAdjust to manually re-run the pipeline
