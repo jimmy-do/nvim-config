@@ -142,6 +142,7 @@ REMOTE = chr(0xF08B9)  # network -- pane is ssh/mosh/sudo, keystrokes leave here
 # MARKED is the pane tmux holds for swap-pane/join-pane (prefix m). tmux gives
 # it no visible mark of its own beyond reversing the border, which is invisible
 # on a one-cell rule -- so the badge carries it. Only ever ONE pane server-wide.
+LAST_PANE = chr(0xF0721)  # return arrow -- the pane prefix ; goes back to
 DEAD = chr(0xF00D)     # cross -- pane's process exited (needs remain-on-exit)
 MARKED = chr(0xF08D)   # thumbtack -- this is the marked pane
 
@@ -405,23 +406,24 @@ MODES = {
             # z / prefix x do both jobs from the keyboard.
             #
             # Cap and rule shape are zoom-conditional throughout -- see ZLCAP.
-            # PROGRESSIVE DISCLOSURE -- the point of this layout.
+            # EVERY pane wears the full pill. Inactive panes were briefly
+            # collapsed to the badge alone -- it saved width and looked like a
+            # different, cheaper widget sitting next to the real one: rounded
+            # pill on the active pane, a stub on the others. One shape, always.
+            # Focus is carried by brightness, which is what it is for.
             #
-            # Four panes shouting four full titles is four things to read and
-            # no way to tell which matters, so the labels cancel each other
-            # out. Inactive panes therefore collapse to the BADGE ALONE: index
-            # + process icon, a couple of cells. Only the active pane spends
-            # width on words. The bar goes quiet and the one line you care
-            # about is the only one carrying a sentence.
+            # THE BADGE MARKS, in fixed order -- state you can act on, then
+            # navigation:
+            #   pane_marked   held for swap-pane / join-pane      {MARKED}
+            #   pane_last     the pane prefix ; goes back to      {LAST_PANE}
             #
-            # A DEAD pane expands too, regardless of focus -- see below.
-            #
-            # ONE flag in the badge: pane_marked, the pane held for swap-pane /
-            # join-pane. tmux signals it only by reversing the border, which is
-            # invisible on a one-cell rule. pane_last and pane_unseen_changes
-            # were tried and removed: pane_last is pinned to one pane per
-            # window at all times, so it is never dark, and a mark that is
-            # always on is not a signal.
+            # pane_last is gated on window_panes > 1. tmux pins it to exactly
+            # one pane per window unconditionally, so in a single-pane window
+            # it would be lit permanently and mean nothing -- that is what got
+            # the first attempt at this mark deleted. With a split it is a real
+            # answer to "where does prefix ; take me", and it takes the badge's
+            # quiet tone rather than the title's lit one, so it stays
+            # subordinate to the label.
             f'set -g pane-border-format '
             f'"#{{?pane_zoomed_flag,━━,──}}'
             # --- left cap, in the BADGE segment's colour ---
@@ -430,10 +432,10 @@ MODES = {
             # --- the badge: index + live process icon (+ marked) ---
             f'#{{?pane_active,#[fg={B}#,bg={D}#,bold],#[fg={D}#,bg={S}#,bold]}}'
             f' #{{pane_index}}#{{?#{{E:@pane_icon}}, #{{E:@pane_icon}},}}'
-            f'#{{?pane_marked, {MARKED},}} '
+            f'#{{?pane_marked, {MARKED},}}'
+            f'#{{?#{{&&:#{{pane_last}},#{{>:#{{window_panes}},1}}}}, {LAST_PANE},}} '
             # --- EXPAND? active or dead. Everything to the closing cap is
             #     inside this conditional; the else-branch just caps the badge.
-            f'#{{?#{{||:#{{pane_active}},#{{pane_dead}}}},'
             # the shear, drawn badge-bg on title-bg, so the two tones join as
             # one shape. Its right-hand colour has to know every title case.
             f'#{{?pane_dead,#[fg={D}#,bg=#FF8500#,nobold],'
@@ -487,9 +489,7 @@ MODES = {
             f'#{{?pane_dead,#[fg=#FF8500#,bg=default#,nobold],'
             f'#{{?#{{m/r:^(ssh|mosh|sudo|doas|su)$,#{{pane_current_command}}}},'
             f'#[fg=#FF8500#,bg=default#,nobold],'
-            f'#[fg={B}#,bg=default#,nobold]}}}},'
-            # --- else-branch: inactive and alive. Cap the badge and stop. ---
-            f'#[fg={S}#,bg=default#,nobold]}}'
+            f'#[fg={B}#,bg=default#,nobold]}}}}'
             f'#{{?pane_zoomed_flag,{ZRCAP},{RCAP}}}#[default]"',
             f'set -g display-panes-colour        "{D}"',
             f'set -g display-panes-active-colour "{B}"',
