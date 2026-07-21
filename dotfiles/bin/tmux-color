@@ -94,7 +94,11 @@ ZLCAP, ZRCAP = chr(0xE0B2), chr(0xE0B0)                     # solid: zoomed pill
 # Shape vocabulary, do not mix: the BAR wears slants (E0BA/E0BC), the PANE
 # PILL wears rounds (E0B6/E0B4). That is the only thing telling the two
 # surfaces apart when they are set to the same colour.
-SEP = chr(0xE0B4)                                           # round: pill divide
+# The index/label divide is a thin rule drawn IN THE INK COLOUR on the single
+# pill background -- not a background change. A mid-pill colour change needs a
+# seam, and every seam shape tried (E0BC shear, E0B4 half-round) was louder
+# than what it separated. This needs no join: it is just a character.
+INKRULE = chr(0x2502)                                       # thin rule: index | label
 ARROW = chr(0xE0B0)                                         # wedge: retired, kept
 SLANT_L, SLANT_R = chr(0xE0BA), chr(0xE0BC)                 # solid: chips
 SLANT_THIN = chr(0xE0BB)                                    # hairline: window rail
@@ -367,135 +371,91 @@ MODES = {
         "end": "# <<< tmux-pane-managed <<<",
         "what": "pane titles",
         "lines": [
-            # The title pill only. The rules the pill sits on are a separate
-            # command (tmux-pane-lines) -- the two read as different surfaces,
-            # so they are allowed to be different colours.
-            # BLAST RADIUS IN THE PILL. Green -- or whatever this surface is set
-            # to -- means "you are on this box". When the pane's foreground
-            # process is ssh / mosh / sudo / doas / su the same keystrokes have
-            # different consequences, so the pill switches to #FF8500 and wears
-            # {REMOTE}. That is the one hue in this config that always means
-            # blast radius: the prod context chip uses it too.
+            # ONE PILL, ONE BACKGROUND.
             #
-            # The match is anchored (^..$) against pane_current_command, so a
-            # pane merely sitting in a directory named "ssh" is not flagged, and
-            # it clears by itself the moment the remote session exits.
+            # The index used to sit in its own darker segment, joined to the
+            # title by a separator glyph. Every version of that join looked
+            # broken: a shear between two rounded caps read as two widgets
+            # welded together, and the matching half-round read as a bite taken
+            # out of the pill. The lesson is that a mid-pill background change
+            # needs a seam, and any seam on a shape this small is louder than
+            # the thing it separates.
             #
-            # ON/OFF still holds inside each case: active panes take the lit
-            # value, inactive ones the dim, so brightness keeps carrying focus.
-            # LAYOUT: ONE pill on the left -- index segment, then title.
+            # So the pill is one solid colour cap to cap, exactly like the
+            # window chip on the bar above it, and the index is separated from
+            # the label by a thin INK rule -- a mark drawn IN the text colour on
+            # the one background, which needs no join at all.
             #
-            # They were briefly split to opposite ends of the bar. That was
-            # wrong: the number and the name describe the SAME pane, and at
-            # opposite ends of a wide split you have to saccade across the
-            # screen to pair them up. Joined, they read as one object, and the
-            # number sits exactly where the eye already goes for the label.
+            # BLAST RADIUS. Green -- or whatever this surface is set to -- means
+            # "you are on this box". When the pane's foreground process is
+            # ssh/mosh/sudo/doas/su the same keystrokes have different
+            # consequences, so the whole pill switches to #FF8500 and wears
+            # {REMOTE}. The match is anchored ^..$ against pane_current_command,
+            # so a pane sitting in a directory named "ssh" is not flagged and it
+            # clears itself the moment the remote session exits.
             #
-            # TWO BACKGROUNDS, joined by {SEP}. The segments have to differ or
-            # this is one slab with a number loose at the front. So the index
-            # runs one step DARKER than the title on both states:
-            #     active    index bg = dim    title bg = bright
-            #     inactive  index bg = sunk   title bg = dim
-            # and the text on the index segment is the NEXT step up (bright on
-            # dim, dim on sunk) rather than ink -- ink on the sunk 20% value is
-            # unreadable, which is what forced the ladder rather than reusing
-            # the title's ink treatment.
+            # DEAD wins over everything: with remain-on-exit a crashed pane is
+            # visually identical to an idle one, so it takes the same orange and
+            # says what the exit code was.
             #
-            # {SEP} is drawn fg = LEFT segment's bg, bg = RIGHT segment's bg --
-            # that is what makes one solid shape with a shear through it rather
-            # than two chips with a gap. Both sides of that pair therefore have
-            # to know the ssh branch, which is why the separator carries the
-            # blast-radius conditional too.
+            # ON/OFF holds throughout -- active panes take the lit value,
+            # inactive the dim, so brightness alone carries focus. Shape carries
+            # zoom instead, since a zoomed pane has no neighbour to be brighter
+            # than: caps square off and the lead-in rule goes heavy.
             #
-            # The stock [z]/[x] mouse buttons are GONE. They were the only
-            # reason this format had an #[align=right] region at all, and prefix
-            # z / prefix x do both jobs from the keyboard.
-            #
-            # Cap and rule shape are zoom-conditional throughout -- see ZLCAP.
-            # EVERY pane wears the full pill. Inactive panes were briefly
-            # collapsed to the badge alone -- it saved width and looked like a
-            # different, cheaper widget sitting next to the real one: rounded
-            # pill on the active pane, a stub on the others. One shape, always.
-            # Focus is carried by brightness, which is what it is for.
-            #
-            # THE BADGE MARKS, in fixed order -- state you can act on, then
-            # navigation:
-            #   pane_marked   held for swap-pane / join-pane      {MARKED}
-            #   pane_last     the pane prefix ; goes back to      {LAST_PANE}
-            #
-            # pane_last is gated on window_panes > 1. tmux pins it to exactly
-            # one pane per window unconditionally, so in a single-pane window
-            # it would be lit permanently and mean nothing -- that is what got
-            # the first attempt at this mark deleted. With a split it is a real
-            # answer to "where does prefix ; take me", and it takes the badge's
-            # quiet tone rather than the title's lit one, so it stays
-            # subordinate to the label.
+            # Badge marks, in fixed order -- state you can act on, then
+            # navigation: {MARKED} pane_marked, {LAST_PANE} pane_last.
+            # pane_last is gated on window_panes > 1, because tmux pins it to
+            # one pane per window unconditionally and in a single-pane window
+            # there is nowhere for prefix ; to go.
             f'set -g pane-border-format '
             f'"#{{?pane_zoomed_flag,━━,──}}'
-            # --- left cap, in the BADGE segment's colour ---
-            f'#{{?pane_active,#[fg={D}],#[fg={S}]}}'
+            # --- ONE colour decision, made once, used by cap + body + cap ---
+            f'#{{?#{{||:#{{pane_dead}},'
+            f'#{{m/r:^(ssh|mosh|sudo|doas|su)$,#{{pane_current_command}}}}}},'
+            f'#{{?pane_active,#[fg=#FF8500],#[fg=#7a4000]}},'
+            f'#{{?pane_active,#[fg={B}],#[fg={D}]}}}}'
             f'#{{?pane_zoomed_flag,{ZLCAP},{LCAP}}}'
-            # --- the badge: index + live process icon (+ marked) ---
-            f'#{{?pane_active,#[fg={B}#,bg={D}#,bold],#[fg={D}#,bg={S}#,bold]}}'
-            f' #{{pane_index}}#{{?#{{E:@pane_icon}}, #{{E:@pane_icon}},}}'
+            # --- the body: ink on that colour, one background throughout ---
+            f'#{{?#{{||:#{{pane_dead}},'
+            f'#{{m/r:^(ssh|mosh|sudo|doas|su)$,#{{pane_current_command}}}}}},'
+            f'#{{?pane_active,#[fg={I}#,bg=#FF8500#,bold],#[fg={I}#,bg=#7a4000]}},'
+            f'#{{?pane_active,#[fg={I}#,bg={B}#,bold],#[fg={I}#,bg={D}]}}}}'
+            f' #{{pane_index}}'
             f'#{{?pane_marked, {MARKED},}}'
-            f'#{{?#{{&&:#{{pane_last}},#{{>:#{{window_panes}},1}}}}, {LAST_PANE},}} '
-            # --- EXPAND? active or dead. Everything to the closing cap is
-            #     inside this conditional; the else-branch just caps the badge.
-            # the shear, drawn badge-bg on title-bg, so the two tones join as
-            # one shape. Its right-hand colour has to know every title case.
-            f'#{{?pane_dead,#[fg={D}#,bg=#FF8500#,nobold],'
+            f'#{{?#{{&&:#{{pane_last}},#{{>:#{{window_panes}},1}}}}, {LAST_PANE},}}'
+            f' {INKRULE} '
+            f'#{{?#{{E:@pane_icon}},#{{E:@pane_icon}} ,}}'
+            # DEAD first, then ssh, then the ordinary label.
+            f'#{{?pane_dead,{DEAD} exit #{{pane_dead_status}},'
             f'#{{?#{{m/r:^(ssh|mosh|sudo|doas|su)$,#{{pane_current_command}}}},'
-            f'#[fg={D}#,bg=#FF8500#,nobold],#[fg={D}#,bg={B}#,nobold]}}}}{SEP}'
-            # --- the title segment ---
-            # DEAD wins over everything. With remain-on-exit a crashed pane is
-            # visually identical to an idle one; this is the rarest state here
-            # and the most valuable when it fires, so it takes the blast-radius
-            # orange and says what the exit code was.
-            f'#{{?pane_dead,#[fg={I}#,bg=#FF8500#,bold]{DEAD} exit '
-            f'#{{pane_dead_status}},'
-            # ssh/sudo: the one hue that always means blast radius here.
-            f'#{{?#{{m/r:^(ssh|mosh|sudo|doas|su)$,#{{pane_current_command}}}},'
-            f'#[fg={I}#,bg=#FF8500#,bold]{REMOTE} ,#[fg={I}#,bg={B}#,bold]}}'
-            # A NAME set with `prefix C-S-,` (select-pane -T) wins over the
-            # automatic label. tmux gives every pane the hostname as a title
-            # and offers no "unset", so "has a name" means "neither the
-            # hostname nor empty" -- which also makes clearing the prompt fall
-            # straight back to the automatic label, with no reset key needed.
-            #
-            # The automatic label is now the PATH, not "cmd · basename". The
-            # command already has an icon in the badge, so repeating its name
-            # was the least informative thing on the bar; and a bare basename
-            # made three terraform panes all read "local". This form is
-            # project/…/leaf, which is the shortest one that tells them apart:
-            #   ~/k8s-gitops-delivery-platform/infra/terraform/envs/local
-            #     -> k8s-gitops-delivery-platform/…/local
-            # Short paths pass through whole (~/.config), and anything outside
-            # $HOME keeps its absolute form.
-            # "Has a name" also has to exclude PATH-SHAPED titles. zsh sets the
-            # title to ":/Users/jimmy/..." on every prompt, which is not a name
-            # anyone chose -- taking it literally printed a raw absolute path
-            # and bypassed the elision below. ^:?/ catches both that form and a
-            # plain absolute path.
+            f'{REMOTE} ,}}'
+            # A NAME set with `prefix C-S-,` wins over the automatic label.
+            # tmux gives every pane the hostname as a title and offers no
+            # "unset", so "has a name" means "neither the hostname nor empty".
+            # Path-shaped titles count as unset too: zsh writes ":/Users/..."
+            # on every prompt, which is not a name anyone chose.
             f'#{{?#{{||:#{{==:#{{pane_title}},#{{host}}}},'
             f'#{{||:#{{==:#{{pane_title}},}},'
             f'#{{m/r:^:?/,#{{pane_title}}}}}}}},'
-            # The backrefs need FOUR backslashes here and survive as two in
-            # tmux.conf. Both parsers read \1 as an octal escape: Python turns
-            # it into \x01 inside this f-string, and tmux.conf rejects it
-            # outright with "invalid octal escape". \\1 in the file is what
-            # reaches the format engine as a real backref.
+            # project/…/leaf -- the shortest form that tells three terraform
+            # panes apart, where a bare basename made them all read "local".
+            # The backrefs need FOUR backslashes here to survive as two in
+            # tmux.conf: \1 is an octal escape to BOTH parsers -- Python turns
+            # it into \x01, and tmux.conf rejects it outright.
             f'#{{=/40:#{{s|^~/([^/]+)/.*/([^/]+)$|\\\\1/…/\\\\2|:'
             f'#{{s|^{HOMEDIR}|~|:pane_current_path}}}}}},'
-            # Claude Code and friends write a spinner frame into the title via
-            # OSC; strip one leading non-alphanumeric char and its space, or a
-            # frozen frame sits there looking like a permanently lit icon.
+            # Agents write a spinner frame into the title via OSC; strip one
+            # leading non-alphanumeric char and its space, or a frozen frame
+            # sits there looking like a permanently lit icon.
             f'#{{s/^[^0-9A-Za-z] //:pane_title}}}}}}'
-            # --- right cap, in whichever colour the title segment ended on ---
-            f'#{{?pane_dead,#[fg=#FF8500#,bg=default#,nobold],'
-            f'#{{?#{{m/r:^(ssh|mosh|sudo|doas|su)$,#{{pane_current_command}}}},'
-            f'#[fg=#FF8500#,bg=default#,nobold],'
-            f'#[fg={B}#,bg=default#,nobold]}}}}'
+            # --- right cap, same colour decision as the left ---
+            f'#{{?#{{||:#{{pane_dead}},'
+            f'#{{m/r:^(ssh|mosh|sudo|doas|su)$,#{{pane_current_command}}}}}},'
+            f'#{{?pane_active,#[fg=#FF8500#,bg=default#,nobold],'
+            f'#[fg=#7a4000#,bg=default#,nobold]}},'
+            f'#{{?pane_active,#[fg={B}#,bg=default#,nobold],'
+            f'#[fg={D}#,bg=default#,nobold]}}}}'
             f'#{{?pane_zoomed_flag,{ZRCAP},{RCAP}}}#[default]"',
             f'set -g display-panes-colour        "{D}"',
             f'set -g display-panes-active-colour "{B}"',
