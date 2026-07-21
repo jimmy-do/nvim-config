@@ -455,11 +455,11 @@ MODES = {
             f'#{{?pane_active,#[fg={I}#,bg={NB}#,bold],#[fg={I}#,bg={ND}#,bold]}}}}'
             f' #{{pane_index}}'
             f'#{{?pane_marked, {MARKED},}}'
-            # No trailing space: the field ends on the glyph, and the label's
-            # own leading space supplies the whole gap. Padding on both sides
-            # of the boundary read as a hole in the middle of the pill.
+            # ONE trailing space. Two plus the label's own leading space put
+            # padding on both sides of the boundary and read as a hole in the
+            # middle of the pill; none of it let the glyph touch the edge.
             f'#{{?pane_active, {HERE},'
-            f'#{{?#{{&&:#{{pane_last}},#{{>:#{{window_panes}},1}}}}, {LAST_PANE},}}}}'
+            f'#{{?#{{&&:#{{pane_last}},#{{>:#{{window_panes}},1}}}}, {LAST_PANE},}}}} '
             # --- back to the pill colour for the label ---
             f'#{{?#{{||:#{{pane_dead}},'
             f'#{{m/r:^(ssh|mosh|sudo|doas|su)$,#{{pane_current_command}}}}}},'
