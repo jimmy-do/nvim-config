@@ -10,10 +10,9 @@ keymap("n", "<leader>w", "<cmd>w<cr>", { desc = "Save file" })
 keymap("n", "<Esc>", "<cmd>nohlsearch<cr>", { desc = "Clear search highlight" })
 
 -- Better window navigation
-keymap("n", "<C-h>", "<C-w>h", { desc = "Move to left window" })
-keymap("n", "<C-j>", "<C-w>j", { desc = "Move to lower window" })
-keymap("n", "<C-k>", "<C-w>k", { desc = "Move to upper window" })
-keymap("n", "<C-l>", "<C-w>l", { desc = "Move to right window" })
+-- NOTE: <C-h/j/k/l> are now handled by vim-tmux-navigator
+-- (lua/plugins/tmux-navigator.lua) so they cross the nvim/tmux seam.
+-- Keeping these here would shadow the plugin, so they're intentionally removed.
 
 -- Resize splits
 keymap("n", "<C-Up>", "<cmd>resize +2<cr>", { desc = "Increase window height" })
@@ -49,6 +48,8 @@ vim.keymap.set("n", "<leader>th", "<cmd>Telescope colorscheme<CR>", { desc = "Pi
 -- Buffer navigation
 vim.keymap.set("n", "<S-l>", "<cmd>bnext<CR>", { desc = "Next buffer" })
 vim.keymap.set("n", "<S-h>", "<cmd>bprevious<CR>", { desc = "Previous buffer" })
+vim.keymap.set("n", "J", "<cmd>bprevious<CR>", { desc = "Previous buffer" })
+vim.keymap.set("n", "K", "<cmd>bnext<CR>", { desc = "Next buffer" })
 
 -- Close current buffer
 -- Safely delete current buffer without letting Neo-tree take over the screen

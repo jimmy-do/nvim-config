@@ -66,12 +66,151 @@ local function lsp_references()
   })
 end
 
+local hash_comment_extensions = {
+  bash = true,
+  conf = true,
+  dockerfile = true,
+  hcl = true,
+  makefile = true,
+  py = true,
+  rb = true,
+  sh = true,
+  tf = true,
+  tfvars = true,
+  toml = true,
+  yaml = true,
+  yml = true,
+  zsh = true,
+}
+
+local slash_comment_extensions = {
+  c = true,
+  cc = true,
+  cpp = true,
+  css = true,
+  go = true,
+  hcl = true,
+  java = true,
+  js = true,
+  jsx = true,
+  less = true,
+  rs = true,
+  scss = true,
+  tf = true,
+  ts = true,
+  tsx = true,
+}
+
+local dash_comment_extensions = {
+  lua = true,
+  sql = true,
+}
+
+local function grep_without_comment_lines(line, opts)
+  if type(line) ~= "string" then
+    return nil
+  end
+
+  local utils = require("fzf-lua.utils")
+  local plain = utils.strip_ansi_coloring(line)
+  if plain:match("^vim%.schedule callback:") or plain:match("^stack traceback:") or plain:match("^%s") then
+    return nil
+  end
+
+  local path, text = plain:match("^(.-):%d+:%d+:(.*)$")
+  if not path then
+    path, text = plain:match("^(.-):%d+:(.*)$")
+  end
+  if not path or not text then
+    return nil
+  end
+
+  local filename = vim.fs.basename(path):lower()
+  local extension = filename:match("%.([^./]+)$") or filename
+  local is_comment = (hash_comment_extensions[extension] and text:match("^%s*#"))
+    or (
+      slash_comment_extensions[extension]
+      and (text:match("^%s*//") or text:match("^%s*/%*"))
+    )
+    or (dash_comment_extensions[extension] and text:match("^%s*%-%-"))
+    or (
+      (extension == "html" or extension == "md" or extension == "xml")
+      and text:match("^%s*<!%-%-")
+    )
+    or (extension == "vim" and text:match('^%s*"'))
+
+  if is_comment then
+    return nil
+  end
+  return line
+end
+
+local function grep_picker(command, opts)
+  return LazyVim.pick(command, vim.tbl_extend("force", {
+    fn_transform = grep_without_comment_lines,
+  }, opts or {}))
+end
+
+local function grep_directory(opts)
+  opts = opts or {}
+  if opts.root == false then
+    return (vim.uv or vim.loop).cwd()
+  end
+  return LazyVim.root({ buf = vim.api.nvim_get_current_buf(), normalize = true })
+end
+
+local function grep_options(opts)
+  local options = vim.tbl_extend("force", {}, opts or {})
+  options.cwd = options.cwd or grep_directory(options)
+  options.fn_transform = grep_without_comment_lines
+  options.root = nil
+  return options
+end
+
+local function grep_direct(command, opts)
+  return function()
+    require("fzf-lua")[command](grep_options(opts))
+  end
+end
+
+local function grep_current_file_directory()
+  local directory = vim.fn.expand("%:p:h")
+  if directory == "" then
+    vim.notify("Current buffer has no file directory", vim.log.levels.WARN)
+    return
+  end
+
+  require("fzf-lua").live_grep({
+    cwd = directory,
+    fn_transform = grep_without_comment_lines,
+  })
+end
+
 return {
   {
     "ibhagwan/fzf-lua",
     opts = {
       grep = {
         previewer = grep_previewer(),
+      },
+    },
+    keys = {
+      { "<leader>sg", grep_picker("live_grep"), desc = "Grep, No Comments (Root Dir)" },
+      { "<leader>sG", grep_picker("live_grep", { root = false }), desc = "Grep, No Comments (cwd)" },
+      { "<leader>sF", grep_current_file_directory, desc = "Grep current file directory" },
+      { "<leader>sw", grep_direct("grep_cword"), desc = "Word, No Comments (Root Dir)" },
+      { "<leader>sW", grep_direct("grep_cword", { root = false }), desc = "Word, No Comments (cwd)" },
+      {
+        "<leader>sw",
+        grep_direct("grep_visual"),
+        mode = "x",
+        desc = "Selection, No Comments (Root Dir)",
+      },
+      {
+        "<leader>sW",
+        grep_direct("grep_visual", { root = false }),
+        mode = "x",
+        desc = "Selection, No Comments (cwd)",
       },
     },
   },
