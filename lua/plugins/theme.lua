@@ -834,6 +834,15 @@ local active_indent_scope_groups = {
 }
 
 local function apply_active_indent_scope_highlights()
+  -- On base16 themes, use the theme's own cyan (base0C, exposed by base16-nvim
+  -- as g:base16_gui0C) instead of the hardcoded neon ACTIVE_INDENT_SCOPE. The
+  -- hardcoded value has no relation to any loaded palette, so next to
+  -- theme-native accents (e.g. gitsigns' green, which IS in-palette) it read as
+  -- an arbitrary clash rather than a coordinated color.
+  local scope_color = ACTIVE_INDENT_SCOPE
+  if is_base16_theme() and type(vim.g.base16_gui0C) == "string" and vim.g.base16_gui0C ~= "" then
+    scope_color = vim.g.base16_gui0C
+  end
   for _, group in ipairs(active_indent_scope_groups) do
     local ok, hl = pcall(vim.api.nvim_get_hl, 0, { name = group, link = false })
     local adj = {}
@@ -842,8 +851,8 @@ local function apply_active_indent_scope_highlights()
         adj[k] = v
       end
     end
-    adj.fg = ACTIVE_INDENT_SCOPE
-    adj.sp = ACTIVE_INDENT_SCOPE
+    adj.fg = scope_color
+    adj.sp = scope_color
     pcall(vim.api.nvim_set_hl, 0, group, adj)
   end
 end
