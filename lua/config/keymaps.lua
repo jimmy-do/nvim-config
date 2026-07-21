@@ -98,3 +98,31 @@ vim.keymap.set("t", "<Esc><Esc>", [[<C-\><C-n>]], {
 vim.keymap.set("n", "<leader>nr", "<cmd>Neotree reveal left<CR>", {
   desc = "Reveal current file in Neo-tree",
 })
+
+-- ── u / d ⇄ C-u / C-d ────────────────────────────────────────────────────────
+-- Bare keys SCROLL, Ctrl keys do the editing. Deliberate: scrolling is the thing
+-- you do constantly and it should cost no modifier; undo and delete are the
+-- occasional, destructive ones and they can pay a chord.
+--
+-- This matches the same swap in tmux copy mode (tmux.conf), so u/d scroll a half
+-- page in both places.
+--
+-- The SCROLL half (u / d) is NOT here -- it lives in lua/plugins/scroll.lua,
+-- bound to that file's instant_page_scroll wrapper so a page jump is not
+-- animated by snacks. Only the EDITING half is below. Change one, check both.
+--
+--   n  u        -> page up      (scroll.lua)     n  <C-u> -> u   undo
+--   n  d        -> page down    (scroll.lua)     n  <C-d> -> d   delete operator
+--   x  u / d    -> page up/down (scroll.lua)     x  <C-u> -> u   lowercase selection
+--                                                x  <C-d> -> d   delete selection
+--   o  <C-d>    -> d    so <C-d><C-d> still resolves to linewise "dd"
+--
+-- Counts survive on both sides: 5u scrolls what 5<C-u> did, 3<C-d>w deletes what
+-- 3dw did.
+vim.keymap.set("n", "<C-u>", "u", { desc = "Undo" })
+vim.keymap.set("x", "<C-u>", "u", { desc = "Lowercase selection" })
+
+-- <C-d> must exist in n, x AND o: normal starts the operator, visual deletes the
+-- selection, and operator-pending is what makes the doubled form (<C-d><C-d>)
+-- resolve to linewise dd.
+vim.keymap.set({ "n", "x", "o" }, "<C-d>", "d", { desc = "Delete (operator)" })

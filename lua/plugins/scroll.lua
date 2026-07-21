@@ -101,8 +101,16 @@ return {
 
       vim.keymap.set({ "n", "v" }, "<ScrollWheelUp>", smooth_wheel(-1), { desc = "Smooth scroll up" })
       vim.keymap.set({ "n", "v" }, "<ScrollWheelDown>", smooth_wheel(1), { desc = "Smooth scroll down" })
-      vim.keymap.set("n", "<C-u>", instant_page_scroll("<C-u>"), { desc = "Page up" })
-      vim.keymap.set("n", "<C-d>", instant_page_scroll("<C-d>"), { desc = "Page down" })
+      -- Page scroll lives on the BARE keys, not the Ctrl ones: u / d scroll,
+      -- while <C-u> / <C-d> do undo and delete. The editing half of that swap is
+      -- in lua/config/keymaps.lua -- both halves must move together.
+      --
+      -- It has to be done HERE and not there, because the whole point of
+      -- instant_page_scroll is suppressing snacks' animation for a page jump. A
+      -- plain `u -> <C-u>` remap in keymaps.lua would reach the builtin and skip
+      -- this wrapper, and the page jump would animate again.
+      vim.keymap.set({ "n", "x" }, "u", instant_page_scroll("<C-u>"), { desc = "Page up" })
+      vim.keymap.set({ "n", "x" }, "d", instant_page_scroll("<C-d>"), { desc = "Page down" })
     end,
   },
 }
