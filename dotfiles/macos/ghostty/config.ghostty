@@ -1,76 +1,23 @@
-background-opacity = .95
+background-opacity = .8
 background-blur = 0
 background-opacity-cells = false
-#jetbrainsmono presets
-font-style = light
-font-size = 16
-font-thicken = true
-font-thicken-strength = 0
-adjust-cell-height = -4%
-adjust-cell-width = 2%
 
 #oled
 #theme = akari-night
 #macbook
-#theme = "Gruvbox Dark"
-#theme = Tomorrow Night Eighties
-#theme = Gruvbox Material Dark
-# theme = Material
-# theme = Material Dark
-# theme = Material Darker
-# theme = Material Design Colors
-# theme = Material Ocean
-# theme = JetBrains Darcula
-# theme = Nightfox
-# theme = Nordfox
-# theme = TokyoNight
-# theme = TokyoNight Day
-# theme = TokyoNight Moon
-# theme = TokyoNight Night
-# theme = TokyoNight Storm
-# theme = Tomorrow
+theme = Gruvbox Dark
 
-# theme = Tomorrow Night Blue
-# theme = Tomorrow Night Bright
-# theme = Tomorrow Night Burns
-# Custom Base16 Gruvbox Material Dark-ish
-# theme = Spacegray Eighties
-# theme = Spacegray Eighties Dull
 
-background = 282828
-foreground = d4be98
-selection-background = 3c3836
-selection-foreground = d4be98
 
-palette = 0=282828
-palette = 1=ea6962
-palette = 2=a9b665
-palette = 3=d8a657
-palette = 4=7daea3
-palette = 5=d3869b
-palette = 6=89b482
-palette = 7=d4be98
-palette = 8=928374
-palette = 9=ea6962
-palette = 10=a9b665
-palette = 11=d8a657
-palette = 12=7daea3
-palette = 13=d3869b
-palette = 14=89b482
-palette = 15=ddc7a1
+# Kanagawa-dragon/wave is highly favored for reducing eye strain during long #on-call shifts.
+# Ghostty can auto-switch based on your OS system theme.
 
 keybind = all:super+equal=increase_font_size:0.5
 keybind = all:super+minus=decrease_font_size:0.5
 keybind = all:super+zero=reset_font_size
-
-# tmux window navigation
 keybind = cmd+shift+h=csi:5;30012~
-keybind = cmd+j=csi:5;30012~
-keybind = cmd+k=csi:5;30013~
 keybind = cmd+l=csi:5;30013~
-keybind = cmd+semicolon=csi:5;30014~
-
-# alt fallback
+keybind = cmd+;=csi:5;30014~
 keybind = alt+h=esc:h
 keybind = alt+l=esc:l
 
@@ -79,9 +26,8 @@ keybind = alt+l=esc:l
 keybind = cmd+left=csi:H
 keybind = cmd+right=csi:F
 
-macos-option-as-alt = left
 
-# Use a Nerd Font. Critical for displaying Git branch icons, Kubernetes
+# Use a Nerd Font. Critical for displaying Git branch icons, Kubernetes 
 # wheel icons, and Terraform states in your prompt.
 
 #font-family =  terminess nerd font
@@ -102,6 +48,15 @@ font-family = jetbrainsmono nerd font
 #font-thicken-strength = 0
 
 
+#jetbrainsmono nerd font
+font-style = light
+font-size = 16
+font-thicken = true
+font-thicken-strength = 255
+adjust-cell-height = -10%
+adjust-cell-width = 0%
+
+
 #preset for terminess
 #font-style = bold
 #font-size = 20
@@ -112,7 +67,7 @@ font-family = jetbrainsmono nerd font
 
 cursor-style = block
 cursor-style-blink = true
-cursor-color = d4be98
+cursor-color = #C6BA96
 shell-integration-features = no-cursor
 
 window-decoration = auto
@@ -144,7 +99,19 @@ macos-titlebar-style = tabs
 # font-family = DejaVuSansM Nerd Font Mono
 # font-family = SauceCodePro Nerd Font Mono
 
+#preset for jetbrainsmono
+#font-style = light
+#font-size = 20
+#font-thicken = true
+#font-thicken-strength = 255
+#adjust-cell-height = 0%
+#adjust-cell-width = 0%
 
+
+
+
+#theme = Tomorrow Night Eighties
+#theme = Gruvbox Material Dark
 #theme = Kanagawa Dragon
 # theme = Tomorrow Night
 # theme = One Double Dark
@@ -171,6 +138,13 @@ macos-titlebar-style = tabs
 window-padding-x = 10
 window-padding-y = 10
 window-padding-balance = true
+
+
+
+background-opacity-cells = true
+
+# macOS specific: Integrates tabs natively into the titlebar to #save vertical space
+macos-option-as-alt = left
 
 # --- Behavior & Performance ---
 mouse-hide-while-typing = true
@@ -414,6 +388,7 @@ shell-integration = zsh
 # theme = Jackie Brown
 # theme = Japanesque
 # theme = Jellybeans
+# theme = JetBrains Darcula
 # theme = JetCalm Light
 # theme = Jubi
 # theme = Kanagawa Lotus
@@ -447,7 +422,11 @@ shell-integration = zsh
 # theme = Lovelace
 # theme = Man Page
 # theme = Mariana
-
+# theme = Material
+# theme = Material Dark
+# theme = Material Darker
+# theme = Material Design Colors
+# theme = Material Ocean
 # theme = Mathias
 # theme = Matrix
 # theme = Matte Black
@@ -492,6 +471,7 @@ shell-integration = zsh
 # theme = Night Lion V2
 # theme = Night Owl
 # theme = Night Owlish Light
+# theme = Nightfox
 # theme = Niji
 # theme = No Clown Fiesta
 # theme = No Clown Fiesta Light
@@ -603,7 +583,8 @@ shell-integration = zsh
 # theme = Spacedust
 # theme = Spacegray
 # theme = Spacegray Bright
-
+# theme = Spacegray Eighties
+# theme = Spacegray Eighties Dull
 # theme = Spiderman
 # theme = Spring
 # theme = Square
@@ -630,7 +611,16 @@ shell-integration = zsh
 # theme = The Hulk
 # theme = Tinacious Design Dark
 # theme = Tinacious Design Light
+# theme = TokyoNight
+# theme = TokyoNight Day
+# theme = TokyoNight Moon
+# theme = TokyoNight Night
+# theme = TokyoNight Storm
+# theme = Tomorrow
 
+# theme = Tomorrow Night Blue
+# theme = Tomorrow Night Bright
+# theme = Tomorrow Night Burns
 # theme = Toy Chest
 # theme = traffic
 # theme = Trapped in Amber
