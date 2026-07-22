@@ -83,7 +83,7 @@ NB, ND = "@@NB@@", "@@ND@@"
 # That is what keeps the two surfaces telling apart at a glance when they are
 # set to the same colour. Colour commands never touch these; edit here.
 LCAP, RCAP = chr(0xE0B6), chr(0xE0B4)                       # rounded: pane pill
-PANE_SEP = chr(0xE0B0)  # solid wedge: number-field slab tapers into the label
+PANE_SEP = chr(0xE0B4)  # rounded right cap: number field closes as its own capsule
 # ZOOMED caps. A zoomed pane is the ONLY pane on screen, so the surface has to
 # say so with no neighbour to compare against -- the lit/unlit brightness step
 # that flags the active pane cannot work when nothing else is visible. Shape
