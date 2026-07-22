@@ -738,14 +738,31 @@ def main(arg):
         print()
         return
 
+    if arg == "current":
+        # The active hex, straight from the managed block's `bright =` marker.
+        # Prints the palette name too when the hex matches a pocketed colour.
+        if not active:
+            die("no managed block yet -- run the command once to set a colour")
+        name = next((n for n, h in colors if h.lower() == active.lower()), None)
+        print(f"{active}  {name}" if name else active)
+        return
+
+    if arg == "__complete":
+        # Candidate first-args, one per line, for shell completion. Reads names
+        # live from starship.toml so a new pill_*/tmux_* line needs no extra step.
+        print("\n".join(["-", "current"] + [c[0] for c in colors]))
+        return
+
     if arg == "-":
         if not os.path.isfile(STATE):
             die("no previous recorded")
         write(open(STATE).read().strip(), "previous")
         return
 
-    if re.fullmatch(r"#[0-9a-fA-F]{6}", arg):
-        write(arg.lower(), arg.lower())
+    m = re.fullmatch(r"#?([0-9a-fA-F]{6})", arg)
+    if m:
+        hexv = "#" + m.group(1).lower()
+        write(hexv, hexv)
         return
 
     name = resolve(arg, [c[0] for c in colors])

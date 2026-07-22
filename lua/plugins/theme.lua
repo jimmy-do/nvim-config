@@ -588,9 +588,16 @@ local ONEDARK_DARK_ORIGINAL_PURPLE = "#d55fde"
 local ONEDARK_DARK_SOFT_PURPLE = "#5194CB"
 
 -- ── Global period / bracket overlays (all filetypes) ─────────────────────────
+-- Storm opts into the full period overlay with its own color, so periods are
+-- painted everywhere -- including inside strings and unquoted values, which no
+-- treesitter capture can reach. Comments and URLs are excluded by the resets
+-- already built into this system.
+local STORM_PERIOD = "#ff8c1a"
+
 local function apply_global_punct_highlights()
   local theme = vim.g.colors_name or ""
-  local full_punct_overlay = theme:match("^kanagawa") or theme:match("^gruvbox")
+  local storm = theme == "base16-tokyo-night-terminal-storm"
+  local full_punct_overlay = theme:match("^kanagawa") or theme:match("^gruvbox") or storm
   local bracket_overlay = full_punct_overlay or theme == "retrobox"
   if not bracket_overlay then
     pcall(vim.api.nvim_set_hl, 0, "GlobalPunctBlue", {})
@@ -610,7 +617,7 @@ local function apply_global_punct_highlights()
       url_fg = color_to_hex(c_hl.fg)
     end
   end
-  vim.api.nvim_set_hl(0, "GlobalPunctBlue", { fg = PUNCT_BLUE })
+  vim.api.nvim_set_hl(0, "GlobalPunctBlue", { fg = storm and STORM_PERIOD or PUNCT_BLUE })
   -- {{ }} / [[ ]] brackets ride on their own group so Dragon can recolor them
   -- (see apply_kanagawa_dragon_fixed_fg) without touching periods, which stay blue.
   -- Retrobox opts into only these double-bracket overlays with a muted tan that
@@ -640,7 +647,9 @@ end
 
 local function apply_global_punct_matches()
   local theme = vim.g.colors_name or ""
-  local full_punct_overlay = theme:match("^kanagawa") or theme:match("^gruvbox")
+  local full_punct_overlay = theme:match("^kanagawa")
+    or theme:match("^gruvbox")
+    or theme == "base16-tokyo-night-terminal-storm"
   local bracket_overlay = full_punct_overlay or theme == "retrobox"
   if not bracket_overlay then
     clear_global_punct_matches()
@@ -733,8 +742,36 @@ local function read_highlights()
   return ok and type(all) == "table" and all or {}
 end
 
+-- Per-theme baseline colors: applied ONCE, immediately before the base capture,
+-- so they are read in as if the colorscheme itself had shipped them. Everything
+-- downstream -- :FgAdjust, :Sepia, the bg knobs -- then transforms them like any
+-- other theme color. This is deliberately NOT a re-apply-on-every-pass override:
+-- that would pin the colors and make the knobs appear dead on these groups.
+local theme_baseline_colors = {
+  ["base16-tokyo-night-terminal-storm"] = {
+    ["@property.yaml"] = "#717FAB", -- fields (keys)
+    ["@punctuation.delimiter.yaml"] = "#ff8c1a", -- colons, commas
+    ["@punctuation.special.yaml"] = "#ff8c1a", -- list dashes, anchors
+    ["@punctuation.bracket"] = "#f7ff00", -- [] {}
+    ["@string.yaml"] = "#00ffff", -- values
+    ["@comment"] = "#243745",
+    ["Comment"] = "#243745",
+  },
+}
+
+local function apply_theme_baseline_colors()
+  local baseline = theme_baseline_colors[vim.g.colors_name or ""]
+  if not baseline then
+    return
+  end
+  for group, fg in pairs(baseline) do
+    pcall(vim.api.nvim_set_hl, 0, group, { fg = fg })
+  end
+end
+
 local function capture_base()
   adjust_base_name = vim.g.colors_name or ""
+  apply_theme_baseline_colors()
   adjust_base_highlights = read_highlights()
   adjust_base_editor_static_colors = {}
   adjust_base_retrobox_string_fg = nil
@@ -852,6 +889,10 @@ local function apply_active_indent_scope_highlights()
   local scope_color = ACTIVE_INDENT_SCOPE
   if is_base16_theme() and type(vim.g.base16_gui0C) == "string" and vim.g.base16_gui0C ~= "" then
     scope_color = vim.g.base16_gui0C
+  end
+  -- Storm wants the maxed cyan rather than its palette's softer base0C.
+  if (vim.g.colors_name or "") == "base16-tokyo-night-terminal-storm" then
+    scope_color = "#00ffff"
   end
   for _, group in ipairs(active_indent_scope_groups) do
     local ok, hl = pcall(vim.api.nvim_get_hl, 0, { name = group, link = false })
@@ -1444,6 +1485,17 @@ local function apply_theme_adjustments(refresh_base)
     apply_retrobox_string_lightness()
     apply_retrobox_variable_white()
     apply_editor_interaction_highlights()
+    -- Storm: a URL value (server: https://kubernetes.default.svc) is still a
+    -- YAML value, so the URL reset must match the string/value color. Copy it
+    -- HERE, after adjust_all_highlights has already run the fg pipeline on
+    -- @string.yaml -- copying earlier caught the darker pre-adjust baseline.
+    -- Plain fg copy, no link.
+    if (vim.g.colors_name or "") == "base16-tokyo-night-terminal-storm" then
+      local ok, hl = pcall(vim.api.nvim_get_hl, 0, { name = "@string.yaml", link = false })
+      if ok and hl.fg then
+        pcall(vim.api.nvim_set_hl, 0, "GlobalUrlReset", { fg = string.format("#%06x", hl.fg) })
+      end
+    end
   end
   run_adjust_all_highlights()
   vim.schedule(run_adjust_all_highlights)
@@ -1451,13 +1503,6 @@ local function apply_theme_adjustments(refresh_base)
   vim.defer_fn(run_adjust_all_highlights, 200)
   vim.defer_fn(apply_fzf_opaque_highlights, 250)
   vim.defer_fn(apply_habamax_overrides, 250)
-  -- Announce that the pipeline has settled, so files loaded after this one can
-  -- re-assert their own overrides. Without it, anything this pipeline repaints
-  -- (Comment, for one) silently reverts to the captured theme base whenever a
-  -- knob command like :FgAdjust runs, with no ColorScheme event to hook.
-  vim.defer_fn(function()
-    pcall(vim.api.nvim_exec_autocmds, "User", { pattern = "ThemeAdjusted" })
-  end, 400)
   -- Must run after apply_habamax_overrides (250) -- that one pins WinSeparator
   -- to black, and the cyan divider has to win.
   apply_win_divider_highlight()

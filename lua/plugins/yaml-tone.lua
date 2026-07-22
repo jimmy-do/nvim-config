@@ -1,39 +1,87 @@
--- YAML / comment color overrides for base16-tokyo-night-terminal-storm.
--- Edit the hexes below, then: :w | :source % | :YamlTone
+-- SCRATCH / TESTING ONLY.
 --
--- Kept out of theme.lua on purpose: this file is imported after it, so these
--- values land on top of that file's highlight pipeline instead of under it.
+-- Nothing here fires on its own: no autocmds, no ThemeAdjusted listener, no
+-- re-apply loop -- until you run :YamlTone once. Edit the hexes below, save,
+-- then run :YamlTone to see them. That is the whole edit/see cycle.
+--
+-- When a set of values is good, tell me and I copy them into
+-- theme_baseline_colors["base16-tokyo-night-terminal-storm"] in theme.lua,
+-- which is what makes them the theme's real defaults (and keeps :FgAdjust,
+-- :Sepia and the bg knobs working on them). Running :YamlTone stamps over
+-- those knobs until the next :ThemeReload -- that is expected for testing.
+
+-- Which theme to test the palette on. Type any colorscheme you currently have
+-- installed here (`:colorscheme <Tab>` lists them). On :YamlTone this theme is
+-- loaded FIRST, then the palette below is stamped on top of it -- so you can
+-- see these exact colors across whatever theme you want to test against.
+-- Leave it as "" (empty) to just stamp onto the theme you already have loaded.
+local target_theme = ""
+
 local colors = {
-  ["@property.yaml"] = "#717FAB", -- fields (keys)
-  ["@punctuation.delimiter.yaml"] = "#ff8c1a", -- colons, commas, periods
-  ["@punctuation.special.yaml"] = "#ff8c1a", -- list dashes, anchors
-  ["@punctuation.bracket"] = "#f7ff00", -- [] {}
-  ["@string.yaml"] = "#00ffff", -- values
-  ["@string.yaml.value.yaml"] = "#00ffff", -- unquoted values
+  -- keys / fields
+  ["@property.yaml"] = "#00ffff", -- fields (keys)
+
+  -- punctuation
+  ["@punctuation.delimiter.yaml"] = "#ff8c1a", -- colons, commas
+  ["@punctuation.special.yaml"] = "#ff9c1a", -- list dashes, anchors, aliases
+  ["@punctuation.bracket"] = "#ff8c1a", -- [] {}
+  ["@punctuation.delimiter"] = "#00ffff", -- periods/dots and other delimiters
+
+  -- string values
+  ["@string.yaml"] = "#95ff00", -- quoted + plain string values
+  ["@string.escape.yaml"] = "#00ffff", -- \n \t etc. inside quoted strings
+
+  -- NON-string scalar values (numbers, bools, null, dates, timestamps).
+  -- Many YAML parsers tag these as plain scalars, so several groups are listed
+  -- to cover whichever one your treesitter build actually emits.
+  ["@number.yaml"] = "#ff9c1a", -- 42, 3.14
+  ["@number"] = "#ff9c1a",
+  ["@float.yaml"] = "#ff9c1a", -- 3.14 (some grammars split floats out)
+  ["@boolean.yaml"] = "#ff9c1a", -- true / false / yes / no
+  ["@boolean"] = "#ff9c1a",
+  ["@constant.builtin.yaml"] = "#ff9c1a", -- null / ~
+  ["@constant.yaml"] = "#ff9c1a",
+  ["@type.yaml"] = "#ff9c1a", -- tags like !!str, !Ref
+
+  -- comments
+  ["@comment"] = "#243745",
+  ["Comment"] = "#243745",
 }
 
--- Comments are set separately so italic is preserved: nvim_set_hl replaces the
--- whole definition, so passing fg alone would drop base16's italic.
-local comment_fg = "#243745"
-
--- Every period in the buffer, in every filetype -- inside strings, unquoted
--- values, code, anywhere. This is a matchadd() overlay rather than a highlight
--- group because no treesitter capture covers "a period inside a string": the
--- string is one node, and a window match paints over it regardless.
+-- Not a highlight group -- the indent scope ("guidelines") line is drawn by its
+-- own plugin, so it is set separately below.
 --
--- Independent of @punctuation.delimiter.yaml above: that one colors YAML's
--- structural colons/commas, this one colors periods everywhere. Set them to
--- the same value if you ever want them to agree.
---
--- Set to nil to turn the overlay off entirely.
-local period_fg = "#ff8c1a"
+-- Put ANY hex here. It is force-boosted to its maximum-contrast / maximum-
+-- brightness form before it is applied (see max_contrast below), so the guide
+-- line is always the brightest possible version of whatever hue you type.
+local scope_color = "#00ffff"
 
--- The indent guide that lights up on the block under the cursor. theme.lua
--- paints these from the palette cyan (base0C) on every ColorScheme, so this has
--- to run after it to win — hence the deferred apply below. sp is set alongside
--- fg because snacks draws the scope line with an underline-family attribute in
--- some configs, and a stale sp shows through.
-local scope_fg = "#00ffff"
+-- Take a #rrggbb hex and return its maximum-brightness version: scale every
+-- channel up until the brightest one hits 255, preserving the hue and relative
+-- channel ratios. This is what makes the guide immune to :Sepia / :FgAdjust /
+-- dimming -- those effects only ever *darken or tint* a color, and re-running
+-- :YamlTone (or the autocmd below) re-stamps the maxed value on top, so the
+-- guide can never end up dimmer than full brightness for its hue.
+--   #008080 -> #00ffff   (teal   -> full cyan)
+--   #806000 -> #ffbf00   (dim amber -> full amber)
+--   #000000 -> #ffffff   (black has no hue, so max contrast = white)
+local function max_contrast(hex)
+  local r, g, b = hex:match("^#(%x%x)(%x%x)(%x%x)$")
+  if not r then
+    return hex -- not a 6-digit hex; leave it for the pcall to surface
+  end
+  r, g, b = tonumber(r, 16), tonumber(g, 16), tonumber(b, 16)
+  local m = math.max(r, g, b)
+  if m == 0 then
+    return "#ffffff" -- pure black carries no hue; max contrast is white
+  end
+  local scale = 255 / m
+  local function up(c)
+    return math.min(255, math.floor(c * scale + 0.5))
+  end
+  return string.format("#%02x%02x%02x", up(r), up(g), up(b))
+end
+
 local scope_groups = {
   "SnacksIndentScope",
   "SnacksIndentChunk",
@@ -44,113 +92,51 @@ local scope_groups = {
   "BlinkIndentScope",
 }
 
--- Single gate for the whole file. Every entry point checks this, so nothing
--- here touches any colorscheme but storm.
-local THEME = "base16-tokyo-night-terminal-storm"
-
-local function active()
-  return (vim.g.colors_name or "") == THEME
-end
-
-local function apply()
-  if not active() then
-    return
-  end
-  for group, fg in pairs(colors) do
-    pcall(vim.api.nvim_set_hl, 0, group, { fg = fg })
-  end
+local function stamp_scope_guides()
+  local maxed = max_contrast(scope_color)
   for _, group in ipairs(scope_groups) do
-    pcall(vim.api.nvim_set_hl, 0, group, { fg = scope_fg, sp = scope_fg })
+    -- nocombine so no blend/dim pass can average the guide toward the bg.
+    pcall(vim.api.nvim_set_hl, 0, group, { fg = maxed, sp = maxed, nocombine = true })
   end
-  pcall(vim.api.nvim_set_hl, 0, "@comment", { fg = comment_fg, italic = true })
-  pcall(vim.api.nvim_set_hl, 0, "Comment", { fg = comment_fg, italic = true })
+  return maxed
 end
 
--- ── Global period overlay ───────────────────────────────────────────────────
--- Priorities are the same scale theme.lua uses (treesitter 100, LSP semantic
--- tokens 125):
---   95  every period
---   96  URLs repaint back to normal, so https://... keeps one color
---   200 comment leader → EOL repaints back to Comment, so periods inside a
---       comment are excluded, as asked.
-local function clear_period_matches()
-  if type(vim.w.yaml_tone_period_ids) == "table" then
-    for _, id in ipairs(vim.w.yaml_tone_period_ids) do
-      pcall(vim.fn.matchdelete, id)
-    end
-  end
-  vim.w.yaml_tone_period_ids = nil
-end
-
-local function apply_period_matches()
-  -- Cleared unconditionally, then re-added only on storm: switching away from
-  -- storm must take the overlay's existing window matches down with it.
-  clear_period_matches()
-  if not period_fg or not active() then
-    return
-  end
-  -- Linked, not copied: resolves to Comment's live color, so the exclusion
-  -- keeps working after any theme or comment_fg change.
-  pcall(vim.api.nvim_set_hl, 0, "YamlTonePeriodCommentReset", { link = "Comment" })
-  pcall(vim.api.nvim_set_hl, 0, "YamlTonePeriodUrlReset", { link = "Normal" })
-  pcall(vim.api.nvim_set_hl, 0, "YamlTonePeriod", { fg = period_fg })
-
-  local ids = {}
-  local function add(group, pattern, priority)
-    local ok, id = pcall(vim.fn.matchadd, group, pattern, priority)
-    if ok then
-      table.insert(ids, id)
-    end
-  end
-
-  add("YamlTonePeriod", [[\v\.]], 95)
-  add("YamlTonePeriodUrlReset", [[\vhttps?://\S+]], 96)
-
-  -- Comment leader → EOL, derived from the buffer's own commentstring so this
-  -- works per filetype. The leader must start the line or follow whitespace, so
-  -- a '#' inside a string is not mistaken for a comment.
-  local leader = (vim.bo.commentstring or ""):gsub("%%s.*$", ""):gsub("%s+$", "")
-  if leader ~= "" then
-    local esc = vim.fn.escape(leader, [[\.*$^~[]])
-    add("YamlTonePeriodCommentReset", [[\(^\|\s\)\zs]] .. esc .. [[.*$]], 200)
-  end
-
-  vim.w.yaml_tone_period_ids = ids
-end
-
-vim.api.nvim_create_autocmd({ "BufWinEnter", "WinEnter", "FileType" }, {
-  pattern = "*",
-  callback = apply_period_matches,
-})
+local guides_pinned = false
 
 vim.api.nvim_create_user_command("YamlTone", function()
-  if not active() then
-    vim.notify("YamlTone: only applies to " .. THEME, vim.log.levels.WARN)
-    return
+  -- Load the requested theme first so the palette below is stamped ON TOP of
+  -- it. Wrapped in pcall so a typo'd/uninstalled name reports instead of erroring
+  -- the whole command; the palette still applies to the current theme.
+  if target_theme ~= "" and target_theme ~= (vim.g.colors_name or "") then
+    local ok, err = pcall(vim.cmd.colorscheme, target_theme)
+    if not ok then
+      vim.notify(("YamlTone: colorscheme %s -> %s"):format(target_theme, err), vim.log.levels.ERROR)
+    end
   end
-  apply()
-  apply_period_matches()
-end, {})
 
--- Re-apply on theme load, deferred so it lands after theme.lua's pipeline
--- (which re-runs at 50ms and 200ms after ColorScheme).
--- theme.lua fires this once its pipeline settles (400ms). Knob commands like
--- :FgAdjust re-run that pipeline without changing the colorscheme, which
--- repaints Comment from the captured theme base and drops comment_fg -- this is
--- what puts it back.
-vim.api.nvim_create_autocmd("User", {
-  pattern = "ThemeAdjusted",
-  callback = function()
-    apply()
-    apply_period_matches()
-  end,
-})
+  for group, fg in pairs(colors) do
+    local ok, err = pcall(vim.api.nvim_set_hl, 0, group, { fg = fg })
+    if not ok then
+      -- Surfaced rather than swallowed: a bad hex (5 digits, missing #) is
+      -- otherwise a silent no-op that looks like "the change didn't work".
+      vim.notify(("YamlTone: %s = %s -> %s"):format(group, fg, err), vim.log.levels.ERROR)
+    end
+  end
 
-vim.api.nvim_create_autocmd("ColorScheme", {
-  pattern = "base16-tokyo-night-terminal-storm",
-  callback = function()
-    vim.defer_fn(apply, 250)
-  end,
-})
+  local maxed = stamp_scope_guides()
+
+  -- Immunity: after any :Sepia / :FgAdjust / dim pass mutates the guide groups,
+  -- the next common editor event re-pins them to the maxed value. Registered
+  -- once, guarded so repeated :YamlTone runs do not stack duplicate autocmds.
+  if not guides_pinned then
+    guides_pinned = true
+    vim.api.nvim_create_autocmd(
+      { "ColorScheme", "WinEnter", "BufWinEnter", "CursorHold", "CursorHoldI" },
+      { callback = stamp_scope_guides, desc = "Re-pin YamlTone guide line at max contrast" }
+    )
+  end
+
+  vim.notify(("YamlTone applied (guide pinned to %s, run :ThemeReload to reset)"):format(maxed))
+end, { desc = "Apply the scratch yaml tone palette once" })
 
 return {}

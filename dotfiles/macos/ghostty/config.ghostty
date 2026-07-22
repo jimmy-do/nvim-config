@@ -303,8 +303,8 @@ font-family = jetbrainsmono nerd font
 #jetbrainsmono nerd font
 font-style = light
 font-size = 20
-font-thicken = false
-font-thicken-strength = 200
+font-thicken = true
+font-thicken-strength = 0
 adjust-cell-height = 0%
 adjust-cell-width = 0%
 
