@@ -62,6 +62,14 @@ B, D, S, I = "@@B@@", "@@D@@", "@@S@@", "@@I@@"
 # Powerline cut that tmux can render perfectly at cell resolution.
 NB, ND = "@@NB@@", "@@ND@@"
 
+# Copy-mode accent. While the ACTIVE pane is in copy mode, its Reactor Tag pill
+# (and its border, overridden in tmux.conf) take this instead of BRIGHT, so the
+# pill matches the COPY chip in the status bar. This is a LIVE format reference,
+# not a baked hex: it reads the @copy_mode_color option at every render, so
+# editing that option (or `tmux-copymode-color <hex>`) recolours the pill with
+# no regeneration. It carries no @@ token, so build_block() leaves it untouched.
+CM = "#{@copy_mode_color}"
+
 # Chip edges, written as chr() -- a literal glyph in this source survives fine,
 # but it is invisible in most diffs/editors, and a cap silently dropped from a
 # template turns a shaped chip into a bare slab. Naming them keeps that from
@@ -440,48 +448,49 @@ MODES = {
             f'#{{?#{{||:#{{pane_dead}},'
             f'#{{m/r:^(ssh|mosh|sudo|doas|su)$,#{{pane_current_command}}}}}},'
             f'#{{?pane_active,#[fg=#FF8500],#[fg=#7a4000]}},'
-            f'#{{?pane_active,#[fg={NB}],#[fg={ND}]}}}}'
+            f'#{{?pane_active,#{{?pane_in_mode,#[fg={CM}],#[fg={NB}]}},#[fg={ND}]}}}}'
             f'#{{?pane_zoomed_flag,{ZLCAP},{SLANT_L}}}'
             # --- Reactor Tag: fully lit angular index module ---
             f'#{{?#{{||:#{{pane_dead}},'
             f'#{{m/r:^(ssh|mosh|sudo|doas|su)$,#{{pane_current_command}}}}}},'
             f'#{{?pane_active,#[fg={I}#,bg=#FF8500#,bold],#[fg={I}#,bg=#7a4000#,bold]}},'
-            f'#{{?pane_active,#[fg={I}#,bg={NB}#,bold],#[fg={I}#,bg={ND}#,bold]}}}}'
-            # No leading space: the rounded cap already gives the number a
-            # curved left edge to sit against, so a space on top of it left
-            # the digit floating in the middle of its own field.
-            f'#{{pane_index}}'
+            f'#{{?pane_active,#{{?pane_in_mode,#[fg={I}#,bg={CM}#,bold],#[fg={I}#,bg={NB}#,bold]}},#[fg={I}#,bg={ND}#,bold]}}}}'
+            # ONE leading space, and ONE trailing on a bare digit (below): a
+            # space on each side is what actually centres the number. Flush on
+            # both sides was tried and read as shoved LEFT -- the slant cap eats
+            # its own corner, so a digit sitting hard against it looks off to the
+            # left, not centred. Symmetric padding, not zero padding, is centre.
+            f' #{{pane_index}}'
             f'#{{?pane_marked, {MARKED} ,}}'
-            # Trailing space is CONDITIONAL, and that is the whole point: the
-            # glyph branches carry a second one, the empty branch does not.
+            # Trailing space is CONDITIONAL: the glyph branches carry a second
+            # one, the bare branch does not.
             #
             # Every glyph that can land here -- HERE, LAST_PANE, MARKED -- is
             # East-Asian width "Ambiguous", which the font draws at roughly two
             # cells while tmux counts it as one. So the glyph bleeds into the
             # single trailing space and the number field ends flush against the
-            # label's edge, with no padding at all. A bare digit has no such
-            # bleed and sits correctly on one space.
-            #
-            # This is why an earlier attempt at TWO unconditional spaces was
-            # wrong and was reverted: it fixed the glyph case by over-padding
-            # the bare-digit case, which read as a hole in the middle of the
-            # pill. Conditional padding fixes only the case that is broken.
+            # label's edge. A bare digit has no such bleed and sits correctly on
+            # the single shared trailing space at the end of this group.
             f'#{{?pane_active, {HERE} ,'
             f'#{{?#{{&&:#{{pane_last}},#{{>:#{{window_panes}},1}}}}, {LAST_PANE} ,}}}} '
             # Hard diagonal cut from the lit index module into the dark body.
             f'#{{?#{{||:#{{pane_dead}},'
             f'#{{m/r:^(ssh|mosh|sudo|doas|su)$,#{{pane_current_command}}}}}},'
             f'#{{?pane_active,#[fg=#FF8500#,bg={ION_BODY}],#[fg=#7a4000#,bg={ION_BODY}]}},'
-            f'#{{?pane_active,#[fg={B}#,bg={ION_BODY}],#[fg={D}#,bg={ION_BODY}]}}}}'
+            f'#{{?pane_active,#{{?pane_in_mode,#[fg={CM}#,bg={ION_BODY}],#[fg={B}#,bg={ION_BODY}]}},#[fg={D}#,bg={ION_BODY}]}}}}'
             f'{SLANT_R}'
             # --- back to the pill colour for the label ---
             f'#{{?#{{||:#{{pane_dead}},'
             f'#{{m/r:^(ssh|mosh|sudo|doas|su)$,#{{pane_current_command}}}}}},'
             f'#{{?pane_active,#[fg=#FF8500#,bg={ION_BODY}#,bold],#[fg=#7a4000#,bg={ION_BODY}#,bold]}},'
-            f'#{{?pane_active,#[fg={B}#,bg={ION_BODY}#,bold],#[fg={D}#,bg={ION_BODY}#,bold]}}}}'
+            f'#{{?pane_active,#{{?pane_in_mode,#[fg={CM}#,bg={ION_BODY}#,bold],#[fg={B}#,bg={ION_BODY}#,bold]}},#[fg={D}#,bg={ION_BODY}#,bold]}}}}'
             # Flat edge: the number field's own bg (NB/ND) meets the label bg
             # directly, no separator glyph. Chevron/wedge/half-round were each
             # tried here and cut -- the plain tone step reads cleanest.
+            #
+            # ONE leading space here + ONE trailing after the label (see the
+            # right cap below): a space on each side centres the name in the dark
+            # body, matching the index. Flush both sides read as shoved left.
             f' '
             f'#{{?#{{E:@pane_icon}},#{{E:@pane_icon}} ,}}'
             # DEAD first, then ssh, then the ordinary label.
@@ -527,6 +536,9 @@ MODES = {
             # leading non-alphanumeric char and its space, or a frozen frame
             # sits there looking like a permanently lit icon.
             f'#{{s/^[^0-9A-Za-z] //:pane_title}}}}}}}}'
+            # Trailing space: the partner to the leading one above, so the name
+            # sits centred in the dark body instead of hard against the cap.
+            f' '
             # --- right cap, same colour decision as the left ---
             f'#{{?#{{||:#{{pane_dead}},'
             f'#{{m/r:^(ssh|mosh|sudo|doas|su)$,#{{pane_current_command}}}}}},'
@@ -550,6 +562,13 @@ MODES = {
             # active, so bright/dim here is load-bearing, not decoration.
             f'set -g pane-border-style        "fg={D}"',
             f'set -g pane-active-border-style "fg={B}"',
+            # Exported so the copy-mode border override below the managed block
+            # can use THIS surface's bright as its not-in-copy-mode colour --
+            # otherwise it would have to hardcode a hex or borrow @ui-bright (the
+            # bar's colour), and the active divider would stop tracking this
+            # command. The override reads @pane_lines_bright; recolouring here
+            # therefore still moves the focused divider.
+            f'set -g @pane_lines_bright "{B}"',
             # The scrollbar is a rule too: dim thumb on a sunk trough.
             f'set -g pane-scrollbars-style "bg={S},fg={D},width=1,pad=0"',
         ],
