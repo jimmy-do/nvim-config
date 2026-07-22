@@ -51,14 +51,15 @@ STATE_DIR = os.environ.get("XDG_STATE_HOME", f"{HOME}/.local/state")
 INK = "#080808"          # knockout text on a lit slab -- never recolored
 DIM_SCALE = 0.48         # BRIGHT -> DIM
 SUNK_SCALE = 0.20        # BRIGHT -> scrollbar trough
-NUM_SCALE = 1.00         # Toxic Core: one fully filled colour, cap to cap
+NUM_SCALE = 1.00         # Reactor Tag: fully lit angular index module
+ION_BODY = "#101410"     # near-black body behind the neon label
 
 # Placeholders inside the templates. NOT str.format: tmux formats are full of
 # literal { } (#{?pane_active,...}) and would blow up on every brace.
 B, D, S, I = "@@B@@", "@@D@@", "@@S@@", "@@I@@"
-# The pane number shares the pill background for the Toxic Core treatment.
-# Keeping the placeholders makes a later split-field experiment reversible,
-# while NUM_SCALE=1.0 guarantees one uninterrupted filled capsule.
+# The number is the lit angular module at the left edge of Reactor Tag. The
+# remaining label sits on ION_BODY with neon foreground, joined by a hard
+# Powerline cut that tmux can render perfectly at cell resolution.
 NB, ND = "@@NB@@", "@@ND@@"
 
 # Chip edges, written as chr() -- a literal glyph in this source survives fine,
@@ -440,8 +441,8 @@ MODES = {
             f'#{{m/r:^(ssh|mosh|sudo|doas|su)$,#{{pane_current_command}}}}}},'
             f'#{{?pane_active,#[fg=#FF8500],#[fg=#7a4000]}},'
             f'#{{?pane_active,#[fg={NB}],#[fg={ND}]}}}}'
-            f'#{{?pane_zoomed_flag,{ZLCAP},{LCAP}}}'
-            # --- Toxic Core: number and label use one uninterrupted fill ---
+            f'#{{?pane_zoomed_flag,{ZLCAP},{SLANT_L}}}'
+            # --- Reactor Tag: fully lit angular index module ---
             f'#{{?#{{||:#{{pane_dead}},'
             f'#{{m/r:^(ssh|mosh|sudo|doas|su)$,#{{pane_current_command}}}}}},'
             f'#{{?pane_active,#[fg={I}#,bg=#FF8500#,bold],#[fg={I}#,bg=#7a4000#,bold]}},'
@@ -467,11 +468,17 @@ MODES = {
             # pill. Conditional padding fixes only the case that is broken.
             f'#{{?pane_active, {HERE} ,'
             f'#{{?#{{&&:#{{pane_last}},#{{>:#{{window_panes}},1}}}}, {LAST_PANE} ,}}}} '
+            # Hard diagonal cut from the lit index module into the dark body.
+            f'#{{?#{{||:#{{pane_dead}},'
+            f'#{{m/r:^(ssh|mosh|sudo|doas|su)$,#{{pane_current_command}}}}}},'
+            f'#{{?pane_active,#[fg=#FF8500#,bg={ION_BODY}],#[fg=#7a4000#,bg={ION_BODY}]}},'
+            f'#{{?pane_active,#[fg={B}#,bg={ION_BODY}],#[fg={D}#,bg={ION_BODY}]}}}}'
+            f'{SLANT_R}'
             # --- back to the pill colour for the label ---
             f'#{{?#{{||:#{{pane_dead}},'
             f'#{{m/r:^(ssh|mosh|sudo|doas|su)$,#{{pane_current_command}}}}}},'
-            f'#{{?pane_active,#[fg={I}#,bg=#FF8500#,bold],#[fg={I}#,bg=#7a4000#,bold]}},'
-            f'#{{?pane_active,#[fg={I}#,bg={B}#,bold],#[fg={I}#,bg={D}#,bold]}}}}'
+            f'#{{?pane_active,#[fg=#FF8500#,bg={ION_BODY}#,bold],#[fg=#7a4000#,bg={ION_BODY}#,bold]}},'
+            f'#{{?pane_active,#[fg={B}#,bg={ION_BODY}#,bold],#[fg={D}#,bg={ION_BODY}#,bold]}}}}'
             # Flat edge: the number field's own bg (NB/ND) meets the label bg
             # directly, no separator glyph. Chevron/wedge/half-round were each
             # tried here and cut -- the plain tone step reads cleanest.
@@ -523,11 +530,11 @@ MODES = {
             # --- right cap, same colour decision as the left ---
             f'#{{?#{{||:#{{pane_dead}},'
             f'#{{m/r:^(ssh|mosh|sudo|doas|su)$,#{{pane_current_command}}}}}},'
-            f'#{{?pane_active,#[fg=#FF8500#,bg=default#,nobold],'
-            f'#[fg=#7a4000#,bg=default#,nobold]}},'
-            f'#{{?pane_active,#[fg={B}#,bg=default#,nobold],'
-            f'#[fg={D}#,bg=default#,nobold]}}}}'
-            f'#{{?pane_zoomed_flag,{ZRCAP},{RCAP}}}#[default]"',
+            f'#{{?pane_active,#[fg={ION_BODY}#,bg=default#,nobold],'
+            f'#[fg={ION_BODY}#,bg=default#,nobold]}},'
+            f'#{{?pane_active,#[fg={ION_BODY}#,bg=default#,nobold],'
+            f'#[fg={ION_BODY}#,bg=default#,nobold]}}}}'
+            f'#{{?pane_zoomed_flag,{ZRCAP},{SLANT_R}}}#[default]"',
             f'set -g display-panes-colour        "{D}"',
             f'set -g display-panes-active-colour "{B}"',
             f'set -g clock-mode-colour           "{B}"',
@@ -575,6 +582,12 @@ def swatch(h, label="   "):
     r, g, b = rgb(h)
     ri, gi, bi = rgb(INK)
     return f"\033[48;2;{r};{g};{b}m\033[38;2;{ri};{gi};{bi}m{label}\033[0m"
+
+
+def slab(bg_hex, fg_hex, label):
+    br, bg, bb = rgb(bg_hex)
+    fr, fg_, fb = rgb(fg_hex)
+    return f"\033[48;2;{br};{bg};{bb}m\033[38;2;{fr};{fg_};{fb}m{label}\033[0m"
 
 
 def fg(h):
@@ -639,8 +652,10 @@ def preview(bright):
         # The split divider: lit half nearest the active pane, unlit rest.
         return (fg(bright) + "─────────" + fg(dim) + "──────────" + "\033[0m")
     if MODE == "tmux-pane":
-        return (fg(dim) + "──" + fg(bright) + LCAP +
-                swatch(bright, " zsh · repo ") + fg(bright) + RCAP +
+        return (fg(dim) + "──" + fg(bright) + SLANT_L +
+                swatch(bright, " 1 ") + fg(bright) +
+                slab(ION_BODY, bright, SLANT_R + " zsh · repo ") +
+                fg(ION_BODY) + SLANT_R +
                 fg(dim) + "────" + "\033[0m")
     # The preview MUST wear the same shapes the templates emit, or the picker
     # sells a bar you will not get. Chips shear, the window rail is the hairline
