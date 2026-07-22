@@ -83,7 +83,7 @@ NB, ND = "@@NB@@", "@@ND@@"
 # That is what keeps the two surfaces telling apart at a glance when they are
 # set to the same colour. Colour commands never touch these; edit here.
 LCAP, RCAP = chr(0xE0B6), chr(0xE0B4)                       # rounded: pane pill
-PANE_SEP = chr(0xE0B1)  # thin chevron: number field -> label, matches the starship pill
+PANE_SEP = chr(0xE0B0)  # solid wedge: number-field slab tapers into the label
 # ZOOMED caps. A zoomed pane is the ONLY pane on screen, so the surface has to
 # say so with no neighbour to compare against -- the lit/unlit brightness step
 # that flags the active pane cannot work when nothing else is visible. Shape
@@ -480,9 +480,15 @@ MODES = {
             f'#{{m/r:^(ssh|mosh|sudo|doas|su)$,#{{pane_current_command}}}}}},'
             f'#{{?pane_active,#[fg={I}#,bg=#FF8500#,bold],#[fg={I}#,bg=#7a4000#,bold]}},'
             f'#{{?pane_active,#[fg={I}#,bg={B}#,bold],#[fg={I}#,bg={D}#,bold]}}}}'
-            # thin chevron marks the number|label seam -- the flat colour
-            # edge alone read as no divider at all (see the reverted preview).
-            f'{PANE_SEP} '
+            # Solid wedge: the number-field slab (NB/ND) tapers into the label
+            # bg. Drawn fg=number-colour bg=label-colour so the left half of
+            # the cell continues the slab and the right half is already the
+            # label -- a true powerline transition, not a flat edge. fg is
+            # then restored to ink so the icon and title render as before.
+            f'#{{?pane_active,#[fg={NB}#,bg={B}#],#[fg={ND}#,bg={D}#]}}'
+            f'{PANE_SEP}'
+            f'#{{?pane_active,#[fg={I}#,bg={B}#,bold],#[fg={I}#,bg={D}#,bold]}}'
+            f' '
             f'#{{?#{{E:@pane_icon}},#{{E:@pane_icon}} ,}}'
             # DEAD first, then ssh, then the ordinary label.
             f'#{{?pane_dead,{DEAD} exit #{{pane_dead_status}},'
