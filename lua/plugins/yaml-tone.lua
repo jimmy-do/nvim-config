@@ -1,8 +1,40 @@
 -- SCRATCH / TESTING ONLY.
 --
 -- Nothing here fires on its own: no autocmds, no ThemeAdjusted listener, no
--- re-apply loop -- until you run :YamlTone once. Edit the hexes below, save,
--- then run :YamlTone to see them. That is the whole edit/see cycle.
+-- re-apply loop. Edit the hexes below, save, then run :YamlTone to see them.
+-- That is the whole edit/see cycle.
+--
+-- ---------------------------------------------------------------------------
+-- ONE-OFF TESTING (no file edit, no command -- just type it in nvim):
+--
+-- Recolour a single group live, right now, from the command line:
+--   :hi @punctuation.delimiter.yaml guifg=#00e676   -- foreground (text)
+--   :hi @string.yaml guibg=#1a1a1a                   -- background
+--   :hi Comment guifg=#243745 gui=italic             -- fg + style
+--
+-- Lualine pills work the same way (see the section list further down):
+--   :hi lualine_a_normal guifg=#080808 guibg=#00ff9f gui=bold  -- left mode pill
+--   :hi lualine_z_normal guifg=#080808 guibg=#ff8c1a gui=bold  -- right pill
+--
+-- Colour ALL periods (fields, values, lists) except those in # comments, in
+-- one shot, across every open yaml window:
+--   :YamlPeriods            -- uses period_color below
+--   :YamlPeriods #00e676    -- or pass a hex to override it live
+--
+-- Recolour the indent GUIDE LINE. The hue is yours; brightness/saturation are
+-- always forced to max, so a dim hex still comes out fully lit:
+--   :YamlGuide              -- uses scope_color below
+--   :YamlGuide #ff0055      -- override the hue live
+--
+-- Inspect what a group is currently set to (no args = print it):
+--   :hi @string.yaml
+--
+-- Find out which group is under the cursor (so you know what to :hi):
+--   :Inspect            -- shows the highlight groups at the cursor
+--
+-- These live edits vanish on the next :ThemeReload or nvim restart -- same as
+-- the :YamlTone / :LualineTone scratch commands below.
+-- ---------------------------------------------------------------------------
 --
 -- When a set of values is good, tell me and I copy them into
 -- theme_baseline_colors["base16-tokyo-night-terminal-storm"] in theme.lua,
@@ -10,79 +42,121 @@
 -- :Sepia and the bg knobs working on them). Running :YamlTone stamps over
 -- those knobs until the next :ThemeReload -- that is expected for testing.
 
--- Which theme to test the palette on. Type any colorscheme you currently have
--- installed here (`:colorscheme <Tab>` lists them). On :YamlTone this theme is
--- loaded FIRST, then the palette below is stamped on top of it -- so you can
--- see these exact colors across whatever theme you want to test against.
--- Leave it as "" (empty) to just stamp onto the theme you already have loaded.
-local target_theme = ""
-
 local colors = {
-  -- keys / fields
-  ["@property.yaml"] = "#00ffff", -- fields (keys)
-
-  -- punctuation
-  ["@punctuation.delimiter.yaml"] = "#ff8c1a", -- colons, commas
-  ["@punctuation.special.yaml"] = "#ff9c1a", -- list dashes, anchors, aliases
-  ["@punctuation.bracket"] = "#ff8c1a", -- [] {}
-  ["@punctuation.delimiter"] = "#00ffff", -- periods/dots and other delimiters
-
-  -- string values
-  ["@string.yaml"] = "#95ff00", -- quoted + plain string values
-  ["@string.escape.yaml"] = "#00ffff", -- \n \t etc. inside quoted strings
-
-  -- NON-string scalar values (numbers, bools, null, dates, timestamps).
-  -- Many YAML parsers tag these as plain scalars, so several groups are listed
-  -- to cover whichever one your treesitter build actually emits.
-  ["@number.yaml"] = "#ff9c1a", -- 42, 3.14
-  ["@number"] = "#ff9c1a",
-  ["@float.yaml"] = "#ff9c1a", -- 3.14 (some grammars split floats out)
-  ["@boolean.yaml"] = "#ff9c1a", -- true / false / yes / no
-  ["@boolean"] = "#ff9c1a",
-  ["@constant.builtin.yaml"] = "#ff9c1a", -- null / ~
-  ["@constant.yaml"] = "#ff9c1a",
-  ["@type.yaml"] = "#ff9c1a", -- tags like !!str, !Ref
-
-  -- comments
+  ["@property.yaml"] = "#49638f", -- fields (keys)
+  ["@punctuation.delimiter.yaml"] = "#ff8c1a", -- colons, commas, periods
+  ["@punctuation.special.yaml"] = "#ff8c1a", -- list dashes, anchors
+  ["@punctuation.bracket"] = "#f7ff00", -- [] {}
+  ["@string.yaml"] = "#00ffff", -- values
   ["@comment"] = "#243745",
   ["Comment"] = "#243745",
 }
 
--- Not a highlight group -- the indent scope ("guidelines") line is drawn by its
--- own plugin, so it is set separately below.
+-- Not a highlight group -- the indent scope line ("guide line") is drawn by its
+-- own plugin, so it is set separately below. This is the single knob for the
+-- vertical indent guide colour.
 --
--- Put ANY hex here. It is force-boosted to its maximum-contrast / maximum-
--- brightness form before it is applied (see max_contrast below), so the guide
--- line is always the brightest possible version of whatever hue you type.
+-- NOTE: whatever hex you put here is pushed to MAX contrast/brightness before
+-- it's applied (see maximize() below), so the guide line is always the most
+-- vivid version of the hue -- a dull hex still comes out fully lit. Only the
+-- hue you pick matters; brightness/saturation are forced.
 local scope_color = "#00ffff"
 
--- Take a #rrggbb hex and return its maximum-brightness version: scale every
--- channel up until the brightest one hits 255, preserving the hue and relative
--- channel ratios. This is what makes the guide immune to :Sepia / :FgAdjust /
--- dimming -- those effects only ever *darken or tint* a color, and re-running
--- :YamlTone (or the autocmd below) re-stamps the maxed value on top, so the
--- guide can never end up dimmer than full brightness for its hue.
---   #008080 -> #00ffff   (teal   -> full cyan)
---   #806000 -> #ffbf00   (dim amber -> full amber)
---   #000000 -> #ffffff   (black has no hue, so max contrast = white)
-local function max_contrast(hex)
-  local r, g, b = hex:match("^#(%x%x)(%x%x)(%x%x)$")
-  if not r then
-    return hex -- not a 6-digit hex; leave it for the pcall to surface
-  end
-  r, g, b = tonumber(r, 16), tonumber(g, 16), tonumber(b, 16)
-  local m = math.max(r, g, b)
-  if m == 0 then
-    return "#ffffff" -- pure black carries no hue; max contrast is white
-  end
-  local scale = 255 / m
-  local function up(c)
-    return math.min(255, math.floor(c * scale + 0.5))
-  end
-  return string.format("#%02x%02x%02x", up(r), up(g), up(b))
+-- ---------------------------------------------------------------------------
+-- Live-preview lifecycle: scratch tones should last only while you are IN a
+-- yaml buffer. The tone commands below set GLOBAL highlight groups, so without
+-- this they leak into every buffer and persist until :ThemeReload / restart.
+--
+-- We mark the session "dirty" whenever a tone command runs, and revert to the
+-- theme's real defaults on BufLeave of a yaml buffer -- even after :w. Leave the
+-- file, it snaps back; come back and re-run :YamlTone to preview again.
+local tone_dirty = false
+
+local function mark_dirty()
+  tone_dirty = true
 end
 
-local scope_groups = {
+local function revert_to_theme_defaults()
+  if not tone_dirty then
+    return
+  end
+  tone_dirty = false
+  -- Drop the window-local period overlay (matchadd) we added, in every window.
+  for _, win in ipairs(vim.api.nvim_list_wins()) do
+    vim.api.nvim_win_call(win, function()
+      for _, m in ipairs(vim.fn.getmatches()) do
+        if m.group == "YamlTonePeriod" then
+          pcall(vim.fn.matchdelete, m.id)
+        end
+      end
+    end)
+  end
+  pcall(vim.api.nvim_del_augroup_by_name, "YamlTonePeriod")
+  -- Restore the theme's real highlight values (:FgAdjust/:Sepia/bg knobs too).
+  pcall(vim.cmd, "silent! ThemeReload")
+end
+
+vim.api.nvim_create_augroup("YamlToneRevert", { clear = true })
+vim.api.nvim_create_autocmd("BufLeave", {
+  group = "YamlToneRevert",
+  callback = function()
+    if vim.bo.filetype == "yaml" then
+      revert_to_theme_defaults()
+    end
+  end,
+})
+-- ---------------------------------------------------------------------------
+
+-- Force a hex to maximum brightness + saturation while keeping its hue, so the
+-- guide line always reads at full contrast no matter how dim the input was.
+-- Works in HSV: keep H, set S=1 and V=1 (the pure, fully-lit version of the
+-- hue). #808080-ish greys have no hue, so they collapse toward white -- expected.
+local function maximize(hex)
+  local r, g, b = hex:match("^#?(%x%x)(%x%x)(%x%x)$")
+  if not r then
+    return hex -- not a plain 6-digit hex; hand it back untouched
+  end
+  r, g, b = tonumber(r, 16) / 255, tonumber(g, 16) / 255, tonumber(b, 16) / 255
+  local max, min = math.max(r, g, b), math.min(r, g, b)
+  local h
+  local d = max - min
+  if d == 0 then
+    h = 0
+  elseif max == r then
+    h = ((g - b) / d) % 6
+  elseif max == g then
+    h = (b - r) / d + 2
+  else
+    h = (r - g) / d + 4
+  end
+  h = h * 60 -- hue in degrees
+  -- Rebuild at S=1, V=1.
+  local c = 1 -- chroma = V * S = 1
+  local x = c * (1 - math.abs((h / 60) % 2 - 1))
+  local rr, gg, bb = 0, 0, 0
+  if h < 60 then
+    rr, gg, bb = c, x, 0
+  elseif h < 120 then
+    rr, gg, bb = x, c, 0
+  elseif h < 180 then
+    rr, gg, bb = 0, c, x
+  elseif h < 240 then
+    rr, gg, bb = 0, x, c
+  elseif h < 300 then
+    rr, gg, bb = x, 0, c
+  else
+    rr, gg, bb = c, 0, x
+  end
+  return ("#%02x%02x%02x"):format(
+    math.floor(rr * 255 + 0.5),
+    math.floor(gg * 255 + 0.5),
+    math.floor(bb * 255 + 0.5)
+  )
+end
+
+-- The indent-guide highlight groups theme.lua drives -- same list so the scratch
+-- matches what the real pipeline sets.
+local guide_groups = {
   "SnacksIndentScope",
   "SnacksIndentChunk",
   "IblScope",
@@ -92,28 +166,145 @@ local scope_groups = {
   "BlinkIndentScope",
 }
 
-local function stamp_scope_guides()
-  local maxed = max_contrast(scope_color)
-  for _, group in ipairs(scope_groups) do
-    -- nocombine so no blend/dim pass can average the guide toward the bg.
-    pcall(vim.api.nvim_set_hl, 0, group, { fg = maxed, sp = maxed, nocombine = true })
+-- Apply the guide-line colour (maximized) to every guide group. Shared by
+-- :YamlTone and the standalone :YamlGuide.
+local function apply_guides(color)
+  local lit = maximize(color)
+  for _, group in ipairs(guide_groups) do
+    pcall(vim.api.nvim_set_hl, 0, group, { fg = lit, nocombine = true })
   end
-  return maxed
+  return lit
 end
 
-local guides_pinned = false
+-- :YamlGuide            -> colour the indent guide line using scope_color
+-- :YamlGuide #ff0055    -> override the hue live (still forced to max brightness)
+vim.api.nvim_create_user_command("YamlGuide", function(opts)
+  local color = (opts.args ~= "" and opts.args) or scope_color
+  local lit = apply_guides(color)
+  mark_dirty()
+  vim.notify("YamlGuide applied (" .. color .. " -> " .. lit .. ")")
+end, { nargs = "?", desc = "Colour the yaml indent guide line at max brightness" })
 
-vim.api.nvim_create_user_command("YamlTone", function()
-  -- Load the requested theme first so the palette below is stamped ON TOP of
-  -- it. Wrapped in pcall so a typo'd/uninstalled name reports instead of erroring
-  -- the whole command; the palette still applies to the current theme.
-  if target_theme ~= "" and target_theme ~= (vim.g.colors_name or "") then
-    local ok, err = pcall(vim.cmd.colorscheme, target_theme)
+-- Periods (the "." character) are NOT a treesitter node in YAML -- a dot inside
+-- 1.2.3 or foo.bar is just part of the plain scalar / string text, so there's
+-- no @capture to recolour like colons and commas get. The only way to tint the
+-- character itself is a regex overlay (matchadd), which is what the block below
+-- does. Set this to the same hex as @punctuation.delimiter.yaml above to make
+-- periods match the delimiters. The overlay runs at a priority above
+-- treesitter (so it actually shows) and skips periods inside `#` comments;
+-- periods in fields, values and lists are coloured.
+local period_color = "#ff8c1a"
+
+-- Shared period overlay used by both :YamlTone and the standalone :YamlPeriods.
+-- matchadd() is window-local, so we define the highlight group once, drop the
+-- match into every yaml window that already exists, and set up an autocmd so
+-- yaml windows opened later get it too.
+local function apply_periods(color)
+  pcall(vim.api.nvim_set_hl, 0, "YamlTonePeriod", { fg = color })
+
+  local function add_period_match(win)
+    vim.api.nvim_win_call(win, function()
+      if vim.bo.filetype ~= "yaml" then
+        return
+      end
+      -- Clear any YamlTonePeriod match we added before so re-running doesn't
+      -- stack duplicates.
+      for _, m in ipairs(vim.fn.getmatches()) do
+        if m.group == "YamlTonePeriod" then
+          pcall(vim.fn.matchdelete, m.id)
+        end
+      end
+      -- Pattern: a period that is NOT preceded by a '#' earlier on the line.
+      -- \v = very magic; (#.*)@<! = negative look-behind for a comment start,
+      -- so dots inside `# comment text` are left alone while dots in fields,
+      -- values and lists still match.
+      --
+      -- Priority 200 is the important bit: treesitter paints its captures at
+      -- priority 100, so anything below that (matchadd defaults to 10) gets
+      -- drawn over and appears to do nothing. 200 sits on top of treesitter.
+      vim.fn.matchadd("YamlTonePeriod", "\\v(#.*)@<!\\.", 200)
+    end)
+  end
+
+  for _, win in ipairs(vim.api.nvim_list_wins()) do
+    add_period_match(win)
+  end
+
+  vim.api.nvim_create_augroup("YamlTonePeriod", { clear = true })
+  vim.api.nvim_create_autocmd("FileType", {
+    group = "YamlTonePeriod",
+    pattern = "yaml",
+    callback = function()
+      add_period_match(vim.api.nvim_get_current_win())
+    end,
+  })
+end
+
+-- :YamlPeriods            -> colour all periods (except comments) with period_color
+-- :YamlPeriods #00e676    -> same, but override the colour live for this call
+vim.api.nvim_create_user_command("YamlPeriods", function(opts)
+  local color = (opts.args ~= "" and opts.args) or period_color
+  apply_periods(color)
+  mark_dirty()
+  vim.notify("YamlPeriods applied (" .. color .. ")")
+end, { nargs = "?", desc = "Colour all yaml periods except those in comments" })
+
+-- ---------------------------------------------------------------------------
+-- Lualine status bar colours (the bar at the very bottom of nvim).
+--
+-- Same scratch philosophy as above: edit the hexes, save, run :LualineTone to
+-- see them. Nothing fires on its own. :ThemeReload (or restarting nvim) puts
+-- the theme's real lualine colours back.
+--
+-- `bg` is the coloured pill, `fg` is the text on top of it.
+--   * mode  -> the far-LEFT pill (section a): NORMAL / INSERT / VISUAL / etc.
+--              Each mode gets its own accent; that's the whole point of the pill.
+--   * right -> the far-RIGHT pill (section z): location / percentage / clock.
+--              One colour used across every mode.
+local lualine_tone = {
+  mode = {
+    normal = { bg = "#00ff9f", fg = "#080808" },
+    insert = { bg = "#00ffff", fg = "#080808" },
+    visual = { bg = "#ff8c1a", fg = "#080808" },
+    replace = { bg = "#ff2e88", fg = "#080808" },
+    command = { bg = "#f7ff00", fg = "#080808" },
+  },
+  right = { bg = "#ff8c1a", fg = "#080808" },
+}
+
+vim.api.nvim_create_user_command("LualineTone", function()
+  -- lualine names its highlight groups lualine_<section>_<mode>, e.g.
+  -- lualine_a_normal, lualine_z_insert. Section a is the left mode pill, z is
+  -- the right pill. We drive both here.
+  local modes = { "normal", "insert", "visual", "replace", "command" }
+
+  for mode, c in pairs(lualine_tone.mode) do
+    local ok, err = pcall(vim.api.nvim_set_hl, 0, "lualine_a_" .. mode, {
+      fg = c.fg,
+      bg = c.bg,
+      bold = true,
+    })
     if not ok then
-      vim.notify(("YamlTone: colorscheme %s -> %s"):format(target_theme, err), vim.log.levels.ERROR)
+      -- Same reason YamlTone surfaces errors: a bad hex is otherwise a silent
+      -- no-op that reads as "the change didn't work".
+      vim.notify(("LualineTone: a_%s -> %s"):format(mode, err), vim.log.levels.ERROR)
     end
   end
 
+  -- The right pill is one colour across every mode, so stamp lualine_z_<mode>
+  -- for all of them with the single `right` value.
+  for _, mode in ipairs(modes) do
+    pcall(vim.api.nvim_set_hl, 0, "lualine_z_" .. mode, {
+      fg = lualine_tone.right.fg,
+      bg = lualine_tone.right.bg,
+      bold = true,
+    })
+  end
+
+  vim.notify("LualineTone applied (run :ThemeReload to get back to theme defaults)")
+end, { desc = "Apply the scratch lualine status bar palette once" })
+
+vim.api.nvim_create_user_command("YamlTone", function()
   for group, fg in pairs(colors) do
     local ok, err = pcall(vim.api.nvim_set_hl, 0, group, { fg = fg })
     if not ok then
@@ -123,20 +314,14 @@ vim.api.nvim_create_user_command("YamlTone", function()
     end
   end
 
-  local maxed = stamp_scope_guides()
+  -- Guide line (same one :YamlGuide runs standalone). Forced to max brightness.
+  apply_guides(scope_color)
 
-  -- Immunity: after any :Sepia / :FgAdjust / dim pass mutates the guide groups,
-  -- the next common editor event re-pins them to the maxed value. Registered
-  -- once, guarded so repeated :YamlTone runs do not stack duplicate autocmds.
-  if not guides_pinned then
-    guides_pinned = true
-    vim.api.nvim_create_autocmd(
-      { "ColorScheme", "WinEnter", "BufWinEnter", "CursorHold", "CursorHoldI" },
-      { callback = stamp_scope_guides, desc = "Re-pin YamlTone guide line at max contrast" }
-    )
-  end
+  -- Period overlay (same one :YamlPeriods runs standalone).
+  apply_periods(period_color)
 
-  vim.notify(("YamlTone applied (guide pinned to %s, run :ThemeReload to reset)"):format(maxed))
+  mark_dirty()
+  vim.notify("YamlTone applied (leave the yaml buffer to snap back to defaults)")
 end, { desc = "Apply the scratch yaml tone palette once" })
 
 return {}

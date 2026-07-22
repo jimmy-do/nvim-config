@@ -1,0 +1,187 @@
+#!/usr/bin/env bash
+# status-context — git branch/dirty + language versions for ONE directory,
+# rendered as a tmux status string. Wired into status-right by tmux-color's
+# tmux-bar block, called as:  #(status-context "#{pane_current_path}")
+#
+# This is the tmux-side home of what used to be starship/oh-my-posh prompt
+# segments: git and the language markers moved out of the right prompt and up
+# here, so the prompt keeps only os/path/kubectl/executiontime/status. kubectl
+# deliberately stays in the prompt.
+#
+# CONTRACT: emit only #[fg=...] escapes (bg stays the bar default), reset with
+# #[default] at the end, and print NOTHING for a segment whose marker file is
+# absent -- a plain directory shows just the clock chip that follows this.
+#
+# Glyphs are verified present in JetBrainsMono Nerd Font (cmap read directly).
+# A version binary is only ever run when its project marker exists in $dir, so
+# an ordinary directory costs one `git` call and nothing else on each 15s tick.
+set -u
+
+dir="${1:-$PWD}"
+[ -d "$dir" ] || exit 0
+
+# --- cache -----------------------------------------------------------------
+# The clock ticks every second (status-interval 1), which re-runs this hook
+# every second too. The git + version shell-outs don't need that resolution, so
+# their rendered output is cached per-directory for TTL seconds: a 1s redraw
+# reuses the file and does zero work; the real commands run at most once per TTL
+# (~20x/min) no matter how fast the bar redraws. Bump TTL for less work / more
+# lag. Cache is best-effort -- any failure just falls through to computing live.
+TTL=3
+key=$(printf '%s' "$dir" | cksum | cut -d' ' -f1)
+cache="${TMPDIR:-/tmp}/status-context.$key"
+if [ -f "$cache" ]; then
+  now=$(date +%s); mt=$(stat -f %m "$cache" 2>/dev/null || echo 0)
+  if [ $((now - mt)) -lt "$TTL" ]; then
+    cat "$cache"
+    exit 0
+  fi
+fi
+
+# Semantic state colours (tokyonight palette). HUE = HEALTH, read at a glance:
+#   green  everything's fine        yellow  work in progress, no problem
+#   red    something's actually off  sky    neutral / informational
+# Shared by git AND the battery/load thresholds, so one vocabulary covers the
+# whole right side. git glyph + branch take whichever of these the repo is in.
+GOOD_C='#7ee787'   # green  -- clean & synced, or healthy threshold (greener,
+                   #           less yellow, than tokyonight's #9ece6a)
+WARN_C='#e0af68'   # yellow -- uncommitted work / warning threshold
+CRIT_C='#f7768e'   # red    -- behind upstream / critical threshold
+INFO_C='#7dcfff'   # sky    -- ahead of upstream, informational
+
+# Language-logo brand colours (fixed identity, not state).
+GO_C='#00add8'         # Go brand cyan
+NODE_C='#8cc84b'
+PY_C='#e0af68'
+RUST_C='#dea584'
+TF_C='#7b42bc'
+SEP='  '               # two spaces between segments
+
+out=''
+add() { out="${out:+$out$SEP}$1"; }
+
+# --- git ------------------------------------------------------------------
+if git -C "$dir" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+  head=$(git -C "$dir" symbolic-ref --quiet --short HEAD 2>/dev/null) \
+    || head=$(git -C "$dir" rev-parse --short HEAD 2>/dev/null) \
+    || head='?'
+
+  # Split staged (index, X column) from unstaged (worktree, Y column), the same
+  # ~working / +staging breakdown the retired oh-my-posh git segment showed.
+  # Untracked ('??') counts as a worktree change. Ahead/behind vs upstream come
+  # from the branch header line (-b), which needs no network.
+  staged=0 unstaged=0 ahead=0 behind=0
+  while IFS= read -r line; do
+    case $line in
+      '## '*)
+        case $line in
+          *'[ahead '*)  ahead=${line#*'[ahead '};  ahead=${ahead%%[],\ ]*} ;;
+        esac
+        case $line in
+          *'behind '*)  behind=${line#*'behind '}; behind=${behind%%[]]*} ;;
+        esac
+        ;;
+      *)
+        x=${line%"${line#?}"}          # first char  (index / staged)
+        y=${line#?}; y=${y%"${y#?}"}   # second char (worktree / unstaged)
+        [ "$x" != ' ' ] && [ "$x" != '?' ] && staged=$((staged + 1))
+        [ "$y" != ' ' ] && unstaged=$((unstaged + 1))
+        ;;
+    esac
+  done <<EOF
+$(git -C "$dir" status --porcelain -b 2>/dev/null)
+EOF
+
+  # Overall health drives the glyph + branch colour, so a clean repo reads
+  # GREEN and red is reserved for the one state that's actually a problem:
+  #   red    behind upstream (you're missing commits -- go pull)
+  #   yellow uncommitted work in progress (normal, but not clean)
+  #   green  clean and in sync
+  # Ahead-only stays green: unpushed local commits aren't a problem.
+  if   [ "$behind" -gt 0 ]; then state_c="$CRIT_C"
+  elif [ "$staged" -gt 0 ] || [ "$unstaged" -gt 0 ]; then state_c="$WARN_C"
+  else state_c="$GOOD_C"; fi
+  seg="#[fg=${state_c}] ${head}"
+  # Detail markers keep distinct hues so the split stays readable, but they
+  # echo the same vocabulary: ~ yellow (WIP), + green (staged/ready),
+  # ⇡ sky (informational), ⇣ red (the bad one).
+  [ "$unstaged" -gt 0 ] && seg="$seg #[fg=${WARN_C}]~${unstaged}"
+  [ "$staged"   -gt 0 ] && seg="$seg #[fg=${GOOD_C}]+${staged}"
+  [ "$ahead"    -gt 0 ] && seg="$seg #[fg=${INFO_C}]⇡${ahead}"
+  [ "$behind"   -gt 0 ] && seg="$seg #[fg=${CRIT_C}]⇣${behind}"
+  add "$seg"
+fi
+
+# --- language versions (only when the project marker is present) ----------
+first_tf=$(ls "$dir"/*.tf 2>/dev/null | head -1)
+
+if [ -f "$dir/go.mod" ] && command -v go >/dev/null 2>&1; then
+  v=$(go version 2>/dev/null | awk '{print $3}' | sed 's/^go//')
+  [ -n "$v" ] && add "#[fg=${GO_C}] ${v}"
+fi
+
+if [ -f "$dir/package.json" ] && command -v node >/dev/null 2>&1; then
+  v=$(node -v 2>/dev/null | sed 's/^v//')
+  [ -n "$v" ] && add "#[fg=${NODE_C}] ${v}"
+fi
+
+if { [ -f "$dir/pyproject.toml" ] || [ -f "$dir/requirements.txt" ] \
+     || [ -f "$dir/setup.py" ] || [ -f "$dir/.python-version" ]; } \
+   && command -v python3 >/dev/null 2>&1; then
+  v=$(python3 -V 2>&1 | awk '{print $2}')
+  [ -n "$v" ] && add "#[fg=${PY_C}] ${v}"
+fi
+
+if [ -f "$dir/Cargo.toml" ] && command -v rustc >/dev/null 2>&1; then
+  v=$(rustc --version 2>/dev/null | awk '{print $2}')
+  [ -n "$v" ] && add "#[fg=${RUST_C}] ${v}"
+fi
+
+if [ -n "$first_tf" ] && command -v terraform >/dev/null 2>&1; then
+  v=$(terraform version 2>/dev/null | head -1 | awk '{print $2}')
+  [ -n "$v" ] && add "#[fg=${TF_C}]󱁢 ${v}"
+fi
+
+# --- machine state: battery + load (always shown, dir-independent) --------
+# Reuses the same GOOD/WARN/CRIT vocabulary as git, so a green battery and a
+# green branch mean the same "all fine" at a glance.
+if command -v pmset >/dev/null 2>&1; then
+  batt=$(pmset -g batt 2>/dev/null)
+  pct=$(printf '%s' "$batt" | grep -oE '[0-9]+%' | head -1 | tr -d '%')
+  if [ -n "$pct" ]; then
+    case $batt in
+      *'; charging'*)                   # actively refilling -> bolt, green
+        bicon='󰂄'; bcol="$GOOD_C" ;;    # NB: 'not charging' must NOT match here
+      *)                                # discharging / not charging / charged: tier + level colour
+        if   [ "$pct" -gt 60 ]; then bcol="$GOOD_C"
+        elif [ "$pct" -gt 20 ]; then bcol="$WARN_C"
+        else                         bcol="$CRIT_C"; fi
+        if   [ "$pct" -ge 80 ]; then bicon='󰁹'
+        elif [ "$pct" -ge 50 ]; then bicon='󰁾'
+        elif [ "$pct" -ge 20 ]; then bicon='󰁻'
+        else                         bicon='󰁺'; fi ;;
+    esac
+    add "#[fg=${bcol}]${bicon} ${pct}%"
+  fi
+fi
+
+# 1-minute load, coloured relative to core count: quiet < 0.7/core, busy to
+# 1.5/core, then saturated. Same speedometer read at any machine size.
+if load1=$(sysctl -n vm.loadavg 2>/dev/null); then
+  load1=$(printf '%s' "$load1" | awk '{print $2}')
+  ncpu=$(sysctl -n hw.ncpu 2>/dev/null || echo 8)
+  lcol=$(awk -v l="$load1" -v n="$ncpu" -v g="$GOOD_C" -v w="$WARN_C" -v c="$CRIT_C" \
+    'BEGIN{ if (l < n*0.7) print g; else if (l < n*1.5) print w; else print c }')
+  [ -n "$load1" ] && add "#[fg=${lcol}]󰓅 ${load1}"
+fi
+
+# Render once, then write it to the cache (even when empty, so a plain dir
+# also skips the git call for TTL seconds). Written atomically so a concurrent
+# 1s redraw never reads a half-written file.
+final=''
+[ -n "$out" ] && final=$(printf '%s #[default]' "$out")
+if : > "$cache.tmp.$$" 2>/dev/null; then
+  printf '%s' "$final" > "$cache.tmp.$$" && mv -f "$cache.tmp.$$" "$cache" 2>/dev/null
+  rm -f "$cache.tmp.$$" 2>/dev/null
+fi
+printf '%s' "$final"

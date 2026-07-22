@@ -233,6 +233,8 @@ MODES = {
             f'  #[fg={D}]prefix z restores,'
             # The else-branch rule. BRIGHT, like the dividers: it is the bar's
             # baseline, and at dim it vanished into the terminal background.
+            # (A truecolor gradient version was tried 2026-07-22 and rejected
+            # as ugly -- flat is the look. Don't rebuild it.)
             f'#[fg={B}]#[bg=default]#{{R:═,#{{client_width}}}}}}}}}}}}"',
             # Right: kube context ╱ git branch ╱ clock. Labels dim, values
             # bright, dividers bright.
@@ -245,7 +247,16 @@ MODES = {
             # probe (inner tmux captured from an outer pane; the escape run came
             # back 38;2;8;8;8 over 48;2;255;133;0). Don't re-litigate it.
             f'set -g status-right "'
-            f'#[fg={B}]#[bg=default]{LCAP}#[fg={I}]#[bg={B}]#[bold]%H:%M'
+            # git branch/dirty + language versions for the ACTIVE pane's dir,
+            # rendered by the status-context helper. This is where the retired
+            # git + language prompt segments now live (kubectl stayed in the
+            # prompt). It self-styles, prints nothing for a plain directory, and
+            # emits its own trailing space before the clock chip below.
+            f"#(~/.config/nvim/dotfiles/tmux/status-context '#{{pane_current_path}}')"
+            # Single space before the clock chip (the helper emits one trailing
+            # space, which is enough) and a 12-hour AM/PM clock, not 24h.
+            # %-l (not %l) = no-pad hour, so no phantom space inside the pill.
+            f'#[fg={B}]#[bg=default]{LCAP}#[fg={I}]#[bg={B}]#[bold]%-l:%M:%S %p'
             f'#[fg={B}]#[bg=default]#[nobold]{RCAP}"',
             # The rail between inactive windows: the hairline slant, U+E0BB.
             # It leans the same way as the chip shear, so the whole window strip
@@ -678,13 +689,15 @@ def preview(bright):
                 fg(dim) + "────" + "\033[0m")
     # The preview MUST wear the same shapes the templates emit, or the picker
     # sells a bar you will not get. Chips shear, the window rail is the hairline
-    # slant, and status-right is now a single filled clock chip -- git branch
-    # and kube context moved to the starship prompt, so the ╱ value-divider
-    # they separated is gone with them.
+    # slant, and status-right now carries git + language versions (rendered by
+    # the status-context helper, brand-coloured so they do NOT track this
+    # colour) ahead of the filled clock chip. kubectl stayed in the prompt.
     return (swatch(bright, " DEV ") + fg(bright) + SLANT_R + " " +
             fg(bright) + SLANT_L + swatch(bright, " > 1:nvim ") +
             fg(bright) + SLANT_R +
             fg(bright) + " " + SLANT_THIN + " " + fg(dim) + "2:logs" +
+            fg(bright) + "  " + fg("#f1502f") + " " + fg(dim) + "main" +
+            fg("#00add8") + "  1.22" +
             fg(bright) + "  " + fg(bright) + LCAP +
             swatch(bright, "09:41") + fg(bright) + RCAP + "\033[0m")
 

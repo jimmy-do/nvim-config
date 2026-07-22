@@ -141,7 +141,7 @@ _keys_data() {
   _keys_add 'Theme · tmux' 'tmux-pane-lines [COLOR]' 'Recolor the pane dividers: both border rules and the copy-mode scrollbar.' 'tmux-pane-lines ice_cyan' 'The active pane is signalled by brightness, so the lit/unlit pair is generated for you: the color, and the same hue at 48%.'
   _keys_add 'Theme · tmux' 'tmux-* slate|fog|gunmetal' 'The cool neutrals: slate is blue-leaning, fog is neutral, gunmetal is the darkest gray that still holds its ink.' 'tmux-bar slate' 'All four tmux commands take them. They are tmux-only on purpose: a gray or blue only clears the prompt bar by going pale, and they all converge on the same washed-out value when they do.'
   _keys_add 'Theme · tmux' 'tmux-* cobalt|cornflower|glacier' 'The blues: cobalt is deepest, cornflower one step lifted, glacier leans cyan and reads brightest.' 'tmux-pane cobalt' 'Silver is the one cool neutral light enough for the prompt too, so pill silver works; the rest are tmux-only.'
-  _keys_add 'Theme · prompt' 'pill [COLOR]''Repaint the starship prompt pill in one color from cap to cap, with brand logos.' 'pill turquoise' 'pill sep <shape> switches chevron, bar, or floating bubbles; pill logos brand|ink repaints icons; pill - reverts.'
+  _keys_add 'Theme · prompt' 'pill [COLOR]' 'Repaint the starship prompt pill in one color from cap to cap, with brand logos.' 'pill turquoise' 'pill sep <shape> switches chevron, bar, or floating bubbles; pill logos brand|ink repaints icons; pill - reverts.'
   _keys_add 'Theme · prompt' 'pill2 [THEME]' 'Repaint the prompt with a different color per field, using ink logos.' 'pill2 dracula' 'Bare pill2 lists every theme as a live preview bar. Theme colors come from ~/.config/starship-pill-themes.txt.'
 
   _keys_add 'Ghostty' 'Ctrl-Tab / Ctrl-Shift-Tab' 'Move to the next / previous Ghostty tab.' 'Ctrl-Tab' 'These operate at the terminal-app level, outside tmux.'
@@ -831,20 +831,47 @@ _keys_select_data() {
 _keys_detail_items() {
   local terminal_columns="$1" reset="$_KEYS_SGR_RESET"
   local category key purpose example context source rendered_key padding records
-  local hidden_padding display_width
+  local hidden_padding display_width raw_key
   local render_fd
-  local category_width=18 key_width=18
+  # Category is a fixed vocabulary that maxes out at 24 columns, so pin the
+  # column there at every terminal size: if the category ever overflowed its
+  # field, the key column below it went ragged. The key column gets more room
+  # too, tiered by width. Purpose is last and simply crops at the viewport edge.
+  local category_width=24 key_width=22
 
   if (( terminal_columns >= 120 )); then
-    category_width=23
-    key_width=22
+    key_width=26
   fi
 
   records=$(command cat)
   [[ -n "$records" ]] || return 0
+  # This is a preview list into the detail view, so the key column shows only
+  # the command, not its flags -- the flags live in the Enter detail. The
+  # `Flags · *` rows are the only ones whose key is a full flag string; for
+  # those, keep the leading run of bare command / subcommand words (rg, git log,
+  # kubectl get pods) and drop everything from the first flag or placeholder on.
+  # The untouched original key is carried as a trailing field so it stays
+  # searchable and the detail view can still render it in full.
+  records=$(print -r -- "$records" | command awk -F'\t' 'BEGIN { OFS = "\t" }
+    {
+      display = $2
+      if (index($1, "Flags \xc2\xb7 ") == 1) {
+        parts = split($2, token, " ")
+        kept = ""
+        for (i = 1; i <= parts; i++) {
+          if (token[i] ~ /^[a-z]+$/) kept = (kept == "" ? token[i] : kept " " token[i])
+          else break
+        }
+        if (kept != "") display = kept
+      }
+      # raw_key ($2) is placed before source ($6): source is empty for curated
+      # rows, and an empty field in the interior would be collapsed by read,
+      # since tab is IFS whitespace. The always-present raw_key guards that slot.
+      print $1, display, $3, $4, $5, $2, $6
+    }')
   exec {render_fd}< <(print -r -- "$records" | command cut -f2 | _keys_render_stream auto)
 
-  while IFS=$'\t' read -r category key purpose example context source; do
+  while IFS=$'\t' read -r category key purpose example context raw_key source; do
     IFS= read -r rendered_key <&$render_fd
     if [[ -n "$source" ]]; then
       rendered_key="${_KEYS_SGR_COMMAND}${key}${reset}"
@@ -861,16 +888,15 @@ _keys_detail_items() {
     printf '%s%-*s%s  %s%*s  %s%*s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
       "$_KEYS_SGR_TITLE" "$category_width" "$category" "$reset" \
       "$rendered_key" "$padding" '' "$purpose" "$hidden_padding" '' \
-      "$source" "$category" "$key" "$purpose" "$example" "$context"
+      "$source" "$category" "$raw_key" "$purpose" "$example" "$context"
   done <<< "$records"
   exec {render_fd}<&-
 }
 
 _keys_tldr_items() {
-  local terminal_columns="$1" category_width=18 key_width=18
+  local terminal_columns="$1" category_width=24 key_width=22
   if (( terminal_columns >= 120 )); then
-    category_width=23
-    key_width=22
+    key_width=26
   fi
 
   awk -F '\t' \
@@ -1070,6 +1096,7 @@ typeset -g _KEYS_PALETTE_FILE="${${(%):-%x}:A}"
 typeset -gA _KEYS_QUERIES
 typeset -ga _KEYS_FZF_STYLE=(
   --ansi --highlight-line --cycle --tiebreak=index --pointer='▶' --marker='✓'
+  --ellipsis=''
   --color='fg:-1,bg:-1,hl:11,fg+:15,bg+:8,hl+:11,prompt:14,pointer:11,marker:10,spinner:14,header:-1,info:8,border:12,label:14,query:15,gutter:8,separator:8,scrollbar:8'
 )
 

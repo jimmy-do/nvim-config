@@ -1,0 +1,66 @@
+#!/usr/bin/env bash
+# tmux-copymode-color -- set the copy-mode accent (border + pill + COPY chip).
+#
+# The colour lives in ONE tmux option, @copy_mode_color, read live at every
+# render. While the active pane is in copy mode its border and Reactor Tag pill
+# take this colour instead of the orange bright, matching the COPY chip in the
+# status bar -- one hue for "I am scrolling / reading".
+#
+# Usage:
+#   tmux-copymode-color '#RRGGBB'   set it: live now AND persisted in tmux.conf
+#   tmux-copymode-color             print the current value
+#
+# Unlike tmux-pane/tmux-bar this is NOT a generator: it edits a single option
+# line, so there is no managed block and no regeneration. The pill and border
+# formats reference #{@copy_mode_color} and never bake the hex.
+set -euo pipefail
+
+# Resolve through the ~/.local/bin symlink to the real dotfiles/bin location,
+# so ../tmux/tmux.conf points at the actual config (portable: no readlink -f).
+src="${BASH_SOURCE[0]}"
+while [[ -L "$src" ]]; do
+  dir="$(cd -P "$(dirname "$src")" && pwd)"
+  src="$(readlink "$src")"
+  [[ "$src" != /* ]] && src="$dir/$src"
+done
+SCRIPT_DIR="$(cd -P "$(dirname "$src")" && pwd)"
+CONF="$(cd "$SCRIPT_DIR/../tmux" && pwd)/tmux.conf"
+
+if [[ $# -eq 0 ]]; then
+  if [[ -n "${TMUX:-}" ]]; then
+    tmux show -gv @copy_mode_color
+  else
+    grep -oE "@copy_mode_color '#[0-9a-fA-F]{6}'" "$CONF" | grep -oE "#[0-9a-fA-F]{6}"
+  fi
+  exit 0
+fi
+
+hex="$1"
+[[ "$hex" == \#* ]] || hex="#$hex"
+if ! [[ "$hex" =~ ^#[0-9a-fA-F]{6}$ ]]; then
+  echo "tmux-copymode-color: need a 6-digit hex like '#c8ff00', got '$1'" >&2
+  exit 2
+fi
+
+# Persist: rewrite the single option line in tmux.conf (in place, mode-preserved).
+if ! grep -q "set -g @copy_mode_color " "$CONF"; then
+  echo "tmux-copymode-color: no '@copy_mode_color' line in $CONF" >&2
+  exit 1
+fi
+tmp="$(mktemp "${CONF%/*}/.copymode.XXXXXX")"
+# Preserve the conf's own permissions across the atomic replace (BSD/macOS
+# chmod has no --reference, so read the octal mode with stat -f).
+perm="$(stat -f '%Lp' "$CONF" 2>/dev/null || echo 644)"
+sed "s|^set -g @copy_mode_color .*|set -g @copy_mode_color '$hex'|" "$CONF" > "$tmp"
+chmod "$perm" "$tmp"
+mv "$tmp" "$CONF"
+
+# Apply live if inside tmux -- lands the instant you next enter copy mode.
+live=""
+if [[ -n "${TMUX:-}" ]]; then
+  tmux set -g @copy_mode_color "$hex"
+  live="  -> live"
+else
+  live="  -> next tmux start"
+fi
+printf '  copy-mode accent: %s%s\n' "$hex" "$live"

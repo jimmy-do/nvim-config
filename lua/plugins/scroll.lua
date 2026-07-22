@@ -79,19 +79,38 @@ local function instant_page_scroll(keys)
   end
 end
 
+-- Smooth (animated) page scroll: feed <C-u>/<C-d> with snacks scroll left ON so
+-- the resulting WinScrolled is animated. Opposite of instant_page_scroll above.
+local function smooth_page_scroll(keys)
+  return function()
+    local count = vim.v.count > 0 and tostring(vim.v.count) or ""
+    vim.api.nvim_feedkeys(count .. termcode(keys), "nx", false)
+  end
+end
+
 return {
   {
     "folke/snacks.nvim",
     opts = function(_, opts)
       opts.scroll = vim.tbl_deep_extend("force", opts.scroll or {}, {
+        enabled = true,
         animate = {
-          duration = { step = 10, total = 180 },
-          easing = "outCubic",
+          -- step = ms per line, total = hard cap. Higher = more glide. A ~20-line
+          -- half-page (u/d) now rides ~15*20=300ms instead of the old 180 cap;
+          -- an 11j is ~165ms. outCubic eases out at the end for that slide feel.
+          duration = { step = 15, total = 450 },
+          -- linear = constant pacing between row hops. Reads more even than an
+          -- ease-out for continuous keyboard scrolling; ease-out is nicer for a
+          -- single settle but makes rapid repeats feel uneven.
+          easing = "linear",
         },
+        -- Used when you fire u/d or j/k in quick succession. Kept snappier than a
+        -- single press so rapid navigation stays responsive, but no longer an
+        -- instant snap -- it still glides.
         animate_repeat = {
-          delay = 60,
-          duration = { step = 4, total = 70 },
-          easing = "outCubic",
+          delay = 50,
+          duration = { step = 7, total = 140 },
+          easing = "linear",
         },
       })
       return opts
@@ -105,12 +124,11 @@ return {
       -- while <C-u> / <C-d> do undo and delete. The editing half of that swap is
       -- in lua/config/keymaps.lua -- both halves must move together.
       --
-      -- It has to be done HERE and not there, because the whole point of
-      -- instant_page_scroll is suppressing snacks' animation for a page jump. A
-      -- plain `u -> <C-u>` remap in keymaps.lua would reach the builtin and skip
-      -- this wrapper, and the page jump would animate again.
-      vim.keymap.set({ "n", "x" }, "u", instant_page_scroll("<C-u>"), { desc = "Page up" })
-      vim.keymap.set({ "n", "x" }, "d", instant_page_scroll("<C-d>"), { desc = "Page down" })
+      -- smooth_page_scroll feeds <C-u>/<C-d> with snacks scroll left ON, so the
+      -- half-page jump animates. (Swap to instant_page_scroll here if you ever
+      -- want u/d to jump instantly instead.)
+      vim.keymap.set({ "n", "x" }, "u", smooth_page_scroll("<C-u>"), { desc = "Page up (smooth)" })
+      vim.keymap.set({ "n", "x" }, "d", smooth_page_scroll("<C-d>"), { desc = "Page down (smooth)" })
     end,
   },
 }
