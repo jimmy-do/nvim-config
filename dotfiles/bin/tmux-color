@@ -51,16 +51,14 @@ STATE_DIR = os.environ.get("XDG_STATE_HOME", f"{HOME}/.local/state")
 INK = "#080808"          # knockout text on a lit slab -- never recolored
 DIM_SCALE = 0.48         # BRIGHT -> DIM
 SUNK_SCALE = 0.20        # BRIGHT -> scrollbar trough
-NUM_SCALE = 0.75         # pill colour -> the pane number's field
+NUM_SCALE = 1.00         # Toxic Core: one fully filled colour, cap to cap
 
 # Placeholders inside the templates. NOT str.format: tmux formats are full of
 # literal { } (#{?pane_active,...}) and would blow up on every brace.
 B, D, S, I = "@@B@@", "@@D@@", "@@S@@", "@@I@@"
-# The pane number's own background: the pill colour taken down 25%. It reads as
-# a field within the pill rather than a second shape, so the boundary is a
-# plain cell edge with no shear or half-round to get wrong -- which is what
-# killed every earlier two-tone version. The LEFT CAP takes this colour too, so
-# the field starts at the pill's rounded end instead of floating inside it.
+# The pane number shares the pill background for the Toxic Core treatment.
+# Keeping the placeholders makes a later split-field experiment reversible,
+# while NUM_SCALE=1.0 guarantees one uninterrupted filled capsule.
 NB, ND = "@@NB@@", "@@ND@@"
 
 # Chip edges, written as chr() -- a literal glyph in this source survives fine,
@@ -440,18 +438,13 @@ MODES = {
             # --- ONE colour decision, made once, used by cap + body + cap ---
             f'#{{?#{{||:#{{pane_dead}},'
             f'#{{m/r:^(ssh|mosh|sudo|doas|su)$,#{{pane_current_command}}}}}},'
-            f'#{{?pane_active,#[fg=#bf6300],#[fg=#5b3000]}},'
+            f'#{{?pane_active,#[fg=#FF8500],#[fg=#7a4000]}},'
             f'#{{?pane_active,#[fg={NB}],#[fg={ND}]}}}}'
             f'#{{?pane_zoomed_flag,{ZLCAP},{LCAP}}}'
-            # --- the number's own field: the pill colour at 90% ---
-            # A 10% step needs NO seam. That is the whole reason it works where
-            # the earlier two-tone versions did not: at this contrast the eye
-            # reads a field boundary, not two shapes that must be joined, so a
-            # plain cell edge is enough and there is no shear or half-round to
-            # get wrong. Ink stays the same on both, so the text never shifts.
+            # --- Toxic Core: number and label use one uninterrupted fill ---
             f'#{{?#{{||:#{{pane_dead}},'
             f'#{{m/r:^(ssh|mosh|sudo|doas|su)$,#{{pane_current_command}}}}}},'
-            f'#{{?pane_active,#[fg={I}#,bg=#bf6300#,bold],#[fg={I}#,bg=#5b3000#,bold]}},'
+            f'#{{?pane_active,#[fg={I}#,bg=#FF8500#,bold],#[fg={I}#,bg=#7a4000#,bold]}},'
             f'#{{?pane_active,#[fg={I}#,bg={NB}#,bold],#[fg={I}#,bg={ND}#,bold]}}}}'
             # No leading space: the rounded cap already gives the number a
             # curved left edge to sit against, so a space on top of it left
