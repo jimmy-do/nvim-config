@@ -83,6 +83,7 @@ NB, ND = "@@NB@@", "@@ND@@"
 # That is what keeps the two surfaces telling apart at a glance when they are
 # set to the same colour. Colour commands never touch these; edit here.
 LCAP, RCAP = chr(0xE0B6), chr(0xE0B4)                       # rounded: pane pill
+PANE_SEP = chr(0xE0B1)  # thin chevron: number field -> label, matches the starship pill
 # ZOOMED caps. A zoomed pane is the ONLY pane on screen, so the surface has to
 # say so with no neighbour to compare against -- the lit/unlit brightness step
 # that flags the active pane cannot work when nothing else is visible. Shape
@@ -375,7 +376,7 @@ MODES = {
             f'set -g window-status-current-style "bg=default,fg={B},bold"',
             f'set -g window-status-current-format "#[fg={B},bg=default]{SLANT_L}'
             f'#[fg={I},bg={B},bold] > #[fg={I},bg={B},bold]'
-            f'#{{E:@window_icon}} #I:#W#{{?window_zoomed_flag, {ZOOM},}} '
+            f'#{{E:@window_icon}} #I:#W '
             f'#[fg={B},bg=default,nobold]{SLANT_R}#[default]"',
         ],
     },
@@ -479,7 +480,9 @@ MODES = {
             f'#{{m/r:^(ssh|mosh|sudo|doas|su)$,#{{pane_current_command}}}}}},'
             f'#{{?pane_active,#[fg={I}#,bg=#FF8500#,bold],#[fg={I}#,bg=#7a4000#,bold]}},'
             f'#{{?pane_active,#[fg={I}#,bg={B}#,bold],#[fg={I}#,bg={D}#,bold]}}}}'
-            f' '
+            # thin chevron marks the number|label seam -- the flat colour
+            # edge alone read as no divider at all (see the reverted preview).
+            f'{PANE_SEP} '
             f'#{{?#{{E:@pane_icon}},#{{E:@pane_icon}} ,}}'
             # DEAD first, then ssh, then the ordinary label.
             f'#{{?pane_dead,{DEAD} exit #{{pane_dead_status}},'
