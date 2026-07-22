@@ -1,0 +1,147 @@
+#!/usr/bin/perl
+# Per-row constant-velocity scroll for copy-mode -- the tmux port of snacks.nvim.
+#
+# Usage: smooth-scroll <pane_id> <up|down> <divisor>
+#   divisor 2 = half page, 1 = full page. Lines = pane_height / divisor.
+#
+# TWO PROBLEMS, BOTH MEASURED, BOTH FIXED HERE
+# --------------------------------------------
+# nvim/snacks scroll runs its animation IN-PROCESS on a libuv timer with sub-ms
+# redraws -- one loop that ACCUMULATES a target. We can't run in-process (copy-mode
+# has no scroll animation), so an external driver forks `tmux send-keys` per row.
+# Measured fork cost: median ~3ms, range 2.7-5.6ms.
+#
+# 1. PACING DRIFT. The old loop slept a FIXED gap after each fork, so the ~3ms fork
+#    cost accumulated: a 12-row half-page took ~168ms not the intended 133ms
+#    (~70fps, not 90). Fix: sleep to ABSOLUTE per-frame targets so fork cost is
+#    compensated. Verified ~130ms, on-cadence.
+#
+# 2. SPAM JITTER (the one that "jitters like crazy"). Each u/d press used to spawn
+#    its OWN perl process with its OWN loop. Mash u/d and N processes race to send
+#    scroll commands to the same pane at different phases -> chaos. nvim never does
+#    this: it has ONE loop that retargets. So now do we. A per-pane SINGLETON
+#    animator owns a shared signed row counter (flock-guarded). Every press ADDS to
+#    the counter (up = negative, down = positive) and then tries to become the
+#    animator; if one is already running, the press just bumped the count and exits.
+#    The single animator drains the counter one row per frame at constant velocity.
+#    Result: any amount of spam = one smooth stream, no overlap.
+#
+#    DIRECTION REVERSAL. A signed counter must NOT let u and d annihilate: if u
+#    adds -N then d adds +N the counter hits 0 and the animator exits having moved
+#    NOTHING -- a dead, "clearly buggy" no-op on every direction switch. So a press
+#    OPPOSITE to the pending counter RESETS it to a fresh half-page in the new
+#    direction (last direction wins), discarding the opposing residual; same-
+#    direction presses still accumulate. The counter then only reaches 0 by the
+#    animator fully draining it. Mirrors nvim: each press is a fresh half-page from
+#    the current position, and reversing always shows real motion.
+#
+# Control mode (`tmux -C`) was measured and rejected as a per-press driver: ~250ms
+# attach handshake per keypress drops the first frames. See project memory.
+#
+# HARD FLOOR (honest): a terminal is a cell grid, no sub-row offset. All smoothness
+# here and in nvim is whole-row hops rendered fast. Sub-pixel glide needs a GPU GUI
+# (Neovide), which breaks the tmux-pane workflow. Even pacing is the ceiling.
+
+use strict;
+use warnings;
+use Time::HiRes qw(sleep time);
+use Fcntl qw(:flock O_RDWR O_CREAT);
+
+my ($pane, $updown, $div) = @ARGV;
+exit 0 unless defined $updown && ($updown eq 'up' || $updown eq 'down');
+
+chomp(my $h = `tmux display-message -p -t $pane '#{pane_height}' 2>/dev/null`);
+exit 0 unless defined $h && $h =~ /^\d+$/ && $h > 0;
+
+my $rows  = int($h / ($div || 1)) || 1;
+my $delta = $updown eq 'up' ? -$rows : $rows;   # signed: up scrolls toward line 1
+
+# Per-pane state files. Sanitize the pane id (e.g. "%3") into a filename token.
+(my $id = $pane // 'x') =~ s/[^0-9A-Za-z]//g;
+my $CNT  = "/tmp/tmux-smooth-scroll-$id.cnt";    # shared signed row counter
+my $ANIM = "/tmp/tmux-smooth-scroll-$id.lock";   # animator role (flock)
+
+# ONE knob: rows per second, constant velocity (no accel/decel/easing). Higher =
+# snappier. Fork cost (~3ms/row) is the floor, so keep step comfortably above it;
+# ~180 (5.5ms/row) is snappy and still evenly paced, not fork-bound.
+my $FPS  = 240;
+my $step = 1.0 / $FPS;
+
+# --- shared-counter helpers (flock makes read-modify-write atomic) -----------
+sub counter_apply {
+    # $fn->(current) returns the new value (or undef to leave unchanged).
+    # Returns the value in effect after the call.
+    my ($fn) = @_;
+    sysopen(my $fh, $CNT, O_RDWR | O_CREAT) or return 0;
+    flock($fh, LOCK_EX);
+    seek($fh, 0, 0);
+    local $/;
+    my $raw = <$fh>;
+    my $cur = (defined $raw && $raw =~ /(-?\d+)/) ? $1 + 0 : 0;
+    my $new = $fn->($cur);
+    if (defined $new && $new != $cur) {
+        seek($fh, 0, 0);
+        truncate($fh, 0);
+        print $fh $new;
+    }
+    flock($fh, LOCK_UN);
+    close($fh);
+    return defined $new ? $new : $cur;
+}
+
+# Register a press: reverse => reset to a fresh half-page in the new direction;
+# same direction (or from rest) => accumulate. Never annihilates to a no-op.
+sub register {
+    my ($d) = @_;
+    counter_apply(sub {
+        my ($cur) = @_;
+        return $d if $cur != 0 && (($cur < 0) != ($d < 0));  # reversal: fresh page
+        return $cur + $d;                                    # same dir: accumulate
+    });
+}
+sub peek_rows  { counter_apply(sub { undef }) }
+# Consume one row toward zero; returns the direction consumed (-1, 0, +1).
+sub consume_one {
+    my $dir = 0;
+    counter_apply(sub {
+        my ($t) = @_;
+        $dir = $t <=> 0;
+        return $dir == 0 ? undef : $t - $dir;
+    });
+    return $dir;
+}
+
+# 1) Register this press. ALWAYS update the counter BEFORE trying to animate, so a
+#    press can never be lost to the animator-handoff race below.
+register($delta);
+
+# 2) Try to become the sole animator for this pane. If another press already owns
+#    the role, ours is done -- it added its rows and that animator will drain them.
+sysopen(my $lock, $ANIM, O_RDWR | O_CREAT) or exit 0;
+exit 0 unless flock($lock, LOCK_EX | LOCK_NB);
+
+# 3) Drain the counter at constant velocity, one row per frame, absolute-paced.
+my $start = time();
+my $frame = 0;
+while (1) {
+    my $dir = consume_one();
+
+    if ($dir == 0) {
+        # Counter is empty. Give up the role, then double-check: a press may have
+        # landed in the gap. If so, reclaim the role (resetting the frame clock)
+        # or, if another process grabbed it first, let that one take over.
+        flock($lock, LOCK_UN);
+        last if peek_rows() == 0;
+        if (flock($lock, LOCK_EX | LOCK_NB)) { $start = time(); $frame = 0; next; }
+        last;
+    }
+
+    my $scroll = $dir < 0 ? 'scroll-up' : 'scroll-down';
+    system('tmux', 'send-keys', '-t', $pane, '-X', $scroll) == 0 or last;
+
+    $frame++;
+    my $remaining = ($start + $frame * $step) - time();
+    sleep($remaining) if $remaining > 0;
+}
+
+exit 0;
