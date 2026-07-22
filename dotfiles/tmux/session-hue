@@ -1,0 +1,21 @@
+#!/bin/bash
+# session-hue — give every session its own chip colour, deterministically.
+#
+# Sets the session-scoped @session_hue option for any session that lacks one,
+# hashing the session NAME into a curated neon set -- so the same session name
+# always lands on the same colour, across restarts and resurrect restores.
+# The tmux-chip generated block reads #{@session_hue} in the chip formats;
+# tmux resolves session scope first, then falls back to the global value that
+# `tmux-chip <color>` writes.
+#
+# Colours: bright enough to carry #080808 knockout text, saturated enough to
+# bloom, and none of the reserved semantic hues (MODE pink #FF2E97, copy lime,
+# blast-radius #FF8500).
+COLORS=('#00ffe1' '#00d5ff' '#5effcb' '#ffe14d' '#ffb347' '#ff5ec4')
+
+tmux list-sessions -F '#{session_name}' 2>/dev/null | while IFS= read -r name; do
+  cur=$(tmux show-options -t "$name" -qv @session_hue)
+  [ -n "$cur" ] && continue
+  h=$(printf %s "$name" | cksum | cut -d' ' -f1)
+  tmux set-option -t "$name" @session_hue "${COLORS[h % 6]}"
+done

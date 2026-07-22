@@ -235,7 +235,16 @@ MODES = {
             # baseline, and at dim it vanished into the terminal background.
             # (A truecolor gradient version was tried 2026-07-22 and rejected
             # as ugly -- flat is the look. Don't rebuild it.)
-            f'#[fg={B}]#[bg=default]#{{R:═,#{{client_width}}}}}}}}}}}}"',
+            #
+            # HUD, right-aligned OVER the rule: pane count, window count,
+            # client size -- dim, format-native only. NO #() here, ever: jobs
+            # inside this row's nested conditionals silently fail to render
+            # (the glow-rule lesson), so the HUD carries only what tmux can
+            # answer without a shell.
+            f'#[fg={B}]#[bg=default]#{{R:═,#{{client_width}}}}'
+            f'#[align=right]#[fg={D}]  #{{window_panes}} pane#{{?#{{>:#{{window_panes}},1}},s,}}'
+            f'  ·  #{{session_windows}} win  ·  #{{client_width}}×#{{client_height}}  '
+            f'}}}}}}}}"',
             # Right: kube context ╱ git branch ╱ clock. Labels dim, values
             # bright, dividers bright.
             # The kube context is rendered by a helper, not inlined, because it
@@ -386,15 +395,26 @@ MODES = {
             # the left, the only one in uppercase, and the only one that is lit
             # unconditionally. Shape was doing no work there, so both chips now
             # take the same shear and the bar reads as one cut.
-            f'set -g status-left "#[fg={I},bg={B},bold] '
+            # SESSION IDENTITY HUES: both chips draw their colour from the
+            # session-scoped @session_hue option, not from a baked hex. The
+            # session-hue script (hooked on session-created, and at config
+            # load, in tmux.conf below this block) assigns each session a
+            # deterministic colour from a curated neon set, so which-session-
+            # am-I-in is preattentive -- with the bloom shader, each session
+            # literally has its own aura. The line below sets the GLOBAL value
+            # of @session_hue, which tmux uses as the fallback for any session
+            # the script has not touched -- so `tmux-chip <color>` still works
+            # and now means "the default session colour".
+            f'set -g @session_hue "{B}"',
+            f'set -g status-left "#[fg={I},bg=#{{@session_hue}},bold] '
             f"#(echo '#{{session_name}}' | tr a-z A-Z) "
-            f'#[fg={B},bg=default,nobold]{SLANT_R}#[default] #{{prefix_highlight}} "',
+            f'#[fg=#{{@session_hue}},bg=default,nobold]{SLANT_R}#[default] #{{prefix_highlight}} "',
             # The active-window chip: sheared both ends, leading edge first.
-            f'set -g window-status-current-style "bg=default,fg={B},bold"',
-            f'set -g window-status-current-format "#[fg={B},bg=default]{SLANT_L}'
-            f'#[fg={I},bg={B},bold] > #[fg={I},bg={B},bold]'
+            f'set -g window-status-current-style "bg=default,fg=#{{@session_hue}},bold"',
+            f'set -g window-status-current-format "#[fg=#{{@session_hue}},bg=default]{SLANT_L}'
+            f'#[fg={I},bg=#{{@session_hue}},bold] > #[fg={I},bg=#{{@session_hue}},bold]'
             f'#{{E:@window_icon}} #I:#W '
-            f'#[fg={B},bg=default,nobold]{SLANT_R}#[default]"',
+            f'#[fg=#{{@session_hue}},bg=default,nobold]{SLANT_R}#[default]"',
         ],
     },
     "tmux-pane": {
