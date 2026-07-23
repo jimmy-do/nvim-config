@@ -749,10 +749,10 @@ end
 -- that would pin the colors and make the knobs appear dead on these groups.
 local theme_baseline_colors = {
   ["base16-tokyo-night-terminal-storm"] = {
-    ["@property.yaml"] = "#00ffff", -- fields (keys)
-    ["@punctuation.delimiter.yaml"] = "#00ffff", -- colons, commas
-    ["@punctuation.special.yaml"] = "#00ffff", -- list dashes, anchors
-    ["@punctuation.bracket"] = "#00ffff", -- [] {}
+    ["@property.yaml"] = "#717FAB", -- fields (keys)
+    ["@punctuation.delimiter.yaml"] = "#ff8c1a", -- colons, commas
+    ["@punctuation.special.yaml"] = "#ff8c1a", -- list dashes, anchors
+    ["@punctuation.bracket"] = "#f7ff00", -- [] {}
     ["@string.yaml"] = "#00ffff", -- values
     ["@comment"] = "#243745",
     ["Comment"] = "#243745",
