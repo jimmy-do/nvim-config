@@ -600,6 +600,7 @@ MODES = {
             # command. The override reads @pane_lines_bright; recolouring here
             # therefore still moves the focused divider.
             f'set -g @pane_lines_bright "{B}"',
+            f'set -g @pane_lines_dim "{D}"',
             # The scrollbar is a rule too: dim thumb on a sunk trough.
             f'set -g pane-scrollbars-style "bg={S},fg={D},width=1,pad=0"',
         ],
