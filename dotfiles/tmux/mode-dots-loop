@@ -29,7 +29,7 @@ tmux set-option -gq @prefix_highlight_animation_token "$token"
 
 frame=0
 shown=unset
-prev_active=-1
+prev_prefix=-1
 
 # Only touch tmux when the rendered value actually changes.
 write_dots() {
@@ -58,21 +58,29 @@ while :; do
       *'|01'*|*'|10'*|*'|11'*) active=1 ;;
       *)                       active=0 ;;
     esac
+    case "$state" in
+      *'|10'*|*'|11'*) prefix=1 ;;
+      *)               prefix=0 ;;
+    esac
   else
     # Server is up but nothing is attached, so list-clients told us nothing.
     # Keep checking the token directly, so a reload while detached still
     # retires this instance instead of leaking it.
     [ "$(tmux show-option -gqv @prefix_highlight_animation_token 2>/dev/null)" = "$token" ] || exit 0
     active=0
+    prefix=0
   fi
 
-  # FULL refresh (not -S) on prefix/copy state TRANSITIONS only. The WAIT chip
-  # lives on the status line, which -S covers -- but the prefix-pink border
-  # flash lives on PANE BORDERS, which tmux does not repaint on prefix changes
-  # by itself: the style evaluates correctly and nothing draws it. Transitions
-  # are rare (a press, a release), so this costs nothing at idle.
-  if [ "$active" -ne "$prev_active" ]; then
-    prev_active=$active
+  # Prefix TRANSITIONS publish @prefix_active and force a FULL refresh (not
+  # -S). Two reasons, both learned the hard way: #{client_prefix} does NOT
+  # evaluate in border styles (borders draw against the owner pane with no
+  # client context -- the same trap @copy_active exists for), so the border
+  # reads this hook-style flag instead; and tmux does not repaint borders on
+  # prefix changes by itself, so the refresh is what draws the flash at all.
+  # Transitions are rare (a press, a release) -- this costs nothing at idle.
+  if [ "$prefix" -ne "$prev_prefix" ]; then
+    prev_prefix=$prefix
+    tmux set-option -gq @prefix_active "$prefix"
     tmux list-clients -F '#{client_name}' 2>/dev/null | while IFS= read -r c; do
       tmux refresh-client -t "$c" 2>/dev/null
     done
