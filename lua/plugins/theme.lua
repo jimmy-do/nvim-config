@@ -747,20 +747,24 @@ end
 -- downstream -- :FgAdjust, :Sepia, the bg knobs -- then transforms them like any
 -- other theme color. This is deliberately NOT a re-apply-on-every-pass override:
 -- that would pin the colors and make the knobs appear dead on these groups.
-local theme_baseline_colors = {
-  ["base16-tokyo-night-terminal-storm"] = {
-    ["@property.yaml"] = "#717FAB", -- fields (keys)
-    ["@punctuation.delimiter.yaml"] = "#ff8c1a", -- colons, commas
-    ["@punctuation.special.yaml"] = "#ff8c1a", -- list dashes, anchors
-    ["@punctuation.bracket"] = "#f7ff00", -- [] {}
-    ["@string.yaml"] = "#00ffff", -- values
-    ["@comment"] = "#243745",
-    ["Comment"] = "#243745",
-  },
-}
+-- The baseline colours themselves live in lua/config/theme_baseline.lua and are
+-- re-read FRESH from disk on every apply (below), so editing a hex there + running
+-- :ThemeReload takes effect without restarting nvim. See that file's header.
+local theme_baseline_path = vim.fn.stdpath("config") .. "/lua/config/theme_baseline.lua"
+
+local function load_theme_baseline_colors()
+  local ok, tbl = pcall(dofile, theme_baseline_path)
+  if ok and type(tbl) == "table" then
+    return tbl
+  end
+  -- dofile failed (mid-edit syntax error, missing file): fall back to the
+  -- already-loaded module copy so a bad save doesn't wipe the baseline.
+  local ok2, mod = pcall(require, "config.theme_baseline")
+  return (ok2 and type(mod) == "table") and mod or {}
+end
 
 local function apply_theme_baseline_colors()
-  local baseline = theme_baseline_colors[vim.g.colors_name or ""]
+  local baseline = load_theme_baseline_colors()[vim.g.colors_name or ""]
   if not baseline then
     return
   end
