@@ -31,7 +31,8 @@
 # once terminated the quoted program.
 tmux list-panes -a -F '#{window_id} #{pane_id} #{pane_in_mode} #{pane_active} #{pane_left} #{pane_top} #{pane_right} #{pane_bottom}' |
 awk '
-{ win[NR]=$1; id[NR]=$2; mode[NR]=$3; act[NR]=$4; L[NR]=$5; T[NR]=$6; R[NR]=$7; B[NR]=$8; n=NR }
+{ win[NR]=$1; id[NR]=$2; mode[NR]=$3; act[NR]=$4; L[NR]=$5; T[NR]=$6; R[NR]=$7; B[NR]=$8; n=NR
+  if (R[NR] > maxR[$1]) maxR[$1] = R[NR] }
 END {
   # COL flags deliberately EXCLUDE copy panes that are also the active pane:
   # the native colour indicator already paints exactly the divider cells
@@ -42,8 +43,29 @@ END {
   # only for copy panes you have switched AWAY from, where flag granularity
   # is all tmux offers. ROW flags keep including everything: title rows are
   # outside the native indicator either way.
+  # @active_col fixes the tmux 2-pane divider split: the native colour indicator
+  # lights only the HALF of a shared divider nearest the active pane (probe-
+  # verified, tmux.conf ~L519), leaving the far half dim. So the col flag lights
+  # the WHOLE divider -- but ONLY when the whole divider genuinely abuts the
+  # active pane, so it never over-lights past panes the active pane never
+  # touches (the granularity trap that made the old per-pane flag wrong):
+  #   acol = 1  when  i itself is active (its own right divider is all its own),
+  #                   OR an active pane sits immediately RIGHT of i and fully
+  #                   spans i top-to-bottom (the divider is entirely shared),
+  #                   OR an active pane sits immediately LEFT of i and fully
+  #                   spans i AND i is an edge column (no right divider of its
+  #                   own to over-light). This last case covers the T-junction
+  #                   bug: when the active pane owns a full-height divider that
+  #                   borders TWO stacked panes, tmux draws the segment below
+  #                   the junction in the LOWER neighbours context, so that
+  #                   neighbour must also resolve bright or the far half stays
+  #                   dim. The edge-column guard keeps a 3-column middle divider
+  #                   from lighting when only the left column is focused.
+  # Any partial overlap leaves acol = 0 and defers to the native per-cell
+  # indicator, which is exact for asymmetric layouts (e.g. a 2x2 grid, where
+  # only the active panes own half of a column should light).
   for (i = 1; i <= n; i++) {
-    arow = act[i]; crow = mode[i]; ccol = (mode[i] && !act[i])
+    arow = act[i]; crow = mode[i]; ccol = (mode[i] && !act[i]); acol = act[i]
     if (act[i] && mode[i]) wmode[win[i]] = 1
     seen[win[i]] = 1
     for (j = 1; j <= n; j++) {
@@ -54,24 +76,32 @@ END {
       # j immediately ABOVE i: the title row i owns is the bottom edge of j
       above = (T[i] >= B[j] + 2 && T[i] <= B[j] + 3 && L[j] <= R[i] && R[j] >= L[i])
       if (act[j] && above) arow = 1
+      # active pane fully to the right of i AND fully spanning i -> whole divider lit
+      if (act[j] && right && T[j] <= T[i] && B[j] >= B[i]) acol = 1
+      # j immediately LEFT of i: the divider on i left edge is owned by j
+      left = (R[j] <= L[i] - 2 && R[j] >= L[i] - 3 && T[j] <= B[i] && B[j] >= T[i])
+      # active pane fully to the LEFT spanning i, and i is an edge column ->
+      # light i left divider from its own context (T-junction far-half fix)
+      if (act[j] && left && T[j] <= T[i] && B[j] >= B[i] && R[i] >= maxR[win[i]]) acol = 1
       if (mode[j]) {
         if (above) crow = 1
         if (right && !act[j]) ccol = 1
       }
     }
-    print "P", id[i], arow, crow, ccol
+    print "P", id[i], arow, crow, ccol, acol
   }
   # One line per window: is its ACTIVE pane in a mode? Read by the active
   # border style so the native active-adjacent cells go lime in place.
   for (w in seen) print "W", w, (w in wmode) ? 1 : 0
 }' |
-while read -r kind target a b c; do
+while read -r kind target a b c d; do
   if [ "$kind" = "W" ]; then
     tmux set-option -w -t "$target" @copy_active_w "$a"
   else
     tmux set-option -p -t "$target" @active_row "$a" \; \
          set-option -p -t "$target" @copy_row   "$b" \; \
-         set-option -p -t "$target" @copy_col   "$c"
+         set-option -p -t "$target" @copy_col   "$c" \; \
+         set-option -p -t "$target" @active_col "$d"
   fi
 done
 # Option writes do not force a border repaint on their own.
