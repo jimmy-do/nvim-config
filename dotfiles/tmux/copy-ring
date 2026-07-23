@@ -34,59 +34,52 @@ awk '
 { win[NR]=$1; id[NR]=$2; mode[NR]=$3; act[NR]=$4; L[NR]=$5; T[NR]=$6; R[NR]=$7; B[NR]=$8; n=NR
   if (R[NR] > maxR[$1]) maxR[$1] = R[NR] }
 END {
-  # COL flags deliberately EXCLUDE copy panes that are also the active pane:
-  # the native colour indicator already paints exactly the divider cells
-  # adjacent to the active pane, and the active style turns those lime via
-  # the @copy_active_w window flag emitted below -- per-cell truth. A col
-  # flag would light the whole owner divider past panes the copy pane never
-  # touches (the same granularity bug the active ring had). Col flags remain
-  # only for copy panes you have switched AWAY from, where flag granularity
-  # is all tmux offers. ROW flags keep including everything: title rows are
-  # outside the native indicator either way.
-  # @active_col fixes the tmux 2-pane divider split: the native colour indicator
-  # lights only the HALF of a shared divider nearest the active pane (probe-
-  # verified, tmux.conf ~L519), leaving the far half dim. So the col flag lights
-  # the WHOLE divider -- but ONLY when the whole divider genuinely abuts the
-  # active pane, so it never over-lights past panes the active pane never
-  # touches (the granularity trap that made the old per-pane flag wrong):
-  #   acol = 1  when  i itself is active (its own right divider is all its own),
-  #                   OR an active pane sits immediately RIGHT of i and fully
-  #                   spans i top-to-bottom (the divider is entirely shared),
-  #                   OR an active pane sits immediately LEFT of i and fully
-  #                   spans i AND i is an edge column (no right divider of its
-  #                   own to over-light). This last case covers the T-junction
-  #                   bug: when the active pane owns a full-height divider that
-  #                   borders TWO stacked panes, tmux draws the segment below
-  #                   the junction in the LOWER neighbours context, so that
-  #                   neighbour must also resolve bright or the far half stays
-  #                   dim. The edge-column guard keeps a 3-column middle divider
-  #                   from lighting when only the left column is focused.
-  # Any partial overlap leaves acol = 0 and defers to the native per-cell
-  # indicator, which is exact for asymmetric layouts (e.g. a 2x2 grid, where
-  # only the active panes own half of a column should light).
+  # COL flags (@active_col bright ring, @copy_col lime ring) share ONE rule so
+  # both rings light a shared divider along its WHOLE length. tmux native
+  # pane-border-indicators only lights the HALF of a shared divider nearest the
+  # active pane (probe-verified, tmux.conf ~L519), leaving the far half dim --
+  # the "only lights up halfway" bug, on the active ring AND the copy ring.
+  #
+  # The col flag lights the whole divider, but ONLY when it genuinely abuts the
+  # state pane, so it never over-lights past panes the state pane never touches
+  # (the granularity trap that killed the old per-pane flag). For state S (S =
+  # active for acol, S = in-copy-mode for ccol), the flag on pane i is set when:
+  #   1. i itself is in state S (its own right divider is all its own), OR
+  #   2. an S pane sits immediately RIGHT of i and fully spans it (whole divider
+  #      shared), OR
+  #   3. an S pane sits immediately LEFT of i, fully spans it, AND i is an edge
+  #      column (no right divider of its own to over-light).
+  # Case 3 is the T-junction fix: when the state pane owns a full-height divider
+  # bordering TWO stacked panes, tmux draws the segment below the junction in the
+  # LOWER neighbour context, so that neighbour must also resolve lit or the far
+  # half stays dim. The edge-column guard stops a 3-column middle divider from
+  # lighting when only the left column holds the state. Partial overlaps leave
+  # the flag 0 and defer to the native per-cell indicator (exact for 2x2 grids).
+  #
+  # ccol now INCLUDES active copy panes (it used to exclude them and lean on the
+  # native @copy_active_w half-light) -- unifying with acol is what makes the
+  # copy ring light fully while your focus is still inside the copy pane.
+  # ROW flags include everything: title rows are outside the native indicator.
   for (i = 1; i <= n; i++) {
-    arow = act[i]; crow = mode[i]; ccol = (mode[i] && !act[i]); acol = act[i]
+    arow = act[i]; crow = mode[i]; acol = act[i]; ccol = mode[i]
     if (act[i] && mode[i]) wmode[win[i]] = 1
     seen[win[i]] = 1
     for (j = 1; j <= n; j++) {
       if (j == i || win[j] != win[i]) continue
       if (!mode[j] && !act[j]) continue
-      # j immediately RIGHT of i: the divider i owns touches j
+      # j immediately RIGHT / LEFT / ABOVE of i, and whether j fully spans i,
+      # and whether i is an edge column (no right divider of its own).
       right = (L[j] >= R[i] + 2 && L[j] <= R[i] + 3 && T[j] <= B[i] && B[j] >= T[i])
-      # j immediately ABOVE i: the title row i owns is the bottom edge of j
+      left  = (R[j] <= L[i] - 2 && R[j] >= L[i] - 3 && T[j] <= B[i] && B[j] >= T[i])
       above = (T[i] >= B[j] + 2 && T[i] <= B[j] + 3 && L[j] <= R[i] && R[j] >= L[i])
-      if (act[j] && above) arow = 1
-      # active pane fully to the right of i AND fully spanning i -> whole divider lit
-      if (act[j] && right && T[j] <= T[i] && B[j] >= B[i]) acol = 1
-      # j immediately LEFT of i: the divider on i left edge is owned by j
-      left = (R[j] <= L[i] - 2 && R[j] >= L[i] - 3 && T[j] <= B[i] && B[j] >= T[i])
-      # active pane fully to the LEFT spanning i, and i is an edge column ->
-      # light i left divider from its own context (T-junction far-half fix)
-      if (act[j] && left && T[j] <= T[i] && B[j] >= B[i] && R[i] >= maxR[win[i]]) acol = 1
-      if (mode[j]) {
-        if (above) crow = 1
-        if (right && !act[j]) ccol = 1
-      }
+      span  = (T[j] <= T[i] && B[j] >= B[i])
+      edge  = (R[i] >= maxR[win[i]])
+      if (act[j]  && above)                 arow = 1
+      if (mode[j] && above)                 crow = 1
+      if (act[j]  && right && span)         acol = 1
+      if (act[j]  && left  && span && edge) acol = 1
+      if (mode[j] && right && span)         ccol = 1
+      if (mode[j] && left  && span && edge) ccol = 1
     }
     print "P", id[i], arow, crow, ccol, acol
   }
