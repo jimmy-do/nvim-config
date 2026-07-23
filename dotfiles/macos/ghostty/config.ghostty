@@ -5,7 +5,7 @@ background = #080806
 background-blur = 0
 background-opacity-cells = false
 foreground = #00b012
-# slates: 8892B0, 6C7D9C, 717FAB, 5D74B0, 496A87, 6075A1, 606bac, #49638f, #5c7d79, #77918e
+# slates: 8892B0, 6C7D9C, 717FAB, 5D74B0, 496A87, 6075A1, 606bac, #49638f, #5c7d79, #77918, #465481, #364b8b
 # term-greens: #00ff09, #00eb08, 00e600, #00c707
 
 # ---------- theme — uncomment ONE ----------

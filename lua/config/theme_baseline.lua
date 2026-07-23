@@ -13,7 +13,7 @@
 -- the bg knobs) then transforms them like any other theme colour.
 return {
   ["base16-tokyo-night-terminal-storm"] = {
-    ["@property.yaml"] = "#717FAB", -- fields (keys)
+    ["@property.yaml"] = "#364b8b", -- fields (keys)
     ["@punctuation.delimiter.yaml"] = "#ff8c1a", -- colons, commas
     ["@punctuation.special.yaml"] = "#ff8c1a", -- list dashes, anchors
     ["@punctuation.bracket"] = "#f7ff00", -- [] {}

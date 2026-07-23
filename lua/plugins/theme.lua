@@ -912,44 +912,44 @@ local function apply_active_indent_scope_highlights()
   end
 end
 
--- Storm only: pin the yaml key + string-value groups to their EXACT baseline
--- hexes AFTER the pipeline. The baseline in theme_baseline.lua is only the
--- pipeline INPUT, and storm runs fg_lightness=60, which on base16 wins over
--- native text and re-lightens every fg -- so #00ffff string values render as
--- #29ffff and the #717FAB property blue renders as #8391bc. This pins them back
--- to the exact values, same post-pipeline trick apply_active_indent_scope_highlights
--- uses for the #00ffff guide. Non-string value types (@number/@boolean/@null
--- kdragon captures) are deliberately NOT touched -- they keep tokyo-night orange.
+-- Storm only: stamp the yaml key/value groups with their EXACT baseline hexes
+-- ONCE per colorscheme load, after the deferred pipeline passes have settled.
 --
--- The exact hexes are read FRESH from theme_baseline.lua on every apply (same
--- dofile the baseline itself uses), so editing them there + :ThemeReload updates
--- both the pipeline input and this pin together -- no second copy to keep in sync,
--- no restart. Only these three groups are pinned; the rest of the baseline table
--- stays input-only.
-local STORM_YAML_EXACT_GROUPS = { "@property.yaml", "@string.yaml", "@string.yaml.value" }
+-- Why this exists: theme_baseline.lua holds the pipeline INPUT, and storm's
+-- per-theme default is fg_lightness=60 -- a NON-neutral knob applied at startup.
+-- So the pipeline transforms the baseline before it is ever seen (#00ffff renders
+-- as #29ffff, #364b8b as #3c5bba) and the hexes you typed never actually land.
+-- This re-stamps them so a fresh launch shows exactly what is in the baseline file.
+--
+-- This is NOT a perma-lock, and must never become one. It is called ONLY from the
+-- ColorScheme autocmd (startup, :ThemeReload, theme switch) -- never from
+-- apply_theme_adjustments(), which every knob command routes through. That is the
+-- whole distinction: :FgAdjust / :Sepia recompute from the cached pristine base and
+-- move these groups freely, because nothing re-stamps them afterwards. Guide lights
+-- and comments are the only groups meant to be immune to the knobs; yaml fields and
+-- values are meant to stay testable. Do NOT "helpfully" add this to the deferred
+-- pass list -- that is exactly what made the knobs look dead before.
+local STORM_YAML_STARTUP_GROUPS = { "@property.yaml", "@string.yaml", "@string.yaml.value" }
 
-local function apply_storm_yaml_exact_colors()
+local function apply_storm_yaml_startup_colors()
   if (vim.g.colors_name or "") ~= "base16-tokyo-night-terminal-storm" then
     return
   end
   local baseline = load_theme_baseline_colors()["base16-tokyo-night-terminal-storm"] or {}
-  for _, group in ipairs(STORM_YAML_EXACT_GROUPS) do
-    -- @string.yaml.value has no baseline entry of its own; it should follow the
-    -- @string.yaml value color, so fall back to that.
+  for _, group in ipairs(STORM_YAML_STARTUP_GROUPS) do
+    -- @string.yaml.value has no baseline entry of its own; it follows @string.yaml.
     local fg = baseline[group] or baseline["@string.yaml"]
-    if not fg then
-      goto continue
-    end
-    local ok, hl = pcall(vim.api.nvim_get_hl, 0, { name = group, link = false })
-    local adj = {}
-    if ok and type(hl) == "table" then
-      for k, v in pairs(hl) do
-        adj[k] = v
+    if fg then
+      local ok, hl = pcall(vim.api.nvim_get_hl, 0, { name = group, link = false })
+      local adj = {}
+      if ok and type(hl) == "table" then
+        for k, v in pairs(hl) do
+          adj[k] = v
+        end
       end
+      adj.fg = fg
+      pcall(vim.api.nvim_set_hl, 0, group, adj)
     end
-    adj.fg = fg
-    pcall(vim.api.nvim_set_hl, 0, group, adj)
-    ::continue::
   end
 end
 
@@ -1087,7 +1087,15 @@ local function adjust_all_highlights()
             hex = bg_base
             adj[key] = hex
           end
-          local native_text_channel = native_text_theme and (key == "fg" or key == "sp")
+          -- Same reasoning as the :FgAdjust branch further down: base16/tokyonight
+          -- keep their native fg only while the knob sits NEUTRAL. Once :Sepia is
+          -- set to a non-zero value the explicit knob wins, otherwise sepia would
+          -- silently no-op on exactly those themes -- which is why `:Sepia 60` did
+          -- nothing to yaml fields and values on storm. At the default sepia_amount=0
+          -- this is identical to the old behaviour, so theme defaults are untouched.
+          -- `sp` stays protected unconditionally, matching the HSL branch.
+          local native_text_channel = native_text_theme
+            and (key == "sp" or (key == "fg" and sepia_amount == 0))
           if key == "bg" and normalize_background ~= 0 then
             hex = normalize_bg_adjust(hex, normalize_background)
             adj[key] = hex
@@ -1527,7 +1535,6 @@ local function apply_theme_adjustments(refresh_base)
     apply_chrome_readability_fix()
     apply_editor_static_colors()
     apply_active_indent_scope_highlights()
-    apply_storm_yaml_exact_colors()
     apply_retrobox_string_lightness()
     apply_retrobox_variable_white()
     apply_editor_interaction_highlights()
@@ -1567,8 +1574,6 @@ local function apply_theme_adjustments(refresh_base)
   vim.defer_fn(apply_editor_static_colors, 650)
   vim.defer_fn(apply_active_indent_scope_highlights, 330)
   vim.defer_fn(apply_active_indent_scope_highlights, 655)
-  vim.defer_fn(apply_storm_yaml_exact_colors, 330)
-  vim.defer_fn(apply_storm_yaml_exact_colors, 655)
   vim.defer_fn(apply_retrobox_string_lightness, 325)
   vim.defer_fn(apply_retrobox_string_lightness, 650)
   vim.defer_fn(apply_retrobox_variable_white, 325)
@@ -2004,6 +2009,12 @@ return {
           apply_onedark_dark_purple_overrides()
           apply_onedark_dark_helm_trim_matches()
           apply_retrobox_string_lightness()
+          -- Storm yaml fields/values: stamp the exact baseline hexes ONCE, here on
+          -- the ColorScheme path only (startup / :ThemeReload / theme switch), at
+          -- 800ms so it lands after the last deferred pipeline pass (700ms).
+          -- Deliberately NOT inside apply_theme_adjustments -- keeping it out is what
+          -- leaves :FgAdjust and friends free to move these groups afterwards.
+          vim.defer_fn(apply_storm_yaml_startup_colors, 800)
         end,
       })
 
