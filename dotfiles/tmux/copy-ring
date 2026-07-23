@@ -33,8 +33,19 @@ tmux list-panes -a -F '#{window_id} #{pane_id} #{pane_in_mode} #{pane_active} #{
 awk '
 { win[NR]=$1; id[NR]=$2; mode[NR]=$3; act[NR]=$4; L[NR]=$5; T[NR]=$6; R[NR]=$7; B[NR]=$8; n=NR }
 END {
+  # COL flags deliberately EXCLUDE copy panes that are also the active pane:
+  # the native colour indicator already paints exactly the divider cells
+  # adjacent to the active pane, and the active style turns those lime via
+  # the @copy_active_w window flag emitted below -- per-cell truth. A col
+  # flag would light the whole owner divider past panes the copy pane never
+  # touches (the same granularity bug the active ring had). Col flags remain
+  # only for copy panes you have switched AWAY from, where flag granularity
+  # is all tmux offers. ROW flags keep including everything: title rows are
+  # outside the native indicator either way.
   for (i = 1; i <= n; i++) {
-    arow = act[i]; acol = act[i]; crow = mode[i]; ccol = mode[i]
+    arow = act[i]; crow = mode[i]; ccol = (mode[i] && !act[i])
+    if (act[i] && mode[i]) wmode[win[i]] = 1
+    seen[win[i]] = 1
     for (j = 1; j <= n; j++) {
       if (j == i || win[j] != win[i]) continue
       if (!mode[j] && !act[j]) continue
@@ -42,17 +53,26 @@ END {
       right = (L[j] >= R[i] + 2 && L[j] <= R[i] + 3 && T[j] <= B[i] && B[j] >= T[i])
       # j immediately ABOVE i: the title row i owns is the bottom edge of j
       above = (T[i] >= B[j] + 2 && T[i] <= B[j] + 3 && L[j] <= R[i] && R[j] >= L[i])
-      if (act[j])  { if (right) acol = 1; if (above) arow = 1 }
-      if (mode[j]) { if (right) ccol = 1; if (above) crow = 1 }
+      if (act[j] && above) arow = 1
+      if (mode[j]) {
+        if (above) crow = 1
+        if (right && !act[j]) ccol = 1
+      }
     }
-    print id[i], arow, acol, crow, ccol
+    print "P", id[i], arow, crow, ccol
   }
+  # One line per window: is its ACTIVE pane in a mode? Read by the active
+  # border style so the native active-adjacent cells go lime in place.
+  for (w in seen) print "W", w, (w in wmode) ? 1 : 0
 }' |
-while read -r pane arow acol crow ccol; do
-  tmux set-option -p -t "$pane" @active_row "$arow" \; \
-       set-option -p -t "$pane" @active_col "$acol" \; \
-       set-option -p -t "$pane" @copy_row   "$crow" \; \
-       set-option -p -t "$pane" @copy_col   "$ccol"
+while read -r kind target a b c; do
+  if [ "$kind" = "W" ]; then
+    tmux set-option -w -t "$target" @copy_active_w "$a"
+  else
+    tmux set-option -p -t "$target" @active_row "$a" \; \
+         set-option -p -t "$target" @copy_row   "$b" \; \
+         set-option -p -t "$target" @copy_col   "$c"
+  fi
 done
 # Option writes do not force a border repaint on their own.
 tmux list-clients -F '#{client_name}' 2>/dev/null | while IFS= read -r c; do

@@ -20,7 +20,9 @@ COLORS=('#00ffe1' '#00d5ff' '#5effcb' '#ffe14d' '#ffb347' '#ff5ec4')
 
 hue_for() {
   case "$(printf %s "$1" | tr 'A-Z' 'a-z')" in
-    *k8s*|*kube*|*gitops*|*argo*|*helm*) echo '#47abff' ;;  # kubernetes blue; brightened twice -- blue reads perceptually dim, #3d9eff had "no glow"
+    *k8s*|*kube*|*gitops*|*argo*|*helm*) echo '#00d5ff' ;;  # electric blue. PROVEN to glow on the swatch sheet -- its green channel
+                                                            # carries the luminance pure blue lacks. #3d9eff and #47abff both looked
+                                                            # dead ("NO GLOW"); do not drift back toward true k8s brand blue.
     *docker*|*container*)                echo '#0db7ed' ;;  # docker cyan
     *terraform*|*-tf-*|tf-*|*-tf)        echo '#b085ff' ;;  # terraform violet, brightened
     *)
