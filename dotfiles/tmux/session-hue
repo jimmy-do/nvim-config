@@ -1,21 +1,39 @@
 #!/bin/bash
-# session-hue — give every session its own chip colour, deterministically.
+# session-hue — give every session its own chip colour.
 #
-# Sets the session-scoped @session_hue option for any session that lacks one,
-# hashing the session NAME into a curated neon set -- so the same session name
-# always lands on the same colour, across restarts and resurrect restores.
+# SEMANTIC FIRST, hash second: a session named after a technology gets that
+# technology's colour (a k8s session should be k8s blue, not whatever tangerine
+# the hash lands on); anything unmatched gets a deterministic pick from the
+# curated neon set, so the same name always maps to the same colour across
+# restarts and resurrect restores.
+#
 # The tmux-chip generated block reads #{@session_hue} in the chip formats;
 # tmux resolves session scope first, then falls back to the global value that
-# `tmux-chip <color>` writes.
+# `tmux-chip <color>` writes. Runs recompute EVERY session every time (so
+# renames and rule changes take effect); to hand-pin a colour, set the pin:
+#   tmux set -t <session> @session_hue '#hex' \; set -t <session> @session_hue_pin 1
 #
 # Colours: bright enough to carry #080808 knockout text, saturated enough to
 # bloom, and none of the reserved semantic hues (MODE pink #FF2E97, copy lime,
 # blast-radius #FF8500).
 COLORS=('#00ffe1' '#00d5ff' '#5effcb' '#ffe14d' '#ffb347' '#ff5ec4')
 
+hue_for() {
+  case "$(printf %s "$1" | tr 'A-Z' 'a-z')" in
+    *k8s*|*kube*|*gitops*|*argo*|*helm*) echo '#3d9eff' ;;  # kubernetes blue, brightened for ink text
+    *docker*|*container*)                echo '#0db7ed' ;;  # docker cyan
+    *terraform*|*-tf-*|tf-*|*-tf)        echo '#b085ff' ;;  # terraform violet, brightened
+    *)
+      local h
+      h=$(printf %s "$1" | cksum | cut -d' ' -f1)
+      echo "${COLORS[h % 6]}" ;;
+  esac
+}
+
 tmux list-sessions -F '#{session_name}' 2>/dev/null | while IFS= read -r name; do
+  [ -n "$(tmux show-options -t "$name" -qv @session_hue_pin)" ] && continue
+  want=$(hue_for "$name")
   cur=$(tmux show-options -t "$name" -qv @session_hue)
-  [ -n "$cur" ] && continue
-  h=$(printf %s "$name" | cksum | cut -d' ' -f1)
-  tmux set-option -t "$name" @session_hue "${COLORS[h % 6]}"
+  [ "$cur" = "$want" ] && continue
+  tmux set-option -t "$name" @session_hue "$want"
 done
