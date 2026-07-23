@@ -29,6 +29,7 @@ tmux set-option -gq @prefix_highlight_animation_token "$token"
 
 frame=0
 shown=unset
+prev_active=-1
 
 # Only touch tmux when the rendered value actually changes.
 write_dots() {
@@ -63,6 +64,18 @@ while :; do
     # retires this instance instead of leaking it.
     [ "$(tmux show-option -gqv @prefix_highlight_animation_token 2>/dev/null)" = "$token" ] || exit 0
     active=0
+  fi
+
+  # FULL refresh (not -S) on prefix/copy state TRANSITIONS only. The WAIT chip
+  # lives on the status line, which -S covers -- but the prefix-pink border
+  # flash lives on PANE BORDERS, which tmux does not repaint on prefix changes
+  # by itself: the style evaluates correctly and nothing draws it. Transitions
+  # are rare (a press, a release), so this costs nothing at idle.
+  if [ "$active" -ne "$prev_active" ]; then
+    prev_active=$active
+    tmux list-clients -F '#{client_name}' 2>/dev/null | while IFS= read -r c; do
+      tmux refresh-client -t "$c" 2>/dev/null
+    done
   fi
 
   if [ "$active" -eq 1 ]; then
