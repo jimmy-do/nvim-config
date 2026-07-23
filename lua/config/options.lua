@@ -3,13 +3,19 @@
 -- Add any additional options here
 vim.opt.clipboard = "unnamedplus"
 
--- Keep every Neovim cursor shape blinking. Neovim's defaults only blink the
--- terminal-mode cursor, which looks like a frozen cursor with Ghostty's trail.
+-- The BLOCK cursor never blinks. A thick block is already unmissable, and blinking
+-- it just reads as flicker -- especially against Ghostty's cursor trail shader.
+-- The thin/underline shapes (insert, replace) still blink, since a 25%-wide bar is
+-- easy to lose on a busy line; that is what the blink is actually for.
+--
+-- Ghostty has its own `cursor-style-blink = true` in config.ghostty. Neovim's
+-- guicursor WINS while nvim is focused, so a shape with no blink flag here stays
+-- solid regardless of the Ghostty setting.
 vim.opt.guicursor = {
-  "n-v-c-sm:block-blinkwait500-blinkon500-blinkoff500",
+  "n-v-c-sm:block", -- normal/visual/command: solid block, no blink
   "i-ci-ve:ver25-blinkwait500-blinkon500-blinkoff500",
   "r-cr-o:hor20-blinkwait500-blinkon500-blinkoff500",
-  "t:block-blinkwait500-blinkon500-blinkoff500-TermCursor",
+  "t:block-TermCursor", -- terminal: solid block too
 }
 
 -- Use fzf-lua as LazyVim's main picker
