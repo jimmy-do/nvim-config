@@ -1,0 +1,98 @@
+#!/usr/bin/env zsh
+# Markdown -> ANSI renderer for tree-help.md.
+#
+# WHY NOT bat: bat highlights markdown, it does not render it -- the pipes of a
+# table, the ** of bold and the backticks of a code span all stay on screen, so
+# a help page reads as source code. glow/mdcat would render it but neither is
+# installed and a help popup is not worth a new dependency.
+#
+# So: syntax colouring AND the markup removed, from ~40 lines of awk. Handles
+# the subset tree-help.md actually uses -- h1/h2, tables, code spans, bold,
+# indented code blocks, rules.
+#
+# $1 = width to wrap prose at.
+
+cols=${1:-80}
+bright=$(tmux show -gv @ui-bright); bright=${bright:-#ff6a00}
+dim=$(tmux show -gv @ui-dim);       dim=${dim:-#7a3200}
+hex() { print -rn -- "38;2;$((16#${1[2,3]}));$((16#${1[4,5]}));$((16#${1[6,7]}))" }
+
+awk -v B="$(hex $bright)" -v D="$(hex $dim)" -v W="$cols" '
+  function esc(c) { return sprintf("%c[%sm", 27, c) }
+  function on(c)  { return esc(c) }
+  function off()  { return esc("0") }
+
+  # Code spans and bold: keep the emphasis, drop the punctuation. Code spans get
+  # the bright colour because in this document they are all keys or commands.
+  function inline(s) {
+    while (match(s, /`[^`]+`/))
+      s = substr(s, 1, RSTART - 1) on(B) substr(s, RSTART + 1, RLENGTH - 2) off() \
+          substr(s, RSTART + RLENGTH)
+    while (match(s, /\*\*[^*]+\*\*/))
+      s = substr(s, 1, RSTART - 1) esc("1") substr(s, RSTART + 2, RLENGTH - 4) esc("22") \
+          substr(s, RSTART + RLENGTH)
+    # Single * after ** so the bold pass has already consumed its own markers.
+    while (match(s, /\*[^*]+\*/))
+      s = substr(s, 1, RSTART - 1) esc("3") substr(s, RSTART + 1, RLENGTH - 2) esc("23") \
+          substr(s, RSTART + RLENGTH)
+    return s
+  }
+
+  # Printable width. Two things must not count: ANSI sequences, and the
+  # continuation bytes of multi-byte UTF-8 -- macOS awk length() counts bytes,
+  # so an em dash would otherwise be charged 3 columns and every line with one
+  # would wrap early.
+  function vis(s,  t) {
+    gsub(/\033\[[0-9;]*m/, "", s)
+    t = s; return length(s) - gsub(/[\200-\277]/, "", t)
+  }
+
+  # Prose is buffered so a paragraph reflows as a paragraph. Rendering line by
+  # line left a ragged leftover word on its own row for every source line.
+  function flush() { if (para != "") { wrap(inline(para)); para = "" } }
+
+  /^```/  { next }
+  /^---+$/ { flush(); print on(D) rule() off(); next }
+
+  /^# /   { flush(); h = substr($0, 3)
+            print ""
+            print esc("1") on(B) toupper(h) off()
+            print on(D) rule() off()
+            next }
+  /^## /  { flush(); print ""; print esc("1") on(B) substr($0, 4) off(); next }
+
+  # Tables: the header row and the |---| separator are structure, not content.
+  /^\|[- |]+\|$/ { next }
+  /^\| *key *\|/ { next }
+  /^\|/   { flush(); line = $0
+            sub(/^\| */, "", line); sub(/ *\|$/, "", line)
+            n = split(line, cell, / *\| */)
+            printf "  %s%-22s%s %s\n", on(B), strip(cell[1]), off(), inline(cell[2])
+            next }
+
+  # Bullets flush first and print alone: folding them into the prose buffer
+  # would run consecutive items together into one paragraph, and the leading *
+  # would survive into the italic pass as stray markup.
+  /^\* /   { flush(); print "  " on(B) "•" off() " " inline(substr($0, 3)); bullet = 1; next }
+  bullet && /^  +[^ ]/ { cont = $0; sub(/^ +/, "", cont); print "    " inline(cont); next }
+  { bullet = 0 }
+
+  /^    /  { flush(); print on(D) $0 off(); next }   # indented code block
+  /^$/     { flush(); print ""; next }
+  { para = (para == "" ? $0 : para " " $0) }
+  END { flush() }
+
+  function strip(s) { gsub(/`/, "", s); return s }
+  function rule(  i, r) { r = ""; for (i = 0; i < W - 2; i++) r = r "─"; return "  " r }
+
+  # Wrapping happens on the rendered string, so vis() is what decides the break.
+  function wrap(s,  n, i, out, w) {
+    n = split(s, word, " ")
+    out = "  "; w = 2
+    for (i = 1; i <= n; i++) {
+      if (w + vis(word[i]) + 1 > W - 2 && w > 2) { print out; out = "  "; w = 2 }
+      out = out word[i] " "; w += vis(word[i]) + 1
+    }
+    if (w > 2) print out
+  }
+'

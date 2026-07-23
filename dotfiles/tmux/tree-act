@@ -1,0 +1,47 @@
+#!/usr/bin/env zsh
+# Mutating actions for tree-pick, split out so fzf's --bind strings stay short
+# and so every failure has somewhere to report to.
+#
+# Feedback goes through `tmux display-message`, which paints the status line --
+# visible above the popup, so an action that cannot run says why instead of
+# silently doing nothing (fzf's execute-silent swallows stdout by design).
+#
+# $1 = verb, $2 = pane id (%N) of the highlighted row.
+
+verb=$1 pane=$2
+say() { tmux display-message "$1" }
+
+# Every join/swap needs the server-wide mark. Resolving it here means one error
+# message for all of them instead of three silent no-ops.
+marked=$(tmux display-message -p '#{?pane_marked_set,1,}')
+need_mark() {
+  [[ -n $marked ]] && return 0
+  say "no marked pane -- highlight one and press Alt-m first (? explains marks)"
+  return 1
+}
+
+case $verb in
+  join-v)
+    need_mark || exit 0
+    tmux join-pane -v -s '{marked}' -t "$pane" && say "joined the marked pane below" ;;
+  join-h)
+    need_mark || exit 0
+    tmux join-pane -h -s '{marked}' -t "$pane" && say "joined the marked pane beside" ;;
+  swap)
+    need_mark || exit 0
+    tmux swap-pane -s '{marked}' -t "$pane" && say "swapped with the marked pane" ;;
+  break)
+    # -d so breaking a pane out does not yank you to the new window while the
+    # chooser is still open.
+    tmux break-pane -d -s "$pane" && say "broke that pane out into its own window" ;;
+  kill)
+    tmux kill-pane -t "$pane" && say "killed that pane" ;;
+  rename)
+    # Not execute-silent: this one needs the terminal to prompt on.
+    win=$(tmux display-message -p -t "$pane" '#{window_name}')
+    print -n "rename window [$win]: "
+    read -r new
+    [[ -n $new ]] && tmux rename-window -t "$pane" "$new" ;;
+  *)
+    say "tree-act: unknown verb $verb" ;;
+esac

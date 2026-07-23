@@ -1,0 +1,40 @@
+#!/usr/bin/env zsh
+# Preview pane for tree-pick. Two states, one script, because fzf's ? key just
+# flips a flag file and calls refresh-preview -- the preview command itself
+# decides what to draw. That keeps the toggle stateless from fzf's side.
+#
+# $1 = pane id (%N) of the highlighted row. $TREE_STATE = flag file path.
+
+pane=$1
+cols=${FZF_PREVIEW_COLUMNS:-${COLUMNS:-80}}
+here=${0:A:h}
+
+if [[ -s $TREE_STATE ]]; then
+  # Help. bat gives it real syntax highlighting; --style=plain because fzf's own
+  # preview border is already the frame and bat's would stack a second one.
+  # tree-render, not bat: bat HIGHLIGHTS markdown but does not RENDER it, so
+  # every table pipe, ** and backtick stayed on screen and the help read as
+  # source. tree-render colours the same structure AND removes the markup, in
+  # the config's own @ui palette rather than a bundled theme.
+  "$here/tree-render" "$cols" < "$here/tree-help.md"
+  exit
+fi
+
+bright=$(tmux show -gv @ui-bright); bright=${bright:-#ff6a00}
+dim=$(tmux show -gv @ui-dim);       dim=${dim:-#7a3200}
+hex() { print -rn -- $'\033['"38;2;$((16#${1[2,3]}));$((16#${1[4,5]}));$((16#${1[6,7]}))m" }
+B=$(hex $bright); D=$(hex $dim); R=$'\033[0m'
+
+# -p prints instead of setting the status line; the format is one line so it can
+# be split rather than run four separate tmux calls.
+info=$(tmux display-message -p -t "$pane" \
+  '#{session_name}:#{window_index}.#{pane_index}	#{pane_current_command}	#{pane_current_path}	#{pane_width}x#{pane_height}	#{?pane_marked,󰐁 MARKED,}')
+IFS=$'\t' read -r target cmd ppath size marked <<< "$info"
+
+print -r -- "${B}${target}${R}  ${D}${cmd}  ${size}${R}  ${B}${marked}${R}"
+print -r -- "${D}${ppath/#$HOME/~}${R}"
+print -r -- "${D}$(printf '─%.0s' {1..$cols})${R}"
+
+# -e keeps the pane's own colours, -p prints to stdout. Trailing blank lines are
+# dropped so a mostly-idle shell does not preview as an empty box.
+tmux capture-pane -ep -t "$pane" | awk 'NF {last = NR} {line[NR] = $0} END {for (i = 1; i <= last; i++) print line[i]}'

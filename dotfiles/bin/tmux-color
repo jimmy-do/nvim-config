@@ -219,6 +219,18 @@ MODES = {
             f'#[fg={B}]o#[fg={D}] float  ·  #[fg={B}]g#[fg={D}] sesh  ·  '
             f'#[fg={B}]f#[fg={D}] find  ·  #[fg={B}]/#[fg={D}] keys  ·  '
             f'#[fg={B}]r#[fg={D}] resize  ·  #[fg={B}]t#[fg={D}] weather,'
+            # Tree mode (prefix-w): its keys are hardcoded in mode-tree.c and
+            # unrebindable, so this row is the only teachable surface -- the
+            # cheatsheet the tree itself cannot show. Checked BEFORE the
+            # generic pane_in_mode branch, which would otherwise claim the
+            # tree and show copy-mode keys (v/y) that mean nothing here.
+            f'#{{?#{{==:#{{pane_mode}},tree-mode}},'
+            f'#[fg={B}]Enter#[fg={D}] go  ·  #[fg={B}]+/-#[fg={D}] fold  ·  '
+            f'#[fg={B}]C-s#[fg={D}] search  ·  #[fg={B}]n/N#[fg={D}] match  ·  '
+            f'#[fg={B}]f#[fg={D}] filter  ·  #[fg={B}]m#[fg={D}] mark  ·  '
+            f'#[fg={B}]t#[fg={D}] tag  ·  #[fg={B}]:#[fg={D}] cmd  ·  '
+            f'#[fg={B}]x#[fg={D}] kill  ·  #[fg={B}]O#[fg={D}] sort  ·  '
+            f'#[fg={B}]S-↑↓#[fg={D}] move win  ·  #[fg={B}]q#[fg={D}] out,'
             # Copy mode: position takes BRIGHT because it is the live value.
             f'#{{?pane_in_mode,'
             f'#[fg={B}]#{{scroll_position}}#[fg={D}] up  ·  '
@@ -244,7 +256,7 @@ MODES = {
             f'#[fg={B}]#[bg=default]#{{R:═,#{{client_width}}}}'
             f'#[align=right]#[fg={D}]  #{{window_panes}} pane#{{?#{{>:#{{window_panes}},1}},s,}}'
             f'  ·  #{{session_windows}} win  ·  #{{client_width}}×#{{client_height}}  '
-            f'}}}}}}}}"',
+            f'}}}}}}}}}}"',
             # Right: kube context ╱ git branch ╱ clock. Labels dim, values
             # bright, dividers bright.
             # The kube context is rendered by a helper, not inlined, because it

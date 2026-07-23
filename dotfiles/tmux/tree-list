@@ -1,0 +1,70 @@
+#!/usr/bin/env zsh
+# Row source for tree-pick. One line per PANE on the whole server.
+#
+# Panes, not windows, because a pane row is strictly more information: choosing
+# one implies its window and its session, so a flat pane list does everything
+# choose-tree's three-level tree did while staying filterable by fzf in one pass.
+#
+# Output is TAB separated:  <pane_id>\t<coloured display columns>
+# tree-pick hides field 1 with --with-nth 2.., and hands it back to tmux as the
+# target of every action, so the display half can change freely.
+
+bright=$(tmux show -gv @ui-bright); bright=${bright:-#ff6a00}
+dim=$(tmux show -gv @ui-dim);       dim=${dim:-#7a3200}
+hex2ansi() { print -r -- $'\033['"38;2;$((16#${1[2,3]}));$((16#${1[4,5]}));$((16#${1[6,7]}))m" }
+B=$(hex2ansi $bright); D=$(hex2ansi $dim); R=$'\033[0m'
+
+# The session the chooser was invoked from, so it can be lit differently.
+here=$(tmux display-message -p '#{session_name}')
+
+# Label precedence, same order pane-border-format uses:
+#   @pane_name   this config's OSC-proof hand-set label (tmux.conf `bind <`)
+#   pane_title   what the program says it is doing -- for the claude panes this
+#                is the live task line, far more use than the command name
+#   command      fallback
+# The title is only trusted when it is not tmux's default (= the hostname), not
+# empty, and not a path, since tmux has no concept of an unset title.
+#
+# Flags: M marked, * active in its window, Z zoomed.
+tmux list-panes -a -F \
+'#{pane_id}	#{session_name}	#{window_index}:#{window_name}	#{pane_index}	#{?#{E:@pane_name},#{E:@pane_name},#{?#{||:#{==:#{pane_title},#{host}},#{||:#{==:#{pane_title},},#{m/r:^:?/,#{pane_title}}}},#{pane_current_command},#{pane_title}}}	#{?pane_marked,M,}#{?pane_active,*,}#{?pane_zoomed_flag,Z,}	#{pane_current_path}	#{pane_current_command}' \
+| awk -F'\t' -v B="$B" -v D="$D" -v R="$R" -v here="$here" '
+  { row[NR] = $0
+    if (length($2) > sw) sw = length($2)
+    if (length($3) > ww) ww = length($3)
+  }
+  END {
+    for (i = 1; i <= NR; i++) {
+      split(row[i], f, "\t")
+      id = f[1]; sess = f[2]; win = f[3]; pidx = f[4]; name = f[5]; flags = f[6]
+      cwd = f[7]; cmd = f[8]
+
+      # Ghostty shell integration rewrites the title to the current directory on
+      # every prompt, so an idle shell would list as "the-academy" -- a folder
+      # name where the reader expects a program. Title == basename(cwd) is that
+      # case exactly; fall back to the command. Titles a program actually set
+      # (claude writes its live task line there) do not match and survive.
+      # Ghostty prefixes the title with a nerd-font folder glyph, so the compare
+      # has to happen after that is stripped (pane-border-format does the same
+      # with s/^[^0-9A-Za-z] //).
+      base = cwd; sub(/^.*\//, "", base)
+      bare = name; sub(/^[^0-9A-Za-z]+[ ]*/, "", bare)
+      name = (bare == base || bare == "") ? cmd : bare
+
+      marked = index(flags, "M") > 0
+      active = index(flags, "*") > 0
+
+      badge = (marked ? "󰐁 MARK" : (active ? "●" : ""))
+      zoom  = (index(flags, "Z") ? " " : "")
+
+      line = (sess == here ? B : D) sprintf("%-*s", sw, sess) R
+      line = line "  " D sprintf("%-*s", ww, win) R
+      # Titles run long (a claude task line is a sentence). Cut at 34 with an
+      # ellipsis rather than letting the badge column drift right.
+      if (length(name) > 34) name = substr(name, 1, 33) "…"
+      line = line "  " D "│" R " " (active ? B : D) sprintf("%s %-34s", pidx, name) R
+      line = line "  " B badge zoom R
+
+      printf "%s\t%s\n", id, line
+    }
+  }'
