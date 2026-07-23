@@ -17,15 +17,6 @@ const float MAX_TRAIL_LENGTH = 0.2;
 const float THRESHOLD_MIN_DISTANCE = 1.5; // min distance to show trail (units of cursor width)
 const float BLUR = 2.0; // blur size in pixels (for antialiasing)
 
-// COMET FADE, take two (2026-07-22). Take one had three separate alpha
-// regimes -- a glow fringe, a quadratic body ramp, and the AA edge -- meeting
-// at visible seams, with a 0.10 tail floor that read as dirty grey behind a
-// near-white cursor. This is ONE continuous field: alpha eases along the
-// motion axis with smoothstep (C1-continuous, so there is no visible band
-// where the fade begins or ends), and the tail floor is high enough that the
-// tail still reads as the cursor colour, never as grey murk. No fringe layer.
-const float TAIL_FADE = 0.35; // alpha at the tail end; 1.0 at the head
-
 // --- CONSTANTS for easing functions ---
 const float PI = 3.14159265359;
 const float C1_BACK = 1.70158;
@@ -248,14 +239,7 @@ void mainImage(out vec4 fragColor, in vec2 fragCoord){
         float sdfTrail = mix(sdfTrail_diag, sdfTrail_rect, isStraightMove);
         
         vec4 trail = TRAIL_COLOR;
-
-        // Single continuous comet fade along the eased motion axis.
-        vec2 axis = head_center - tail_center;
-        float axisLen2 = max(dot(axis, axis), 1e-6);
-        float along = clamp(dot(vu - tail_center, axis) / axisLen2, 0.0, 1.0);
-        float comet = mix(TAIL_FADE, 1.0, smoothstep(0.0, 1.0, along));
-
-        float trailAlpha = clamp(antialising(sdfTrail), 0.0, 1.0) * comet;
+        float trailAlpha = clamp(antialising(sdfTrail), 0.0, 1.0);
 
         // Once the trail collapses onto the current cursor, its antialiased
         // fringe extends just beyond the cursor punch-hole below. Without an
