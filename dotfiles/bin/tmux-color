@@ -577,7 +577,23 @@ MODES = {
             f'#[fg={ION_BODY}#,bg=default#,nobold]}},'
             f'#{{?pane_active,#[fg={ION_BODY}#,bg=default#,nobold],'
             f'#[fg={ION_BODY}#,bg=default#,nobold]}}}}'
-            f'#{{?pane_zoomed_flag,{ZRCAP},{SLANT_R}}}#[default]"',
+            f'#{{?pane_zoomed_flag,{ZRCAP},{SLANT_R}}}'
+            # TITLE-ROW LINE FILL. The rest of this row used to be filled by
+            # tmux with pane-border-style -- the same option that colours the
+            # vertical dividers -- which made per-segment ring lighting
+            # impossible (a pane whose divider touched the active pane also
+            # lit its unrelated title row). The format now draws its own fill:
+            # an over-long run of ─ truncated at the pane edge, coloured by
+            # the ROW flags (@active_row/@copy_row, stamped by copy-ring),
+            # priority copy > active(+prefix cyan) > dim. All colours are
+            # LIVE option references (@pane_lines_*, @copy_mode_color,
+            # @prefix_highlight_bg), so this surface keeps tracking
+            # tmux-pane-lines and the chip without regeneration.
+            f'#{{?#{{@copy_row}},#[fg=#{{@copy_mode_color}}],'
+            f'#{{?#{{@active_row}},'
+            f'#{{?#{{@prefix_active}},#[fg=#{{@prefix_highlight_bg}}],#[fg=#{{@pane_lines_bright}}]}},'
+            f'#[fg=#{{@pane_lines_dim}}]}}}}'
+            f'#{{R:─,#{{pane_width}}}}#[default]"',
             f'set -g display-panes-colour        "{D}"',
             f'set -g display-panes-active-colour "{B}"',
             f'set -g clock-mode-colour           "{B}"',

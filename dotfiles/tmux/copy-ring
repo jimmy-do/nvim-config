@@ -1,47 +1,58 @@
 #!/bin/bash
-# copy-ring — stamp @copy_ring AND @active_ring on every pane, so the full
-# ring around a copy-mode pane (lime) and around the active pane (bright)
-# lights, per Jimmy's rule: every line TOUCHING a pane shows that pane's state.
+# copy-ring — stamp PER-SEGMENT ring flags on every pane so the ring around
+# the active pane (bright) and around copy-mode panes (lime) lights exactly
+# the lines that TOUCH the pane, per Jimmy's rule.
 #
-# OWNERSHIP MODEL (probe-verified, and the part that was wrong twice):
-#   - a VERTICAL divider is owned by the pane to its LEFT
-#   - a HORIZONTAL line, with pane-border-status top, is the LOWER pane's
-#     TITLE ROW -- owned by the pane BELOW it, not above. Even tmux's native
-#     colour indicator does not light a title row for the pane above it,
-#     which is why the active pane's bottom edge stayed dim.
+# WHY PER-SEGMENT, not one flag per pane (the bug this replaces): a pane owns
+# TWO kinds of border cells -- its TITLE ROW (the horizontal line above it;
+# with pane-border-status top a horizontal separator belongs to the pane
+# BELOW it) and its RIGHT DIVIDER (a vertical divider belongs to the pane to
+# its LEFT). Those two segments touch different neighbours, and a single
+# per-pane flag lit both together -- a pane whose divider touched the active
+# pane also lit its unrelated title row, so "all the lines light up".
 #
-# So pane P's ring flag must be set when P itself is in the state, OR when
-# the state pane sits immediately to P's RIGHT (P owns their divider), OR
-# immediately ABOVE P (P's title row is that pane's bottom edge).
+#   @active_row / @copy_row  -> the pane's TITLE ROW touches the state:
+#                               the pane itself is in the state, or the
+#                               state pane is immediately ABOVE it
+#   @active_col / @copy_col  -> the pane's RIGHT DIVIDER touches the state:
+#                               the pane itself is in the state, or the
+#                               state pane is immediately to its RIGHT
+#
+# The row flags are consumed by pane-border-format (which draws the title row
+# and now paints its own line fill); the col flags by the two border styles,
+# which after the format fill only ever colour vertical dividers.
 #
 # Adjacency gaps are 2 at rest, 3 while the modal scrollbar is showing
-# (copy mode shrinks the pane by one column, probe-verified) -- tolerate both.
+# (copy mode shrinks the pane by one column, probe-verified).
 #
 # Fired by hooks (tmux.conf): pane-mode-changed, window-layout-changed,
-# window-pane-changed (focus moves), and once at config load. Recomputes
-# every pane every run, so rings clear themselves.
+# window-pane-changed, and once at config load. Recomputes everything every
+# run, so flags clear themselves. NB: no apostrophes in awk comments -- one
+# once terminated the quoted program.
 tmux list-panes -a -F '#{window_id} #{pane_id} #{pane_in_mode} #{pane_active} #{pane_left} #{pane_top} #{pane_right} #{pane_bottom}' |
 awk '
 { win[NR]=$1; id[NR]=$2; mode[NR]=$3; act[NR]=$4; L[NR]=$5; T[NR]=$6; R[NR]=$7; B[NR]=$8; n=NR }
 END {
   for (i = 1; i <= n; i++) {
-    cring = mode[i]; aring = act[i]
+    arow = act[i]; acol = act[i]; crow = mode[i]; ccol = mode[i]
     for (j = 1; j <= n; j++) {
       if (j == i || win[j] != win[i]) continue
       if (!mode[j] && !act[j]) continue
-      touch = 0
-      # j immediately RIGHT of i: i owns the vertical divider between them
-      if (L[j] >= R[i] + 2 && L[j] <= R[i] + 3 && T[j] <= B[i] && B[j] >= T[i]) touch = 1
-      # j immediately ABOVE i: i owns its title row = the bottom edge of j
-      if (T[i] >= B[j] + 2 && T[i] <= B[j] + 3 && L[j] <= R[i] && R[j] >= L[i]) touch = 1
-      if (touch) { if (mode[j]) cring = 1; if (act[j]) aring = 1 }
+      # j immediately RIGHT of i: the divider i owns touches j
+      right = (L[j] >= R[i] + 2 && L[j] <= R[i] + 3 && T[j] <= B[i] && B[j] >= T[i])
+      # j immediately ABOVE i: the title row i owns is the bottom edge of j
+      above = (T[i] >= B[j] + 2 && T[i] <= B[j] + 3 && L[j] <= R[i] && R[j] >= L[i])
+      if (act[j])  { if (right) acol = 1; if (above) arow = 1 }
+      if (mode[j]) { if (right) ccol = 1; if (above) crow = 1 }
     }
-    print id[i], cring, aring
+    print id[i], arow, acol, crow, ccol
   }
 }' |
-while read -r pane cring aring; do
-  tmux set-option -p -t "$pane" @copy_ring "$cring" \; \
-       set-option -p -t "$pane" @active_ring "$aring"
+while read -r pane arow acol crow ccol; do
+  tmux set-option -p -t "$pane" @active_row "$arow" \; \
+       set-option -p -t "$pane" @active_col "$acol" \; \
+       set-option -p -t "$pane" @copy_row   "$crow" \; \
+       set-option -p -t "$pane" @copy_col   "$ccol"
 done
 # Option writes do not force a border repaint on their own.
 tmux list-clients -F '#{client_name}' 2>/dev/null | while IFS= read -r c; do
