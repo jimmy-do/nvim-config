@@ -17,16 +17,14 @@ const float MAX_TRAIL_LENGTH = 0.2;
 const float THRESHOLD_MIN_DISTANCE = 1.5; // min distance to show trail (units of cursor width)
 const float BLUR = 2.0; // blur size in pixels (for antialiasing)
 
-// COMET UPGRADE 2026-07-22. The trail used to be a flat, uniform-alpha slab.
-// Two additions make it read as a light streak instead of a smear:
-//   TAIL_FADE     alpha at the tail end; alpha ramps quadratically toward
-//                 full at the head, like a comet losing its dust
-//   GLOW_PX/STR   a soft fringe outside the body -- and because the trail
-//                 carries the cursor colour (saturated), the terminal's
-//                 sat-gated bloom shader amplifies it into genuine glow
-const float TAIL_FADE = 0.10;
-const float GLOW_PX = 14.0;      // fringe reach in pixels
-const float GLOW_STRENGTH = 0.45;
+// COMET FADE, take two (2026-07-22). Take one had three separate alpha
+// regimes -- a glow fringe, a quadratic body ramp, and the AA edge -- meeting
+// at visible seams, with a 0.10 tail floor that read as dirty grey behind a
+// near-white cursor. This is ONE continuous field: alpha eases along the
+// motion axis with smoothstep (C1-continuous, so there is no visible band
+// where the fade begins or ends), and the tail floor is high enough that the
+// tail still reads as the cursor colour, never as grey murk. No fringe layer.
+const float TAIL_FADE = 0.35; // alpha at the tail end; 1.0 at the head
 
 // --- CONSTANTS for easing functions ---
 const float PI = 3.14159265359;
@@ -251,14 +249,11 @@ void mainImage(out vec4 fragColor, in vec2 fragCoord){
         
         vec4 trail = TRAIL_COLOR;
 
-        // Comet fade: alpha ramps from TAIL_FADE at the tail to full at the
-        // head, by projecting this fragment onto the animated motion axis.
-        // head_center/tail_center are already the eased endpoints, so the
-        // ramp tracks the animation for straight and diagonal moves alike.
+        // Single continuous comet fade along the eased motion axis.
         vec2 axis = head_center - tail_center;
         float axisLen2 = max(dot(axis, axis), 1e-6);
         float along = clamp(dot(vu - tail_center, axis) / axisLen2, 0.0, 1.0);
-        float comet = mix(TAIL_FADE, 1.0, along * along);
+        float comet = mix(TAIL_FADE, 1.0, smoothstep(0.0, 1.0, along));
 
         float trailAlpha = clamp(antialising(sdfTrail), 0.0, 1.0) * comet;
 
@@ -266,15 +261,7 @@ void mainImage(out vec4 fragColor, in vec2 fragCoord){
         // fringe extends just beyond the cursor punch-hole below. Without an
         // explicit end fade that fringe survives as a tiny mark whenever the
         // cursor blinks off, most noticeably on an otherwise empty line.
-        float endFade = 1.0 - smoothstep(0.92, 1.0, progress);
-        trailAlpha *= endFade;
-
-        // Soft glow fringe outside the body, drawn first so the body paints
-        // over its inner edge. Comet- and end-faded like the body.
-        float glowReach = normalize(vec2(GLOW_PX, GLOW_PX), 0.).x;
-        float glowAlpha = (1.0 - smoothstep(0.0, glowReach, sdfTrail))
-                        * GLOW_STRENGTH * comet * endFade;
-        newColor = mix(newColor, trail, clamp(glowAlpha, 0.0, 1.0));
+        trailAlpha *= 1.0 - smoothstep(0.92, 1.0, progress);
 
         newColor = mix(newColor, trail, trailAlpha);
 

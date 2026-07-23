@@ -20,7 +20,7 @@ COLORS=('#00ffe1' '#00d5ff' '#5effcb' '#ffe14d' '#ffb347' '#ff5ec4')
 
 hue_for() {
   case "$(printf %s "$1" | tr 'A-Z' 'a-z')" in
-    *k8s*|*kube*|*gitops*|*argo*|*helm*) echo '#3d9eff' ;;  # kubernetes blue, brightened for ink text
+    *k8s*|*kube*|*gitops*|*argo*|*helm*) echo '#47abff' ;;  # kubernetes blue; brightened twice -- blue reads perceptually dim, #3d9eff had "no glow"
     *docker*|*container*)                echo '#0db7ed' ;;  # docker cyan
     *terraform*|*-tf-*|tf-*|*-tf)        echo '#b085ff' ;;  # terraform violet, brightened
     *)

@@ -211,6 +211,13 @@ void mainImage(out vec4 fragColor, in vec2 fragCoord)
             float lift = neonDimBoost * (1.0 - tmax) * smoothstep(0.60, 0.90, tsat);
             float w = smoothstep(neonBloomSatGateLo, neonBloomSatGateHi, tsat)
                     * min(tmax + lift, 1.0);
+            // Blue compensation: the eye sees blue light at a fraction of
+            // the brightness of equally driven warm hues, so blue halos
+            // vanished ("no glow" on the k8s-blue session chip) while gold
+            // and turquoise radiated. Boost blue-DOMINANT emitters toward
+            // perceptual parity; warm and balanced hues are untouched.
+            float blueBias = clamp(tapc.b - max(tapc.r, tapc.g), 0.0, 1.0);
+            w *= 1.0 + 0.9 * blueBias;
             neon += tapc * w * g;
             wsum += w * g;
         }
