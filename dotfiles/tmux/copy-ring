@@ -1,0 +1,44 @@
+#!/bin/bash
+# copy-ring — stamp @copy_ring on every pane whose owned border cells touch a
+# pane in copy mode, so the FULL RING around a copy-mode pane lights.
+#
+# THE PROBLEM THIS SOLVES. Border cells are drawn with the style format
+# evaluated against the cell's OWNER pane (the left/upper pane of a shared
+# divider). A pane's ring is therefore drawn by SEVERAL owners: the pane
+# itself (its top border and its right/bottom dividers) and its left/upper
+# neighbours (the dividers they own that touch it). #{pane_in_mode} lights
+# only the segments the copy pane owns -- the neighbours' segments cannot see
+# its mode. This script gives them eyes: each pane gets @copy_ring=1 iff
+#   - it is in a mode itself, OR
+#   - the pane immediately RIGHT of it (left edge = right edge + 2, vertical
+#     ranges overlapping) is in a mode, OR
+#   - the pane immediately BELOW it (same, transposed) is in a mode
+# ...because those are exactly the neighbours whose shared divider this pane
+# owns. Border styles read #{@copy_ring}; pane-level options resolve against
+# the owner, so every segment of the ring lights.
+#
+# Fired by the pane-mode-changed and window-layout-changed hooks (tmux.conf)
+# and once at config load. Recomputes every pane every run, so rings clear
+# themselves; runs are rare (mode enter/exit, layout change), cost ~nothing.
+tmux list-panes -a -F '#{window_id} #{pane_id} #{pane_in_mode} #{pane_left} #{pane_top} #{pane_right} #{pane_bottom}' |
+awk '
+{ win[NR]=$1; id[NR]=$2; mode[NR]=$3; L[NR]=$4; T[NR]=$5; R[NR]=$6; B[NR]=$7; n=NR }
+END {
+  for (i = 1; i <= n; i++) {
+    ring = mode[i]
+    if (!ring) for (j = 1; j <= n; j++) {
+      if (win[j] != win[i] || !mode[j]) continue
+      # j immediately right of i, sharing the divider i owns. The gap is 2
+      # (one border column) at rest but 3 while a MODAL SCROLLBAR is showing
+      # -- copy mode shrinks the pane by one column, verified by probe -- so
+      # adjacency tolerates both. Same for the vertical case.
+      if (L[j] >= R[i] + 2 && L[j] <= R[i] + 3 && T[j] <= B[i] && B[j] >= T[i]) { ring = 1; break }
+      # j immediately below i, sharing the divider i owns
+      if (T[j] >= B[i] + 2 && T[j] <= B[i] + 3 && L[j] <= R[i] && R[j] >= L[i]) { ring = 1; break }
+    }
+    print id[i], ring
+  }
+}' |
+while read -r pane ring; do
+  tmux set-option -p -t "$pane" @copy_ring "$ring"
+done
