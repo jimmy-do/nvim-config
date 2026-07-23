@@ -912,6 +912,47 @@ local function apply_active_indent_scope_highlights()
   end
 end
 
+-- Storm only: pin the yaml key + string-value groups to their EXACT baseline
+-- hexes AFTER the pipeline. The baseline in theme_baseline.lua is only the
+-- pipeline INPUT, and storm runs fg_lightness=60, which on base16 wins over
+-- native text and re-lightens every fg -- so #00ffff string values render as
+-- #29ffff and the #717FAB property blue renders as #8391bc. This pins them back
+-- to the exact values, same post-pipeline trick apply_active_indent_scope_highlights
+-- uses for the #00ffff guide. Non-string value types (@number/@boolean/@null
+-- kdragon captures) are deliberately NOT touched -- they keep tokyo-night orange.
+--
+-- The exact hexes are read FRESH from theme_baseline.lua on every apply (same
+-- dofile the baseline itself uses), so editing them there + :ThemeReload updates
+-- both the pipeline input and this pin together -- no second copy to keep in sync,
+-- no restart. Only these three groups are pinned; the rest of the baseline table
+-- stays input-only.
+local STORM_YAML_EXACT_GROUPS = { "@property.yaml", "@string.yaml", "@string.yaml.value" }
+
+local function apply_storm_yaml_exact_colors()
+  if (vim.g.colors_name or "") ~= "base16-tokyo-night-terminal-storm" then
+    return
+  end
+  local baseline = load_theme_baseline_colors()["base16-tokyo-night-terminal-storm"] or {}
+  for _, group in ipairs(STORM_YAML_EXACT_GROUPS) do
+    -- @string.yaml.value has no baseline entry of its own; it should follow the
+    -- @string.yaml value color, so fall back to that.
+    local fg = baseline[group] or baseline["@string.yaml"]
+    if not fg then
+      goto continue
+    end
+    local ok, hl = pcall(vim.api.nvim_get_hl, 0, { name = group, link = false })
+    local adj = {}
+    if ok and type(hl) == "table" then
+      for k, v in pairs(hl) do
+        adj[k] = v
+      end
+    end
+    adj.fg = fg
+    pcall(vim.api.nvim_set_hl, 0, group, adj)
+    ::continue::
+  end
+end
+
 -- Split dividers in the same cyan as the indent scope guide, so nvim splits and
 -- tmux pane borders are one continuous line. bg is cleared to the window bg so
 -- the divider is a hairline, not a filled bar.
@@ -1486,6 +1527,7 @@ local function apply_theme_adjustments(refresh_base)
     apply_chrome_readability_fix()
     apply_editor_static_colors()
     apply_active_indent_scope_highlights()
+    apply_storm_yaml_exact_colors()
     apply_retrobox_string_lightness()
     apply_retrobox_variable_white()
     apply_editor_interaction_highlights()
@@ -1525,6 +1567,8 @@ local function apply_theme_adjustments(refresh_base)
   vim.defer_fn(apply_editor_static_colors, 650)
   vim.defer_fn(apply_active_indent_scope_highlights, 330)
   vim.defer_fn(apply_active_indent_scope_highlights, 655)
+  vim.defer_fn(apply_storm_yaml_exact_colors, 330)
+  vim.defer_fn(apply_storm_yaml_exact_colors, 655)
   vim.defer_fn(apply_retrobox_string_lightness, 325)
   vim.defer_fn(apply_retrobox_string_lightness, 650)
   vim.defer_fn(apply_retrobox_variable_white, 325)
