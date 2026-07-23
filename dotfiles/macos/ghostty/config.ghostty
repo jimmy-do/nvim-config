@@ -319,8 +319,13 @@ adjust-cell-width = 0%
 
 cursor-style = block
 cursor-style-blink = true
-cursor-color = #c8fff4
-cursor-text = #151515
+# Matrix green, a touch lighter than the #00ff41 matrix font. Chosen over the
+# old near-white #c8fff4 because the cursor colour IS the trail colour, and a
+# near-white trail fading over black passes through grey (banded, hard to
+# smooth); green keeps its hue the whole fade -- lighter green to darker green,
+# never grey. Green also carries luminance, so the trail's bloom glows.
+cursor-color = #5cff8a
+cursor-text = #04140a
 shell-integration-features = no-cursor
 
 window-decoration = auto
