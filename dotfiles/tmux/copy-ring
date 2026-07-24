@@ -73,13 +73,44 @@ END {
       left  = (R[j] <= L[i] - 2 && R[j] >= L[i] - 3 && T[j] <= B[i] && B[j] >= T[i])
       above = (T[i] >= B[j] + 2 && T[i] <= B[j] + 3 && L[j] <= R[i] && R[j] >= L[i])
       span  = (T[j] <= T[i] && B[j] >= B[i])
+      # STRICT span: j reaches BEYOND i on at least one side, so a stacked
+      # sibling shares the divider column and a real T-junction exists. When j
+      # matches i exactly (a plain side-by-side split, one pane each side of the
+      # divider) there is NO junction: the divider is wholly owned by the LEFT
+      # pane and already lit by that panes own col flag, so the edge-column
+      # guard must NOT fire. It used to fire on equal extents too, stamping ccol
+      # on the right pane; if that pane was ALSO the active pane, pane-active-
+      # border-style (which greens on copy_col) then lit its WHOLE ring lime -- a
+      # non-copy active pane glowing green next to a copy pane. (bug 2026-07-24)
+      strict = (T[j] < T[i] || B[j] > B[i])
       edge  = (R[i] >= maxR[win[i]])
-      if (act[j]  && above)                 arow = 1
-      if (mode[j] && above)                 crow = 1
-      if (act[j]  && right && span)         acol = 1
-      if (act[j]  && left  && span && edge) acol = 1
-      if (mode[j] && right && span)         ccol = 1
-      if (mode[j] && left  && span && edge) ccol = 1
+      # The title row is a SINGLE-COLOUR fill spanning the whole pane width
+      # (pane-border-format draws one run of the pane_width) -- it cannot be
+      # half lime / half dim. So the neighbour above only lends its state when
+      # it FULLY spans this pane (a real full-width lid); a partial overlap (a
+      # narrower copy pane sitting above one side, e.g. top-left over a wide
+      # bottom pane) would otherwise light the WHOLE line and over-claim the
+      # half that borders a non-copy pane. Partial -> dim, not fully lit.
+      # (bug 2026-07-24: bottom line fully green under a half-width copy pane)
+      hspan = (L[j] <= L[i] && R[j] >= R[i])
+      if (act[j]  && above && hspan)                  arow = 1
+      if (mode[j] && above && hspan)                  crow = 1
+      if (act[j]  && right && span)                   acol = 1
+      # ACTIVE far-half: tmux native pane-border-indicator SPLITS a shared
+      # divider and draws the half away from the active pane in the NEIGHBOUR
+      # context, so that neighbour must carry acol or the far half stays dim
+      # (the "only lights halfway" bug). No strict here: this is needed even for
+      # equal-height side-by-side panes, where the far half is the whole other
+      # side of the divider.
+      if (act[j]  && left  && span && edge)           acol = 1
+      # COPY far-half needs NO neighbour flag: copy mode has no native indicator,
+      # so the divider is drawn wholly in its OWNER (left pane) context and the
+      # copy pane own ccol lights all of it. The neighbour guard is therefore
+      # only wanted for a genuine T-junction (strict span -> a stacked sibling
+      # exists). Firing it on an equal-height neighbour that is ALSO the active
+      # pane made pane-active-border-style green that panes whole ring. (strict)
+      if (mode[j] && right && span)                   ccol = 1
+      if (mode[j] && left  && span && strict && edge) ccol = 1
     }
     print "P", id[i], arow, crow, ccol, acol
   }
