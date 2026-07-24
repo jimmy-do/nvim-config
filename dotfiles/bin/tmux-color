@@ -75,6 +75,13 @@ NB, ND = "@@NB@@", "@@ND@@"
 # no regeneration. It carries no @@ token, so build_block() leaves it untouched.
 CM = "#{@copy_mode_color}"
 
+# The active chip's fill. Normally this is just the session hue; during a
+# flicker, chip-flicker sets @session_hue_lit for a few frames and the chip
+# follows it down and back. The conditional means the override is OPTIONAL --
+# between flickers the option is unset and this resolves to the flat hue, so
+# killing the script leaves the chip exactly as it was before it existed.
+LIT = "#{?@session_hue_lit,#{@session_hue_lit},#{@session_hue}}"
+
 # Chip edges, written as chr() -- a literal glyph in this source survives fine,
 # but it is invisible in most diffs/editors, and a cap silently dropped from a
 # template turns a shaped chip into a bare slab. Naming them keeps that from
@@ -291,6 +298,13 @@ MODES = {
             # divider. The ╱ rails in status-right are left alone on purpose --
             # those separate VALUES, not chips, and a chip edge there would imply
             # a boundary that is not one.
+            # Exported so another surface can borrow this one's pair without
+            # baking a hex -- the same reason tmux-pane-lines exports
+            # @pane_lines_bright/@pane_lines_dim. Nothing reads these today; a
+            # tab style that repaints the inactive labels would, and having the
+            # pair on an option is what lets it do that without baking a hex.
+            f'set -g @bar_bright "{B}"',
+            f'set -g @bar_dim "{D}"',
             # DIM, not bright. The active chip already ends in a solid shear, so
             # a BRIGHT rail landing immediately after it read as a doubled edge
             # -- two lit diagonals a space apart, which looks like a rendering
@@ -427,12 +441,11 @@ MODES = {
             f'set -g status-left "#[fg={I},bg=#{{@session_hue}},bold] '
             f"#(echo '#{{session_name}}' | tr a-z A-Z) "
             f'#[fg=#{{@session_hue}},bg=default,nobold]{SLANT_R}#[default] #{{prefix_highlight}} "',
-            # The active-window chip: sheared both ends, leading edge first.
             f'set -g window-status-current-style "bg=default,fg=#{{@session_hue}},bold"',
-            f'set -g window-status-current-format "#[fg=#{{@session_hue}},bg=default]{SLANT_L}'
-            f'#[fg={I},bg=#{{@session_hue}},bold] > #[fg={I},bg=#{{@session_hue}},bold]'
-            f'#{{E:@window_icon}} #I:#W '
-            f'#[fg=#{{@session_hue}},bg=default,nobold]{SLANT_R}#[default]"',
+            # The active-window chip itself is drawn by the tab STYLE, appended
+            # below this list by build_block -- along with the inactive format
+            # and the separator, which the style owns for the reason in the
+            # TAB_STYLES note.
         ],
     },
     "tmux-pane": {
@@ -668,6 +681,43 @@ MODES = {
     },
 }
 
+# ---- tab styles -------------------------------------------------------------
+# How the window rail is DRAWN, independent of what colour it is drawn in.
+# `tmux-chip <colour>` sets the hue and keeps the style; `tmux-chip <style>`
+# switches the drawing and keeps the hue -- the same split `pill` has between
+# its colours and its shapes.
+#
+# A style emits the ACTIVE chip and nothing else. The inactive labels and the
+# separator belong to `tmux-bar` -- they are its DIM and BRIGHT, generated in
+# its own block, and the split is deliberate (bar = everything but the two
+# chips). A style that wanted to repaint them would have to override those two
+# lines and should read @bar_dim / @bar_bright rather than bake a hex, so the
+# rail keeps tracking tmux-bar.
+#
+# INACT/FLAG below are for the PREVIEW only: a picker row cannot resolve a tmux
+# option, so it draws today's values of that pair.
+INACT = "#415c63"
+FLAG = "#88c0d0"
+
+TAB_STYLES = {
+    # The design as it stands: active is a lit slab, sheared both ends, with a
+    # leading ">" echoing the window rail one level down.
+    #
+    "slab": [
+        # Only the ACTIVE chip flickers: the session pill and the rail stay
+        # put, or the whole bar glitches at once and the motion stops meaning
+        # "you are here".
+        f'set -g window-status-current-format "#[fg={LIT},bg=default]{SLANT_L}'
+        f'#[fg={I},bg={LIT},bold] > #[fg={I},bg={LIT},bold]'
+        f'#{{E:@window_icon}} #I:#W '
+        f'#[fg={LIT},bg=default,nobold]{SLANT_R}#[default]"',
+    ],
+}
+
+TAB_WHAT = {
+    "slab": "lit slab, sheared both ends (the original)",
+}
+
 # `tmux-copymode-color <hex>` predates this mode and set ONLY the option, which
 # is now one of three things the hex has to touch. Kept as an alias so muscle
 # memory and the comments in tmux.conf that name it still work; it gains the
@@ -763,10 +813,12 @@ def preview(bright):
     dim = scale(bright, DIM_SCALE)
     if MODE == "tmux-chip":
         # Only the two chips are lit here; the bar around them stays neutral,
-        # which is the whole point of the command.
-        return (swatch(bright, " DEV ") + fg(bright) + SLANT_R + "  " +
-                fg(bright) + SLANT_L + swatch(bright, " > 1:nvim ") +
-                fg(bright) + SLANT_R + "\033[0m")
+        # which is the whole point of the command. The active window chip is
+        # drawn in the CURRENT tab style, so the picker sells the bar you get.
+        sess = swatch(bright, " DEV ") + fg(bright) + SLANT_R + "  "
+        return (sess + fg(bright) + SLANT_L + swatch(bright, " > 1:nvim ") +
+                fg(bright) + SLANT_R + "  " +
+                fg(INACT) + " 2:logs" + "\033[0m")
     if MODE == "tmux-pane-lines":
         # The split divider: lit half nearest the active pane, unlit rest.
         return (fg(bright) + "─────────" + fg(dim) + "──────────" + "\033[0m")
@@ -803,29 +855,49 @@ def preview(bright):
             swatch(bright, "09:41") + fg(bright) + RCAP + "\033[0m")
 
 
-def build_block(bright):
+def current_style(src):
+    """The tab style recorded in the managed block, for `tmux-chip <colour>` to
+    preserve. Absent (a block written before styles existed) means `slab`, which
+    is what that block was drawing."""
+    m = re.search(rf"^{re.escape(M['begin'])}.*?^# tabstyle = ([a-z]+)",
+                  src, re.M | re.S)
+    return m.group(1) if m and m.group(1) in TAB_STYLES else "slab"
+
+
+def build_block(bright, style="slab"):
     dim, sunk = scale(bright, DIM_SCALE), scale(bright, SUNK_SCALE)
+    lines = M["lines"]
     out = [M["begin"] + f"  DO NOT EDIT BY HAND -- rewritten by `{MODE}`",
            f"# bright = {bright}   active / values / dividers",
            f"# dim    = {dim}   labels / inactive / unlit"]
-    for ln in M["lines"]:
+    if MODE == "tmux-chip":
+        # The style's lines come last so they override anything above them, and
+        # the marker goes in the header so `tmux-chip <colour>` can read the
+        # style back and keep it.
+        lines = lines + TAB_STYLES[style]
+        out.append(f"# tabstyle = {style}   {TAB_WHAT[style]}")
+    for ln in lines:
         out.append(ln.replace(B, bright).replace(D, dim)
                      .replace(S, sunk).replace(I, INK)
                      .replace(NB, scale(bright, NUM_SCALE))
-                     .replace(ND, scale(dim, NUM_SCALE)))
+                     .replace(ND, scale(dim, NUM_SCALE))
+)
     out.append(M["end"])
     return "\n".join(out)
 
 
-def write(bright, label):
+def write(bright, label, style=None, style_switch=False):
     src = read_conf()
     if M["begin"] not in src or M["end"] not in src:
         die(f"{M['begin']} markers not found in {TMUX_CONF}; refusing to write")
     prev = current(src)
+    # A colour change keeps whatever style is already recorded, and a style
+    # change keeps the colour -- neither ever silently resets the other.
+    style = style or current_style(src)
 
     head, rest = src.split(M["begin"], 1)
     _, tail = rest.split(M["end"], 1)
-    new = head + build_block(bright) + tail
+    new = head + build_block(bright, style) + tail
 
     # Guard: repainting must never LOSE a glyph. The pill caps ( )
     # and the session wedge () are invisible in a diff, so a template that
@@ -837,7 +909,12 @@ def write(bright, label):
     # a glyph on purpose needs saying so out loud. Deliberately an env var and
     # not a flag: it should be awkward enough that it is never reached for by
     # habit, and it should not appear in the usage line as a normal option.
-    if glyphs(new) < glyphs(src) and not os.environ.get("TMUX_COLOR_ALLOW_GLYPH_DROP"):
+    # An explicit style switch is allowed to lose glyphs: a style is free to
+    # have no shear caps at all. The guard still covers every colour change and
+    # every template edit, which is what it was built for -- a cap vanishing
+    # from a template nobody touched on purpose.
+    if (glyphs(new) < glyphs(src) and not style_switch
+            and not os.environ.get("TMUX_COLOR_ALLOW_GLYPH_DROP")):
         die(f"would drop {glyphs(src) - glyphs(new)} glyph(s) "
             "(pill caps? icons?); config left untouched. "
             "If the template genuinely dropped one on purpose, re-run with "
@@ -864,9 +941,12 @@ def write(bright, label):
 
 
 def main(arg):
+    global TAB_STYLE
     src = read_conf()
     colors = palette()
     active = current(src)
+    if MODE == "tmux-chip":
+        TAB_STYLE = current_style(src)
 
     if arg is None:
         print()
@@ -875,6 +955,12 @@ def main(arg):
             print(f"{mark} {name:<14} {preview(hexv)}  {hexv}")
         print()
         print(f"  * = active    usage: {MODE} <name>    ({MODE} - to go back)")
+        if MODE == "tmux-chip":
+            cur = current_style(src)
+            marked = "  ".join((f"{n}*" if n == cur else n) for n in TAB_STYLES)
+            print(f"  tab style:  {marked}")
+            print(f"              {TAB_WHAT[cur]}")
+            print(f"  a style keeps the colour, a colour keeps the style.")
         if MODE == "tmux-copy":
             print(f"  one hex -> copy border + pill + COPY chip, scrollbar thumb,")
             print(f"  and scrollbar track at {int(SUNK_SCALE * 100)}% of it.")
@@ -895,7 +981,19 @@ def main(arg):
     if arg == "__complete":
         # Candidate first-args, one per line, for shell completion. Reads names
         # live from starship.toml so a new pill_*/tmux_* line needs no extra step.
-        print("\n".join(["-", "current"] + [c[0] for c in colors]))
+        styles = list(TAB_STYLES) if MODE == "tmux-chip" else []
+        print("\n".join(["-", "current"] + styles + [c[0] for c in colors]))
+        return
+
+    # A tab style, not a colour: keep the hue, change the drawing. Checked
+    # BEFORE the colour table so a style name can never be swallowed by the
+    # prefix matcher (nothing is named for a style today, but `resolve` matches
+    # on substrings and a future pill_dock would collide silently).
+    if MODE == "tmux-chip" and arg in TAB_STYLES:
+        if not active:
+            die("no managed block yet -- set a colour first")
+        TAB_STYLE = arg          # so the confirmation line previews the NEW style
+        write(active, f"{arg}  ({TAB_WHAT[arg]})", style=arg, style_switch=True)
         return
 
     if arg == "-":

@@ -1,0 +1,106 @@
+#!/bin/bash
+# chip-flicker -- the active window chip flickers like a tube, rarely.
+#
+# This is the CHEAP relative of a pulse. A breathing chip repaints the status
+# line ~7x a second forever, which is a background process burning battery to
+# decorate a bar you are not looking at. This sleeps 20-30 seconds, spends
+# ~0.4s flickering, and goes back to sleep: about 10 repaints per half minute
+# against a pulse's ~175, and the process is asleep for ~98% of its life.
+#
+# It also reads better. A CRT does not breathe -- it glitches: a fast dip, a
+# recovery, sometimes a second dip. The shader's bloom follows the colour down
+# and back, so the halo snaps with it.
+#
+# WHAT IT SETS. Per session, only during a flicker: @session_hue_lit, the
+# session's hue scaled down for a frame or two. The chip template reads
+#   #{?@session_hue_lit,#{@session_hue_lit},#{@session_hue}}
+# and the option is UNSET the moment the flicker ends -- so between flickers
+# there is nothing set, nothing polling the value, and the chip is drawn from
+# the flat hue exactly as it was before this script existed.
+#
+#   tmux set -g @chip_flicker off    stop it
+#   @chip_flicker_min                seconds, soonest next flicker (default 20)
+#   @chip_flicker_max                seconds, latest next flicker (default 30)
+set -euo pipefail
+
+DEFAULT_MIN=20
+DEFAULT_MAX=30
+
+# Single instance. NOT flock -- that is util-linux and absent on macOS, where
+# `flock -n 9 || exit 0` silently takes the exit branch and the daemon never
+# runs at all. A PID file plus a liveness check is portable.
+PIDFILE="${TMPDIR:-/tmp}/chip-flicker.$(id -u).pid"
+if [ -f "$PIDFILE" ] && kill -0 "$(cat "$PIDFILE" 2>/dev/null)" 2>/dev/null; then
+  exit 0
+fi
+echo $$ > "$PIDFILE"
+
+restore() {
+  # Clear the override everywhere. If this is skipped the chip freezes at
+  # whatever step the flicker died on -- a permanently dimmed tab that nothing
+  # in tmux.conf explains, because the value lives only in a tmux option.
+  tmux list-sessions -F '#{session_name}' 2>/dev/null | while IFS= read -r s; do
+    tmux set-option -t "$s" -u @session_hue_lit 2>/dev/null || true
+  done
+  tmux refresh-client -S 2>/dev/null || true
+}
+cleanup() {
+  [ "$(cat "$PIDFILE" 2>/dev/null)" = "$$" ] && rm -f "$PIDFILE"
+  restore
+}
+trap cleanup EXIT INT TERM
+
+scaled() {  # scaled <#rrggbb> <percent> -> #rrggbb
+  local h=${1#\#} p=$2
+  printf '#%02x%02x%02x' \
+    $(( 0x${h:0:2} * p / 100 )) $(( 0x${h:2:2} * p / 100 )) $(( 0x${h:4:2} * p / 100 ))
+}
+
+# Only sessions someone is actually looking at. A background session's chip is
+# not on any screen, so flickering it is pure waste.
+attached() { tmux list-clients -F '#{client_session}' 2>/dev/null | sort -u; }
+
+set_lit() {  # set_lit <percent|"">   "" restores the flat hue
+  local pct=$1 hue
+  while IFS= read -r s; do
+    [ -n "$s" ] || continue
+    if [ -z "$pct" ]; then
+      tmux set-option -t "$s" -u @session_hue_lit 2>/dev/null || true
+      continue
+    fi
+    hue=$(tmux show-options -t "$s" -qv @session_hue 2>/dev/null)
+    [ -n "$hue" ] || hue=$(tmux show-options -gqv @session_hue 2>/dev/null)
+    [ -n "$hue" ] || continue
+    tmux set-option -t "$s" @session_hue_lit "$(scaled "$hue" "$pct")" 2>/dev/null || true
+  done < <(attached)
+  tmux refresh-client -S 2>/dev/null || true
+}
+
+# One flicker. Percent then hold, walked in order -- a hard dip, a snap back, a
+# shorter second dip, done. Uneven on purpose: evenly spaced steps read as an
+# animation, unevenly spaced ones read as a fault, which is the point.
+#         dip  hold   dip  hold   dip  hold  dip  hold
+FRAMES=(  38 0.045  100 0.055   52 0.035  100 0.09   30 0.05  100 0)
+
+flicker() {
+  local i=0
+  while [ $i -lt ${#FRAMES[@]} ]; do
+    set_lit "${FRAMES[i]}"
+    [ "${FRAMES[i+1]}" = "0" ] || sleep "${FRAMES[i+1]}"
+    i=$((i + 2))
+  done
+  set_lit ""      # back to the flat hue, option unset
+}
+
+while :; do
+  # Pick the gap FIRST, then sleep it -- so a disabled or unattached server
+  # spends its life in one long sleep rather than spinning on the checks.
+  min=$(tmux show-options -gqv @chip_flicker_min 2>/dev/null); min=${min:-$DEFAULT_MIN}
+  max=$(tmux show-options -gqv @chip_flicker_max 2>/dev/null); max=${max:-$DEFAULT_MAX}
+  span=$((max - min)); [ "$span" -gt 0 ] || span=1
+  sleep $(( min + RANDOM % span ))
+
+  [ "$(tmux show-options -gqv @chip_flicker 2>/dev/null)" = "off" ] && continue
+  [ -n "$(attached)" ] || continue
+  flicker
+done
