@@ -142,6 +142,14 @@ custom-shader = /Users/jimmy/.config/ghostty/shaders/sonic_boom_cursor.glsl
 #    turns the warp off. Fixed in clean/crt.glsl (vec2(SCALE)) — renders fine, chainable.
 #    It IS still a pixel-art upscaler though: at SCALE 0.33333333 text is rebuilt from a
 #    third-res raster and thin glyphs turn to mush. SCALE 0.5 is the usable setting.
+# `true` = animate ONLY while the surface is focused (Ghostty's default). `always`
+# animates unfocused surfaces too and is much more expensive -- do not use it here with
+# a 3-shader chain. `false` disables animation entirely, even when focused.
+#
+# 2026-07-23: WindowServer was pinned ~50% steady-state. Cause was NOT this setting --
+# it was HiDPI: 2056x1329 HiDPI = a 4112x2658 backing store (10.9M px), and the shader
+# chain (~750 lines, 3 passes) is per-pixel work. Switching the display to 2336x1510
+# non-HiDPI (3.5M px, 3.1x fewer) dropped WindowServer to ~17%. Leave this at `true`.
 custom-shader-animation = true
 
 # ---------- colours (explicit colours ALWAYS beat `theme`, order is irrelevant) ----------
@@ -252,6 +260,12 @@ keybind = alt+l=esc:l
 keybind = cmd+left=csi:H
 keybind = cmd+right=csi:F
 
+# Quick terminal: a dropdown shell that floats over any app.
+# Cmd+` toggles it (global = works even when Ghostty isn't focused).
+keybind = global:cmd+grave_accent=toggle_quick_terminal
+quick-terminal-position = top
+quick-terminal-animation-duration = 0.12
+
 
 # Use a Nerd Font. Critical for displaying Git branch icons, Kubernetes 
 # wheel icons, and Terraform states in your prompt.
@@ -301,9 +315,9 @@ font-family = jetbrainsmono nerd font
 
 
 #jetbrainsmono nerd font
-font-style = light
+font-style = regular
 font-size = 20
-font-thicken = true
+font-thicken = false
 font-thicken-strength = 0
 adjust-cell-height = 0%
 adjust-cell-width = 0%

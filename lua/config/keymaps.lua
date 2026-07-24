@@ -126,3 +126,43 @@ vim.keymap.set("x", "<C-u>", "u", { desc = "Lowercase selection" })
 -- selection, and operator-pending is what makes the doubled form (<C-d><C-d>)
 -- resolve to linewise dd.
 vim.keymap.set({ "n", "x", "o" }, "<C-d>", "d", { desc = "Delete (operator)" })
+
+-- ---------------------------------------------------------------------------
+-- Cmdline practicality
+-- ---------------------------------------------------------------------------
+-- The cmdline is a modeless one-line prompt -- it has no normal mode and never
+-- will, so 0/$/b/w cannot work there. What DOES work is the command-line
+-- WINDOW (:h cmdwin): a real, editable buffer holding your command history,
+-- opened in normal mode, with full motions/search/yank. <CR> on a line runs it.
+--   q:  from normal mode        -- history of :commands
+--   q/  from normal mode        -- history of /searches
+--   <C-f> while already typing  -- dumps the half-typed cmdline into it
+-- That is the answer to "navigating previous commands": edit history as text.
+vim.keymap.set("n", "<leader>;", "q:", { desc = "Command-line window (history)" })
+
+-- ...and for the cases where popping a window is overkill, make the one-line
+-- prompt behave like every other text field on macOS. Ghostty has
+-- macos-option-as-alt=left, so Opt+arrow arrives as <M-Left>/<M-Right>; nvim
+-- binds nothing there by default, which is why it "does nothing". <S-Left> /
+-- <S-Right> are the built-in cmdline word motions -- just forward to them.
+vim.keymap.set("c", "<M-Left>", "<S-Left>", { desc = "Back a word" })
+vim.keymap.set("c", "<M-Right>", "<S-Right>", { desc = "Forward a word" })
+vim.keymap.set("c", "<M-BS>", "<C-w>", { desc = "Delete word back" })
+vim.keymap.set("c", "<C-a>", "<Home>", { desc = "Start of line (0)" })
+vim.keymap.set("c", "<C-e>", "<End>", { desc = "End of line ($)" })
+vim.keymap.set("c", "<C-d>", "<Del>", { desc = "Delete char forward" })
+-- Prefix-filtered history: type ":Theme" then <C-p> cycles only :Theme* lines,
+-- unlike <Up> which noice/wildmenu may consume for completion.
+vim.keymap.set("c", "<C-p>", "<Up>", { desc = "Prev history (prefix match)" })
+vim.keymap.set("c", "<C-n>", "<Down>", { desc = "Next history (prefix match)" })
+
+-- Opt+arrow depends on Ghostty emitting CSI 1;3D and tmux forwarding it, which
+-- is not guaranteed. Opt+h / Opt+l ARE guaranteed: config.ghostty explicitly
+-- binds alt+h=esc:h and alt+l=esc:l, so those bytes definitely arrive, and
+-- tmux.conf no longer claims them (its `bind -n M-h/M-l previous/next-window`
+-- fallback was removed -- window switching lives on User0/User1 instead).
+-- Opt+b / Opt+f are kept as the readline-shaped synonyms.
+vim.keymap.set("c", "<M-h>", "<S-Left>", { desc = "Back a word" })
+vim.keymap.set("c", "<M-l>", "<S-Right>", { desc = "Forward a word" })
+vim.keymap.set("c", "<M-b>", "<S-Left>", { desc = "Back a word" })
+vim.keymap.set("c", "<M-f>", "<S-Right>", { desc = "Forward a word" })

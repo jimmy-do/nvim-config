@@ -100,7 +100,21 @@ _keys_data() {
   _keys_add 'tmux · windows' 'Cmd-;' 'Jump to the last-used tmux window.' 'Cmd-;' 'Ghostty sends the custom User2 sequence; no prefix is needed.'
   _keys_add 'tmux · windows' 'Alt-h / Alt-l / Alt-;' 'Previous / next / last tmux window fallbacks.' 'Alt-l' 'Useful on keyboards or terminals without the Cmd mappings.'
   _keys_add 'tmux · windows' 'Prefix c' 'Create a new window in the current pane directory.' 'Ctrl-a, then c' 'Your prefix is Ctrl-a, not the tmux default Ctrl-b.'
-  _keys_add 'tmux · windows' 'Prefix w' 'Open the searchable session/window tree.' 'Ctrl-a, then w' 'Your tree uses zoomed full-window mode.'
+  _keys_add 'tmux · windows' 'Prefix w' 'Open the session/window/pane tree.' 'Ctrl-a, then w' 'Full vi keys inside; every tree key is under tmux · tree below, and the top status row shows a live cheatsheet while the tree is open.'
+
+  _keys_add 'tmux · tree (Prefix w)' 'j / k · Enter · q' 'Move down / up, switch to the highlighted item, or leave.' 'Ctrl-a w, then jjj, Enter' 'Enter on a session, window, or pane row jumps straight there — one hop.'
+  _keys_add 'tmux · tree (Prefix w)' '+ / -' 'Expand / collapse the highlighted item (windows hide their panes by default).' 'highlight a window, press +' 'Expand a window to see and act on its individual panes.'
+  _keys_add 'tmux · tree (Prefix w)' 'C-s then n / N' 'Search by name; repeat forward / backward.' 'C-s, type nvim, Enter, then n' 'Esc cancels the search prompt and changes nothing.'
+  _keys_add 'tmux · tree (Prefix w)' 'f' 'Filter: hide every row not matching a format/string.' 'f, type logs, Enter' 'Unlike search (which jumps), filter narrows the list; f with an empty prompt restores it.'
+  _keys_add 'tmux · tree (Prefix w)' 'm / M' 'Set / clear THE mark — a server-wide, one-at-a-time pane bookmark.' 'highlight a pane row, press m' 'A mark does nothing by itself: it only lets the word {marked} name that pane in a later command, instead of session:window.pane. tmux holds exactly ONE, for the whole server. The marked pane shows a border badge and an M window flag.'
+  _keys_add 'tmux · tree (Prefix w)' 'Prefix C-j / Prefix M-j' 'Pull the MARKED pane into the current window, below / beside you.' 'mark it in the tree with m; q out; go to the destination; Ctrl-a, then Ctrl-j' 'This is what marks are FOR. Moving a pane needs a which-pane and a where-to, but you can only stand in one place — the mark points at the there while you are here. The prefix reaches tmux even while the tree is still open.'
+  _keys_add 'tmux · tree (Prefix w)' 't / T / C-t' 'Tag the highlighted row / untag all / tag everything.' 'tag three windows with t t t' 'Tag is NOT pin and NOT mark: it only checkmarks rows so X (kill all tagged) or : (run a command per tagged row) can act on many at once.'
+  _keys_add 'tmux · tree (Prefix w)' 'x / X' 'Kill the highlighted item / kill every tagged item.' 'highlight a dead window, press x' 'Asks for confirmation; a session row kills the whole session.'
+  _keys_add 'tmux · tree (Prefix w)' ':' 'Run a tmux command against the highlighted (or each tagged) item.' ': swap-pane -t %3' 'The prompt pre-targets the row, so commands like kill-window or move-window need no -t.'
+  _keys_add 'tmux · tree (Prefix w)' 'S-Up / S-Down' 'Reorder: move the highlighted window up / down.' 'highlight a window, hold Shift-Down' 'One of two things the built-in tree does that no replacement matched; the other is the every-pane preview grid.'
+  _keys_add 'tmux · tree (Prefix w)' 'O / r' 'Cycle sort field (index, name, time) / reverse it.' 'O until sorted by time' 'Sort by time puts your most recently used sessions on top.'
+  _keys_add 'tmux · tree (Prefix w)' 'v' 'Toggle the preview pane at the bottom of the tree.' 'press v twice' 'The preview shows the highlighted item; a session or window row previews its layout.'
+  _keys_add 'tmux · tree (Prefix w)' 'Prefix ?' 'Open THIS help over the tree, without closing it.' 'Ctrl-a, then ? while the tree is open' 'tmux’s own help keys are unreachable here: F1 is the Mac brightness key and its C-h alias loses to the vim-navigator binding — Prefix ? is the route that always works.'
   _keys_add 'tmux · windows' 'Prefix S' 'Open the tmux session chooser.' 'Ctrl-a, then Shift-s' 'Moved from lowercase s so it is harder to open accidentally.'
   _keys_add 'tmux · windows' 'Prefix &' 'Kill the current window after confirmation.' 'Ctrl-a, then &' 'The process and every pane in that window will close.'
   _keys_add 'tmux · windows' 'Prefix ,' 'Rename the current window.' 'Ctrl-a, then ,' 'Useful for keeping a long-running workspace legible.'
@@ -529,6 +543,65 @@ _keys_render_stream() {
   '
 }
 
+# Long-form lessons for entries whose story cannot fit the five short fields.
+# Looked up by key inside _keys_preview and rendered as a WALKTHROUGH section.
+# Plain multi-line text; $_KEYS_SGR_COMMAND highlights the keys being pressed.
+_keys_walkthrough() {
+  local key="$1" k="$_KEYS_SGR_COMMAND" r="$_KEYS_SGR_RESET" f="$_KEYS_SGR_FLAG"
+  case "$key" in
+    'm / M')
+      print -r -- "WHY MARKS EXIST — the chicken-and-egg of moving a pane:
+to move a pane you must tell tmux WHICH pane and WHERE TO, but your cursor
+can only ever stand in one of those two places. The mark is how you point at
+the *there* while you are still *here*. Setting it moves, locks, pins, and
+protects nothing — it is purely a name (${f}{marked}${r}) you can use later.
+
+WORKED EXAMPLE — pull the logs pane from devops:2 into the window you are in:
+
+  1. ${k}Prefix w${r}        open the tree
+  2. ${k}j/k${r} to devops:2, press ${k}+${r} to expand it, highlight the logs pane
+  3. ${k}m${r}               mark it — its window now carries an ${f}M${r} flag
+  4. ${k}q${r}               leave the tree; you are back where you started
+  5. ${k}Prefix C-j${r}      the marked pane lands below you (${k}Prefix M-j${r} = beside)
+
+Steps 2-3 answered WHICH pane. Step 5's location answered WHERE TO.
+
+THE OTHER USE — swap two panes (two targets, one cursor, same problem):
+mark pane A, highlight pane B in the tree, then press ${k}:${r} and run
+  ${k}swap-pane -s '{marked}'${r}
+The two panes trade places, wherever they live.
+
+Undo a mistake: ${k}M${r} clears the mark; a new ${k}m${r} simply steals it —
+there is only ever one on the whole server."
+      ;;
+    'Prefix C-j / Prefix M-j')
+      print -r -- "These two work OUTSIDE the tree, from anywhere: they run
+${f}join-pane -s '{marked}'${r}, which tears the marked pane out of whatever
+window it lives in and splits it into your current window — ${k}C-j${r} below
+you, ${k}M-j${r} beside you. No mark set = tmux errors, nothing moves.
+
+FULL FLOW: mark in the tree (${k}Prefix w${r}, highlight, ${k}m${r}, ${k}q${r}),
+stand where you want the pane, press ${k}Prefix C-j${r}. The reverse operation
+— pushing a pane OUT into its own window — is tmux's default ${k}Prefix !${r}."
+      ;;
+    't / T / C-t')
+      print -r -- "TAG vs MARK, once and for all: the MARK is one server-wide
+pointer used to move/swap a single pane. TAGS are checkmarks on many rows so
+one action can hit all of them at once. They do not pin, save, or protect.
+
+WORKED EXAMPLE — kill four dead windows in one pass:
+  1. ${k}Prefix w${r}, then ${k}j/k${r} to each dead window, pressing ${k}t${r} on every one
+  2. each tagged row shows a ${f}*${r} beside it
+  3. ${k}X${r} (capital) kills ALL tagged windows after one confirmation
+  4. mis-tagged something? ${k}t${r} again untags it; ${k}T${r} untags everything
+
+${k}:${r} does the same trick for any command — with rows tagged, ${k}:${r}
+runs what you type once per tagged row (e.g. ${f}move-window -t archive${r})."
+      ;;
+    *) return 1 ;;
+  esac
+}
+
 _keys_preview() {
   local category="$1" key="$2" purpose="$3" example="$4" context="$5"
   local family="${category%% · *}" related_category related_key related_purpose
@@ -537,6 +610,12 @@ _keys_preview() {
 
   key_command="${key%%[[:space:]]*}"
   guide_command="$key_command"
+  # Keybinding families list KEYS, not shell commands -- without this guard a
+  # tree key like `m` tldr-matches the unrelated macOS m-cli and the detail
+  # view grows a bogus "battery status" guide.
+  case "$family" in
+    tmux|Vim-style|Ghostty|Karabiner) guide_command='' ;;
+  esac
   if [[ "$category" == 'Your commands' ]]; then
     case "$key_command" in
       k|kgp|kgpa|kdp|kl|klp|kctx) guide_command=kubectl ;;
@@ -569,6 +648,13 @@ _keys_preview() {
   printf '%s%s%s\n' "$_KEYS_SGR_TITLE" 'CONTEXT / CAVEATS' "$_KEYS_SGR_RESET"
   print -r -- "$context"
   print
+
+  local walkthrough
+  if walkthrough=$(_keys_walkthrough "$key"); then
+    printf '%s%s%s\n' "$_KEYS_SGR_TITLE" 'WALKTHROUGH' "$_KEYS_SGR_RESET"
+    print -r -- "$walkthrough"
+    print
+  fi
 
   if [[ -r "$tldr_source" ]]; then
     printf '%s%s%s\n' "$_KEYS_SGR_TITLE" 'COMMAND GUIDE / FLAGS' "$_KEYS_SGR_RESET"

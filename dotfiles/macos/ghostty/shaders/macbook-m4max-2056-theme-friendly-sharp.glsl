@@ -46,14 +46,27 @@ float softAmount = 0.18;
 // foreground fails the saturation gate and stays razor sharp, exactly the
 // same neutral-vs-saturated split the paper-lift below already relies on.
 // Set neonBloom to 0.0 to switch the whole effect off.
-float neonBloom = 0.45;        // halo strength (0 = off); 0.75 verified WAY too much.
+float neonBloom = 0.22;        // halo strength (0 = off); 0.75 verified WAY too much.
+                               // 0.45 -> 0.22 on 2026-07-23 for NON-HIDPI 2336x1510.
+                               // Without the 2x backing store there is no downsample
+                               // averaging any of this away, and every glyph is a much
+                               // larger share of the pixels inside the halo radius, so
+                               // neighbours pile onto each other. 0.45 blew out completely
+                               // and even near-neutral text glowed.
                                // 0.30 -> 0.45 on 2026-07-23, tuned for the MacBook LCD:
                                // the halo is ADDITIVE, so the panel's lifted black floor
                                // swallows it. The 321URX OLED runs this SAME file over
                                // true black and therefore reads much glowier. That
                                // divergence is intentional and wanted -- do not "fix" it
                                // by splitting the presets again.
-float neonBloomRadiusPx = 32.0; // halo reach in backing px. 20 -> 32 on 2026-07-23.
+float neonBloomRadiusPx = 16.0; // halo reach in backing px. 32 -> 16 on 2026-07-23 for
+                               // NON-HIDPI 2336x1510. This is a DPI-mode change, not a
+                               // resolution change: HiDPI 2056x1329 had a 4112px backing
+                               // store, non-HiDPI 2336 has a 2336px one. Glyphs are ~1.76x
+                               // fewer pixels across, so a radius in backing px reaches
+                               // proportionally FURTHER per glyph. Halved, not scaled by
+                               // the logical-resolution ratio (that was the wrong model).
+                               // 20 -> 32 on 2026-07-23.
                                // Scaled by 1/iResolution, so on the MacBook's dense HiDPI
                                // backing store 20px was a far tighter halo per glyph than
                                // the same 20 on the monitor. This widens the laptop case.

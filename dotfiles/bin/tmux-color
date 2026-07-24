@@ -230,7 +230,8 @@ MODES = {
             f'#[fg={B}]f#[fg={D}] filter  ·  #[fg={B}]m#[fg={D}] mark  ·  '
             f'#[fg={B}]t#[fg={D}] tag  ·  #[fg={B}]:#[fg={D}] cmd  ·  '
             f'#[fg={B}]x#[fg={D}] kill  ·  #[fg={B}]O#[fg={D}] sort  ·  '
-            f'#[fg={B}]S-↑↓#[fg={D}] move win  ·  #[fg={B}]q#[fg={D}] out,'
+            f'#[fg={B}]S-↑↓#[fg={D}] move win  ·  '
+            f'#[fg={B}]C-a ?#[fg={D}] HELP  ·  #[fg={B}]q#[fg={D}] out,'
             # Copy mode: position takes BRIGHT because it is the live value.
             f'#{{?pane_in_mode,'
             f'#[fg={B}]#{{scroll_position}}#[fg={D}] up  ·  '
@@ -629,8 +630,13 @@ MODES = {
             # therefore still moves the focused divider.
             f'set -g @pane_lines_bright "{B}"',
             f'set -g @pane_lines_dim "{D}"',
-            # The scrollbar is a rule too: dim thumb on a sunk trough.
-            f'set -g pane-scrollbars-style "bg={S},fg={D},width=1,pad=0"',
+            # The scrollbar is a rule too: sunk trough (tracks the palette),
+            # but the THUMB is pinned to the copy-mode lime -- the scrollbar
+            # only shows in copy mode, so it reads as part of the copy accent.
+            # pane-scrollbars-style is a STYLE, not a format: it will NOT expand
+            # #{@copy_mode_color} (draws nothing), so the hex is baked; keep it
+            # in sync with @copy_mode_color by hand.
+            f'set -g pane-scrollbars-style "bg={S},fg=#84fc03,width=1,pad=0"',
         ],
     },
 }
