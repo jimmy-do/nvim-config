@@ -54,6 +54,13 @@ local anim = {
   -- calls plus extmark updates for the handful of rows whose group changed. The
   -- old build-33-groups-per-frame version could not even keep 60.
   fps = 120,
+  -- The fill lasts 450ms; the breathe runs FOREVER while the cursor sits in a
+  -- scope. Holding 120fps for that endless tail is what cooked the laptop: every
+  -- distinct colour is a set_hl and therefore a full screen redraw, so an idle
+  -- editor was doing 120 redraws/sec indefinitely. The fill genuinely needs the
+  -- frames (fast motion, short window); the breathe is a 2.6s cycle where 20fps
+  -- is visually identical. The timer drops to this rate the moment t hits 1.
+  breathe_fps = 20,
   -- Once the guide is FULLY filled it breathes: a slow, endless fade up toward
   -- white and back down to the resting colour, for as long as the cursor stays in
   -- the scope. Deliberately NOT a one-shot flash during the fill -- that read as
@@ -66,6 +73,13 @@ local anim = {
   breathe_min = 0.0,
   breathe_max = 1.0,
   breathe_period = 2600, -- ms for one full bright -> dark -> bright cycle
+  -- How many breathe cycles before the guide settles at its resting colour and
+  -- the timer SHUTS DOWN. An endless breathe means a parked editor never stops
+  -- waking the CPU and repainting -- on battery that is the whole cost of this
+  -- plugin. After this many cycles the guide is drawn once, plain, and there is
+  -- literally zero ongoing work until the cursor enters a new scope. Set to nil
+  -- for the old forever-breathe.
+  breathe_cycles = 3,
 
   -- Rows in the soft leading-edge gradient. Geometry lands on whole lines, so the
   -- only smoothness available is in the colour channel: a 6-row trail reads far
@@ -398,6 +412,14 @@ end
 
 local timer = nil
 local last_key = nil
+-- Focus gate. When the terminal pane / GUI window loses focus, nothing here is
+-- being looked at, so the breathe is pure churn: it keeps redefining highlight
+-- groups every frame, which forces a full redraw of an unfocused pane and reads
+-- as flashing (and burns CPU). While unfocused the guide is drawn ONCE, static,
+-- at full extent; the timer stays dead until focus comes back. MUST be declared
+-- above `animate` -- the timer callback closes over it as an upvalue, and a
+-- later declaration would silently read a nil global instead.
+local focused = true
 -- Set when something outside the timer (a scroll, a resize) means the current
 -- frame must be redrawn even though the colour has not changed. Without it the
 -- breathe's skip-unchanged-frames optimisation would leave newly scrolled-in rows
@@ -428,6 +450,8 @@ local function animate(buf, col, from, to, origin)
   end
   local start = uv.now()
   local interval = math.max(1, math.floor(1000 / anim.fps))
+  local breathe_interval = math.max(1, math.floor(1000 / (anim.breathe_fps or anim.fps)))
+  local slowed = false
   -- Colours sampled once per animation. `base` is the guide's resting colour and
   -- `dim` is the colour rows fade UP from -- the dim ladder snacks already draws
   -- underneath, so a row emerges out of the existing guide rather than out of
@@ -446,6 +470,12 @@ local function animate(buf, col, from, to, origin)
     vim.schedule_wrap(function()
       -- Bail if the buffer went away or the user moved to a different one --
       -- otherwise the timer keeps drawing into a buffer that is no longer shown.
+      if not focused then
+        -- Focus went away mid-fill: leave the rows as they are and stop. The
+        -- FocusLost handler's repaint puts the static guide down.
+        stop_timer()
+        return
+      end
       if not vim.api.nvim_buf_is_valid(buf) or vim.api.nvim_get_current_buf() ~= buf then
         stop_timer()
         return
@@ -472,9 +502,30 @@ local function animate(buf, col, from, to, origin)
       -- landed on -- so the breathe eases out of the fill with no jump, dips to
       -- breathe_min, and comes back. Cosine (not a sawtooth) is what makes both
       -- turning points ease rather than snap.
+      -- Fill is done: slow the timer down for the endless breathe tail. set_repeat
+      -- alone only takes effect after the NEXT expiry, so `again` is needed to
+      -- restart the timer at the new interval right now. Guarded so it happens
+      -- once, not on every breathe frame.
+      if t >= 1 and not slowed then
+        slowed = true
+        pcall(function()
+          timer:set_repeat(breathe_interval)
+          timer:again()
+        end)
+      end
+
       local level = 1
       if t >= 1 and anim.breathe then
         local phase = (e - anim.duration) / anim.breathe_period
+        if anim.breathe_cycles and phase >= anim.breathe_cycles then
+          -- Breathe budget spent: settle on the resting colour, drop the marks
+          -- back onto the plain theme group, and stop. Nothing runs after this
+          -- until the cursor moves into a different scope.
+          pcall(vim.api.nvim_set_hl, 0, GLOW, { fg = hex(base) })
+          draw(buf, col, from, to)
+          stop_timer()
+          return
+        end
         local osc = (1 + math.cos(phase * 2 * math.pi)) / 2
         level = anim.breathe_min + (anim.breathe_max - anim.breathe_min) * osc
       end
@@ -570,6 +621,15 @@ local function repaint()
   local from, to = block_range(cur, col, last)
 
   local key = table.concat({ buf, col, from, to }, ":")
+  if not focused then
+    -- Unfocused: kill any live animation and paint the resting guide once.
+    -- last_key is dropped so regaining focus re-animates from scratch rather
+    -- than treating this as "same scope, nothing to do".
+    stop_timer()
+    last_key = nil
+    draw(buf, col, from, to)
+    return
+  end
   if key == last_key or not anim.enabled then
     -- Same scope (or animation off): just repaint at full extent, no regrow.
     -- EXCEPT while a timer is live: CursorMoved fires on the same tick that a
@@ -608,6 +668,26 @@ vim.api.nvim_create_autocmd(
   { "CursorMoved", "CursorMovedI", "WinScrolled", "BufWinEnter", "TextChanged", "TextChangedI", "ColorScheme" },
   { group = group, callback = schedule }
 )
+
+-- FocusLost/FocusGained fire for the terminal pane (tmux, and any terminal with
+-- focus reporting) as well as GUI windows. Losing focus stops the loop
+-- immediately instead of waiting for the next repaint tick.
+vim.api.nvim_create_autocmd("FocusLost", {
+  group = group,
+  callback = function()
+    focused = false
+    stop_timer()
+    schedule()
+  end,
+})
+
+vim.api.nvim_create_autocmd("FocusGained", {
+  group = group,
+  callback = function()
+    focused = true
+    schedule()
+  end,
+})
 
 -- `:colorscheme` runs `hi clear`, wiping the precomputed ramp groups, and the
 -- resting colour it fades up to has probably changed anyway. Drop the cache key

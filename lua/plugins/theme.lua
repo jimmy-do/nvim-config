@@ -912,6 +912,40 @@ local function apply_active_indent_scope_highlights()
   end
 end
 
+-- Storm only: the DIM indent guides (SnacksIndent, the unlit rungs of the
+-- ladder) come out of the palette at #444b6a, which reads too bright against
+-- the storm bg. Pin them a step darker so the lit SnacksIndentScope cyan is the
+-- only thing that carries. Scope/chunk groups are untouched — they are handled
+-- by apply_active_indent_scope_highlights above.
+local STORM_DIM_INDENT_GUIDE = "#282d45"
+
+local dim_indent_guide_groups = {
+  "SnacksIndent",
+  "IblIndent",
+  "IblWhitespace",
+  "IndentBlanklineChar",
+  "MiniIndentscopeSymbolOff",
+  "BlinkIndent",
+}
+
+local function apply_dim_indent_guide_highlights()
+  if (vim.g.colors_name or "") ~= "base16-tokyo-night-terminal-storm" then
+    return
+  end
+  for _, group in ipairs(dim_indent_guide_groups) do
+    local ok, hl = pcall(vim.api.nvim_get_hl, 0, { name = group, link = false })
+    local adj = {}
+    if ok and type(hl) == "table" then
+      for k, v in pairs(hl) do
+        adj[k] = v
+      end
+    end
+    adj.fg = STORM_DIM_INDENT_GUIDE
+    adj.sp = STORM_DIM_INDENT_GUIDE
+    pcall(vim.api.nvim_set_hl, 0, group, adj)
+  end
+end
+
 -- Storm only: stamp the yaml key/value groups with their EXACT baseline hexes
 -- ONCE per colorscheme load, after the deferred pipeline passes have settled.
 --
@@ -1535,6 +1569,7 @@ local function apply_theme_adjustments(refresh_base)
     apply_chrome_readability_fix()
     apply_editor_static_colors()
     apply_active_indent_scope_highlights()
+    apply_dim_indent_guide_highlights()
     apply_retrobox_string_lightness()
     apply_retrobox_variable_white()
     apply_editor_interaction_highlights()
