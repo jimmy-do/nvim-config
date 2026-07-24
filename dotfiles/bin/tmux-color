@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
-"""tmux-bar / tmux-chip / tmux-pane / tmux-pane-lines — reskin tmux from `pill`.
+"""tmux-bar / tmux-chip / tmux-pane / tmux-pane-lines / tmux-copy — reskin tmux
+from `pill`.
 
     tmux-bar               list the colors, mark the active one
     tmux-bar turquoise     status bar BODY: kube/git/clock, dividers, the rule,
@@ -8,7 +9,11 @@
 
     tmux-chip synth_orange the two CHIPS: session name + active window
     tmux-pane amber        pane TITLES: the pill, pane numbers, the clock
-    tmux-pane-lines cyan   pane DIVIDERS: the borders and the scrollbar
+    tmux-pane-lines cyan   pane DIVIDERS: the borders
+    tmux-copy matrix       COPY MODE, from one hex: the copy-tinted border and
+                           pill, the COPY chip, the scrollbar thumb, and the
+                           scrollbar track at SUNK_SCALE of it
+                           (tmux-copymode-color is an alias for this)
 
 Four surfaces, four commands, one palette. They are split where a surface can
 sensibly disagree with its neighbour -- a hot chip on a quiet bar, a lit pane
@@ -630,18 +635,47 @@ MODES = {
             # therefore still moves the focused divider.
             f'set -g @pane_lines_bright "{B}"',
             f'set -g @pane_lines_dim "{D}"',
-            # The scrollbar is a rule too: sunk trough (tracks the palette),
-            # but the THUMB is pinned to the copy-mode lime -- the scrollbar
-            # only shows in copy mode, so it reads as part of the copy accent.
-            # pane-scrollbars-style is a STYLE, not a format: it will NOT expand
-            # #{@copy_mode_color} (draws nothing), so the hex is baked; keep it
-            # in sync with @copy_mode_color by hand.
-            f'set -g pane-scrollbars-style "bg={S},fg=#84fc03,width=1,pad=0"',
+            # The scrollbar USED to be written here, taking {S} -- the trough of
+            # the PANE palette -- under a thumb hardcoded to the copy lime, which
+            # put two accents on one widget whenever the panes were not lime. It
+            # only ever appears in copy mode, so it belongs to the copy accent
+            # and now lives in the tmux-copy block below.
+        ],
+    },
+    "tmux-copy": {
+        "begin": "# >>> tmux-copy-managed >>>",
+        "end": "# <<< tmux-copy-managed <<<",
+        "what": "copy-mode accent",
+        "lines": [
+            # ONE hex drives all three. The border and Reactor Tag pill of a
+            # pane in copy mode, and the COPY chip in the status bar, all read
+            # #{@copy_mode_color} live at render -- so setting this option is
+            # the whole job for them, no baked hexes anywhere.
+            f"set -g @copy_mode_color '{B}'",
+            # The scrollbar is the exception, and the reason this block is
+            # generated rather than a one-line edit: pane-scrollbars-style is a
+            # STYLE, not a format. It will NOT expand #{@copy_mode_color} -- it
+            # silently draws nothing -- so both halves must be baked, which
+            # means they can drift out of sync with the option above. Generating
+            # all three from one input is what makes drift impossible.
+            #
+            # fg is the slider (the thumb you drag), bg the rest of the track.
+            # The trough is the accent at SUNK_SCALE, the same 20% sink the pane
+            # palette uses for its own troughs -- a lit thumb in a dark bed of
+            # its own hue, which is how a scrollbar is meant to read.
+            f'set -g pane-scrollbars-style "bg={S},fg={B},width=1,pad=0"',
         ],
     },
 }
 
+# `tmux-copymode-color <hex>` predates this mode and set ONLY the option, which
+# is now one of three things the hex has to touch. Kept as an alias so muscle
+# memory and the comments in tmux.conf that name it still work; it gains the
+# palette names, previews and completion the rest of the family has.
+MODE_ALIASES = {"tmux-copymode-color": "tmux-copy"}
+
 MODE = os.path.basename(sys.argv[0])
+MODE = MODE_ALIASES.get(MODE, MODE)
 if MODE not in MODES:
     MODE = "tmux-bar"
 M = MODES[MODE]
@@ -736,6 +770,18 @@ def preview(bright):
     if MODE == "tmux-pane-lines":
         # The split divider: lit half nearest the active pane, unlit rest.
         return (fg(bright) + "─────────" + fg(dim) + "──────────" + "\033[0m")
+    if MODE == "tmux-copy":
+        # All three things the hex lands on, in one row: the COPY chip, a
+        # copy-tinted border, and the scrollbar drawn HORIZONTALLY (it is
+        # vertical in the pane, but a row of cells is what a picker line has).
+        # The thumb is the accent, the track around it the same hue sunk to
+        # SUNK_SCALE -- so a colour whose trough goes muddy shows it here.
+        sunk = scale(bright, SUNK_SCALE)
+        return (fg(bright) + LCAP + swatch(bright, " COPY ") +
+                fg(bright) + RCAP + " " +
+                fg(bright) + "──" + " " +
+                slab(sunk, sunk, "──") + slab(bright, bright, "────") +
+                slab(sunk, sunk, "────") + "\033[0m")
     if MODE == "tmux-pane":
         return (fg(dim) + "──" + fg(bright) + SLANT_L +
                 swatch(bright, " 1 ") + fg(bright) +
@@ -829,7 +875,11 @@ def main(arg):
             print(f"{mark} {name:<14} {preview(hexv)}  {hexv}")
         print()
         print(f"  * = active    usage: {MODE} <name>    ({MODE} - to go back)")
-        print(f"  bright = the color, dim = 48% of it; dividers take bright.")
+        if MODE == "tmux-copy":
+            print(f"  one hex -> copy border + pill + COPY chip, scrollbar thumb,")
+            print(f"  and scrollbar track at {int(SUNK_SCALE * 100)}% of it.")
+        else:
+            print(f"  bright = the color, dim = 48% of it; dividers take bright.")
         print()
         return
 

@@ -15,4 +15,5 @@ _pill_family() {
   cands=(${(f)"$(command ${words[1]} __complete 2>/dev/null)"})
   (( ${#cands} )) && compadd -a cands
 }
-compdef _pill_family pill pill2 tmux-bar tmux-chip tmux-pane tmux-pane-lines
+compdef _pill_family pill pill2 tmux-bar tmux-chip tmux-pane tmux-pane-lines \
+                     tmux-copy tmux-copymode-color
