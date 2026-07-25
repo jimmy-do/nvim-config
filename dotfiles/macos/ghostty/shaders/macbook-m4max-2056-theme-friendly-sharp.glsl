@@ -1,6 +1,8 @@
 // macbook-m4max-2056-theme-friendly-sharp.glsl
 // Ported 2026-07-18 from 321urx-monitor-preset-theme-friendly-sharp.glsl.
-// Tuned for MacBook Pro M4 Max @ 2056x1329 logical, 4112x2658 HiDPI backing.
+// Tuned for MacBook Pro M4 Max @ 1900x1200, NON-HIDPI (1:1 backing) as of 2026-07-25.
+// History: 2056x1329 HiDPI (4112x2658 backing) -> 2336x1510 non-HiDPI 07-23 -> 1900x1200
+// non-HiDPI 07-25. The filename still says 2056; the resolution in it is stale, not the file.
 // Goal: sharp, theme-friendly CRT scanlines without amber tint, wash, bloom, or softening.
 
 // Original shader collected from: https://www.shadertoy.com/view/WsVSzV
@@ -38,7 +40,8 @@ float wobbleFreq = 0.11;
 float reducedMotion = 0.0;
 
 float softRadius = 0.18; // MacBook-only subpixel softening; nudges edges toward CRT aliasing.
-float softAmount = 0.18;
+float softAmount = 0.0; // 0.18 -> 0.0 on 2026-07-25. This was the ONLY thing making plain
+                        // foreground softer than the 321urx preset. Off = pixel-exact text.
 
 // NEON BLOOM -- saturation-gated, added 2026-07-22. This is NOT the discarded
 // global blur: text is untouched. Only pixels that are both SATURATED and
@@ -59,7 +62,13 @@ float neonBloom = 0.22;        // halo strength (0 = off); 0.75 verified WAY too
                                // true black and therefore reads much glowier. That
                                // divergence is intentional and wanted -- do not "fix" it
                                // by splitting the presets again.
-float neonBloomRadiusPx = 16.0; // halo reach in backing px. 32 -> 16 on 2026-07-23 for
+float neonBloomRadiusPx = 13.0; // halo reach in backing px.
+                               // 16 -> 13 on 2026-07-25 for NON-HIDPI 1900x1200. Same
+                               // model as the 07-23 change: backing store shrank 2336 ->
+                               // 1900 (x0.81) with no DPI change, so glyphs are ~1.23x
+                               // fewer px across and a fixed backing-px radius reaches
+                               // that much further per glyph. 16 x 0.81 ~= 13.
+                               // 32 -> 16 on 2026-07-23 for
                                // NON-HIDPI 2336x1510. This is a DPI-mode change, not a
                                // resolution change: HiDPI 2056x1329 had a 4112px backing
                                // store, non-HiDPI 2336 has a 2336px one. Glyphs are ~1.76x
@@ -83,8 +92,38 @@ float neonBloomRadiusPx = 16.0; // halo reach in backing px. 32 -> 16 on 2026-07
 // 0.65 at half glow, #9fefff ice_blue sat 0.38 at ZERO) while pure warm hues
 // sailed through -- "only yellows and oranges glow". Neutral text sits below
 // ~0.15 saturation, so 0.22 still excludes it cleanly.
+// ---- 2026-07-25: SATURATION GATE DEMOTED, HUE EXCLUSION ADDED ----
+// The comment above ("neutral text sits below ~0.15 saturation, so 0.22 still
+// excludes it cleanly") was true for the OLD grey foreground #787c99, tsat 0.22.
+// The foreground is now #00b012 -- a PURE green, tsat 1.0. It passes the old gate
+// at FULL weight, so saturation can no longer tell foreground from syntax. The
+// gate is therefore dropped to catch mid-saturation colours, and the foreground
+// is protected by HUE distance instead (see fgHue* below). Old values, for a
+// one-line revert if this is worse: Lo = 0.22, Hi = 0.55.
+// 2026-07-25: these are the ORIGINAL values, restored. Two changes were tried
+// and both are reverted -- the grey weights they produced were never requested:
+//   - Lo 0.22 -> 0.10 to make mid-tones glow. This lit the muted blue-greys
+//     (#444b6a 0.41 -> 0.96, #5e6381 0.17 -> 0.85). Regression.
+//   - A brightness gate to force those greys to 0.0. That pushed them BELOW
+//     their original weights, which is also a change nobody asked for.
+// Reference saturations, measured from ~/.claude/themes/tokyo-night-terminal-dark.json:
+//   #cbccd1 body text 0.029 (never glows) | #5e6381 0.271 | #444b6a 0.358
+//   #7c68a5 warning   0.370 -- only 0.012 above #444b6a, so a saturation gate
+//   CANNOT separate dim grey chrome from muted accents. Do not try again.
+// DO NOT retune these to chase mid-tone glow. Grey bloom weights are load-bearing.
 float neonBloomSatGateLo = 0.22;
 float neonBloomSatGateHi = 0.55;
+// Hue exclusion. Bloom is suppressed for taps whose hue sits within fgHueBand
+// (in TURNS, 0..1 around the wheel) of the foreground, ramping back to full glow
+// by fgHueBand + fgHueSoft. #00b012 is hue 0.352. A band of 0.055 turns is ~20
+// degrees each way, which covers the foreground and its antialiased edge pixels
+// without eating the rest of the palette. WARNING: any near-neighbour green in
+// the theme lands in this band too and will NOT glow -- widen or narrow here.
+// Set fgHueExclude = 0.0 to disable and get the pure saturation gate back.
+float fgHueExclude = 1.0;
+vec3  fgHueRef = vec3(0.0, 0.690, 0.071); // #00b012, must track `foreground` in config
+float fgHueBand = 0.055;
+float fgHueSoft = 0.045;
 // Sampling is a dense 7x7 gaussian GRID, not a ring. Rings geometrically miss
 // thin axis-aligned strokes (a 2px pane border catches ~2 of 24 ring taps and
 // vanishes); a grid lands a full column of taps on it. The normalizer (the
@@ -102,6 +141,26 @@ float neonDimBoost = 0.35;
 
 float hash(vec2 p) {
     return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453123);
+}
+
+// Hue in TURNS (0..1). Returns 0.0 for achromatic input; callers must gate on
+// saturation separately, since hue is meaningless there.
+float hue01(vec3 c) {
+    float mx = max(c.r, max(c.g, c.b));
+    float mn = min(c.r, min(c.g, c.b));
+    float d = mx - mn;
+    if (d < 1e-5) return 0.0;
+    float h;
+    if (mx == c.r)      h = mod((c.g - c.b) / d, 6.0);
+    else if (mx == c.g) h = (c.b - c.r) / d + 2.0;
+    else                h = (c.r - c.g) / d + 4.0;
+    return h / 6.0;
+}
+
+// Shortest distance between two hues on the wheel, in turns (0..0.5).
+float hueDist(float a, float b) {
+    float d = abs(a - b);
+    return min(d, 1.0 - d);
 }
 
 void mainImage(out vec4 fragColor, in vec2 fragCoord)
@@ -214,6 +273,7 @@ void mainImage(out vec4 fragColor, in vec2 fragCoord)
         vec3 neon = vec3(0.0);
         float wsum = 0.0;
         float spin = hash(fragCoord.xy) * 6.2831853;
+        float fgHue = hue01(fgHueRef); // loop-invariant, hoisted out of the 24 taps
         for (int i = 0; i < 24; i++) {
             float fi = float(i) + 0.5;
             float rr = sqrt(fi / 24.0);
@@ -233,6 +293,14 @@ void mainImage(out vec4 fragColor, in vec2 fragCoord)
             float lift = neonDimBoost * (1.0 - tmax) * smoothstep(0.60, 0.90, tsat);
             float w = smoothstep(neonBloomSatGateLo, neonBloomSatGateHi, tsat)
                     * min(tmax + lift, 1.0);
+            // Foreground hue exclusion. The saturation gate above can no longer
+            // exclude the foreground (#00b012 is fully saturated), so kill glow
+            // for taps sitting at the foreground's hue instead. Applied AFTER
+            // the saturation gate so it only ever subtracts.
+            if (fgHueExclude > 0.0) {
+                float hd = hueDist(hue01(tapc), fgHue);
+                w *= smoothstep(fgHueBand, fgHueBand + fgHueSoft, hd);
+            }
             // Blue compensation: the eye sees blue light at a fraction of
             // the brightness of equally driven warm hues, so blue halos
             // vanished ("no glow" on the k8s-blue session chip) while gold
@@ -271,12 +339,15 @@ void mainImage(out vec4 fragColor, in vec2 fragCoord)
     float foreground = smoothstep(0.18, 0.62, luma);
     float paperMask = neutral * foreground;
     color = mix(color, paper * max(luma, 0.28), paperLift * paperMask);
-    color *= 1.0 + (hash(floor(fragCoord.xy * 0.25)) - 0.5) * paperGrain * paperMask;
+    // 0.25 -> 0.5 on 2026-07-25: 0.25 was a HiDPI-era value (4px cells at 1:1). Both
+    // displays are now non-HiDPI, so 0.5 gives 2px cells, matching the 321urx preset.
+    color *= 1.0 + (hash(floor(fragCoord.xy * 0.5)) - 0.5) * paperGrain * paperMask;
 
     // Darken bright pixels more than the background, so the image keeps contrast.
     luma = dot(color, vec3(0.299, 0.587, 0.114));
     float lit = smoothstep(0.08, 0.75, luma);
-    float phase = fract(fragCoord.y * 0.25);
+    float phase = fract(fragCoord.y * 0.5); // 0.25 -> 0.5 on 2026-07-25, non-HiDPI. Dormant
+                                            // while scan = 0.0, but correct if re-enabled.
     float dist = abs(phase - 0.5) * 2.0;
     float darkBand = smoothstep(0.58, 1.0, dist);
     float beam = 1.0 - smoothstep(0.0, 0.30, dist);
@@ -290,7 +361,7 @@ void mainImage(out vec4 fragColor, in vec2 fragCoord)
     vec3 mask = triad < 1.0 ? vec3(1.020, 0.992, 0.992)
               : triad < 2.0 ? vec3(0.992, 1.018, 0.992)
                              : vec3(0.992, 0.992, 1.020);
-    color *= mix(vec3(1.0), mask, 0.18 * lit);
+    color *= mix(vec3(1.0), mask, 0.0 * lit); // Grille off — 2026-07-25.
 
     // Rolling blanking bar and faint blue-slate retrace raster, after scanlines.
     color *= 1.0 - barDark * barMask;
