@@ -17,8 +17,8 @@
 
 float warp = 0.0; // curvature OFF
 float scan = 0.0; // Scanlines OFF (was 1.56), matching the 321urx preset's clean-text look
-float paperLift = 0.10; // neutral foreground lift; saturated syntax is gated out
-float paperGrain = 0.016; // stable foreground-only paper tooth; background stays clean
+float paperLift = 0.0; // neutral foreground lift; saturated syntax is gated out
+float paperGrain = 0.0; // stable foreground-only paper tooth; background stays clean
 
 // Motion ports from amber-phosphor-321urx.glsl, kept color-neutral.
 float barDir = 1.0;
@@ -49,7 +49,16 @@ float softAmount = 0.0; // 0.18 -> 0.0 on 2026-07-25. This was the ONLY thing ma
 // foreground fails the saturation gate and stays razor sharp, exactly the
 // same neutral-vs-saturated split the paper-lift below already relies on.
 // Set neonBloom to 0.0 to switch the whole effect off.
-float neonBloom = 0.22;        // halo strength (0 = off); 0.75 verified WAY too much.
+float neonBloom = 0.60;        // 0.22 -> 0.60 on 2026-07-27, MEASURED on-screen at 1920x1200 non-HiDPI:
+                               // 0.22 rendered a halo of a few /255 = invisible, 1.20 blew out. 0.60 bracketed
+                               // between them and confirmed by eye. NOTE: 0.22 was never a known-good value for
+                               // THIS mode -- it was tuned 07-23 for 2336x1510 and carried here by the partial
+                               // revert below, which restored strength+radius but left the fill knee at 4.0.
+                               // 0.45 -> 0.22 on 2026-07-27: display is BACK on 1920x1200, backingScale 1.0
+                               // (measured via NSScreen: backing rect 1920x1200 px). The 07-26 bump below was
+                               // correct FOR 3200x1800 and wrong here -- these constants are backing-px, so a
+                               // mode change silently detunes them.
+                               // 0.22 -> 0.45 on 2026-07-26: display went 1900x1200 -> 3200x1800 non-HiDPI. Larger backing spreads each glyph over ~1.7x more px, diluting per-tap energy; 0.22 measured ~1-4/255 halo = invisible. This was misdiagnosed as "bg_transparency kills glow" — it never did.        // halo strength (0 = off); 0.75 verified WAY too much.
                                // 0.45 -> 0.22 on 2026-07-23 for NON-HIDPI 2336x1510.
                                // Without the 2x backing store there is no downsample
                                // averaging any of this away, and every glyph is a much
@@ -62,7 +71,10 @@ float neonBloom = 0.22;        // halo strength (0 = off); 0.75 verified WAY too
                                // true black and therefore reads much glowier. That
                                // divergence is intentional and wanted -- do not "fix" it
                                // by splitting the presets again.
-float neonBloomRadiusPx = 13.0; // halo reach in backing px.
+float neonBloomRadiusPx = 13.0; // halo reach in backing px. 22 -> 13 on 2026-07-27: back on 1920x1200 backing,
+                               // so this returns to the 07-25 value tuned for exactly that mode. At 22 the six
+                               // ring taps reach ~2 glyph widths out and mostly sample background.
+                               // 13 -> 22 on 2026-07-26: 1900x1200 -> 3200x1800 backing (x1.68), same scaling model as the 07-23/07-25 changes below.
                                // 16 -> 13 on 2026-07-25 for NON-HIDPI 1900x1200. Same
                                // model as the 07-23 change: backing store shrank 2336 ->
                                // 1900 (x0.81) with no DPI change, so glyphs are ~1.23x
@@ -273,10 +285,21 @@ void mainImage(out vec4 fragColor, in vec2 fragCoord)
         vec3 neon = vec3(0.0);
         float wsum = 0.0;
         float spin = hash(fragCoord.xy) * 6.2831853;
-        float fgHue = hue01(fgHueRef); // loop-invariant, hoisted out of the 24 taps
-        for (int i = 0; i < 24; i++) {
+        float fgHue = hue01(fgHueRef); // loop-invariant, hoisted out of the tap loop
+        // 24 -> 96 taps on 2026-07-27 to kill halo speckle. The per-pixel random
+        // `spin` above means neighbouring pixels sample disjoint point sets; with
+        // only 24 samples over a ~530px^2 disk they disagreed badly and that
+        // disagreement WAS the grain. Noise falls as 1/sqrt(N), so 4x taps = 2x
+        // cleaner. tapNorm rescales BOTH accumulators back to their 24-tap
+        // magnitudes, so neonBloom, the fill knee (7.0) and the /6.0 divisor below
+        // all keep their existing calibration -- this changes noise ONLY, not look.
+        // If this ever costs too much fill rate, drop TAPS and everything still
+        // holds; do NOT remove tapNorm.
+        const int TAPS = 96;
+        float tapNorm = 24.0 / float(TAPS);
+        for (int i = 0; i < TAPS; i++) {
             float fi = float(i) + 0.5;
-            float rr = sqrt(fi / 24.0);
+            float rr = sqrt(fi / float(TAPS));
             float a = fi * 2.39996323 + spin;
             vec2 off = vec2(cos(a), sin(a)) * rr * neonBloomRadiusPx * px;
             float g = exp(-3.0 * rr * rr);
@@ -311,6 +334,9 @@ void mainImage(out vec4 fragColor, in vec2 fragCoord)
             neon += tapc * w * g;
             wsum += w * g;
         }
+        // Rescale to 24-tap magnitudes so all downstream constants are unchanged.
+        neon *= tapNorm;
+        wsum *= tapNorm;
         // Occupancy mask: a pixel SURROUNDED by glowing material (knockout
         // text inside a lit chip -- the word "sample" on a swatch) would
         // receive halo light from every direction and fill in, destroying
@@ -318,6 +344,22 @@ void mainImage(out vec4 fragColor, in vec2 fragCoord)
         // may receive: halos land on dark background OUTSIDE a slab, never
         // inside its letterforms. Max possible wsum with this kernel is ~7.6
         // (24 taps x mean gaussian 0.32), so the knee sits at "mostly lit".
+        //
+        // 7.0 -> 4.0 on 2026-07-26. This knee doubles as the only "big panel
+        // vs text" discriminator available to a post-process shader: it sees
+        // pixels, not tmux geometry. A glyph stroke sits in mostly-dark space
+        // (low wsum) and keeps full glow; a FILLED SLAB -- the clock pill, the
+        // DEVOPS chip, the session chips -- is surrounded by lit pixels (high
+        // wsum) and now falls off much faster. Text is untouched by design.
+        // Thin tmux PANE BORDERS are not helped by this and cannot be: they
+        // are geometrically identical to glyphs. Desaturate them in tmux.conf
+        // if they need to come down.
+        //
+        // 4.0 -> 7.0 on 2026-07-27: the 07-26 tightening belonged to the
+        // 3200x1800 state and was tuned against neonBloom 0.45 / radius 22.
+        // Those two were reverted to 0.22 / 13 for 1920x1200 but this knee was
+        // missed, leaving an aggressive knockout stacked on a weak halo = no
+        // visible glow. Keep all THREE in sync on any display-mode change.
         float fill = 1.0 - clamp(wsum / 7.0, 0.0, 1.0);
         color += neon * (neonBloom / 6.0) * fill;
     }
