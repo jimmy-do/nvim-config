@@ -1,0 +1,231 @@
+#!/usr/bin/env python3
+"""ui-theme -- snapshot the whole UI colour scheme as a named preset.
+
+    ui-theme               list the presets, swatches and all
+    ui-theme save <name>   snapshot the CURRENT scheme under <name>
+    ui-theme <name>        apply a preset (auto-saves `_previous` first)
+    ui-theme -             back to the scheme before the last apply
+    ui-theme show <name>   print one preset without applying it
+    ui-theme rm <name>     delete a preset
+
+One preset = the nine colours the individual commands own:
+
+    tmux-bar tmux-color tmux-chip tmux-pane tmux-pane-lines tmux-copy
+    cc-fg cc-fg-dim cc-em
+
+READS the same way ui-colors does (block headers in tmux.conf, `current`
+from the cc commands). APPLIES by invoking each command with the stored hex
+-- they own their own block rewriting, live-apply and theme mirroring, so
+this file never touches tmux.conf or the Ghostty config itself.
+
+tmux-chip note: a manual `tmux-chip <hex>` PINS the current session's chip.
+Applying a preset sets the global default, then runs `tmux-chip auto` so
+this session goes straight back to its session-hue colour instead of
+staying pinned to the preset's. The global default keeps the preset value.
+
+Presets are JSON files in ~/.config/nvim/dotfiles/ui-themes/, one per name,
+so they travel with the dotfiles.
+"""
+import json, os, re, subprocess, sys
+
+HOME = os.path.expanduser("~")
+STARSHIP = f"{HOME}/.config/starship.toml"
+TMUX_CONF = os.path.realpath(f"{HOME}/.tmux.conf")
+THEME_DIR = f"{HOME}/.config/nvim/dotfiles/ui-themes"
+BIN = f"{HOME}/.local/bin"
+
+INK = "#080808"
+PREV = "_previous"
+
+# Apply order: chrome first, chips before the auto handback, text last.
+TMUX_SURFACES = ["tmux-bar", "tmux-color", "tmux-chip",
+                 "tmux-pane", "tmux-pane-lines", "tmux-copy"]
+CC_SURFACES = ["cc-fg", "cc-fg-dim", "cc-em"]
+SURFACES = TMUX_SURFACES + CC_SURFACES
+
+PROG = os.path.basename(sys.argv[0])
+
+
+def die(msg):
+    print(f"{PROG}: {msg}", file=sys.stderr)
+    sys.exit(1)
+
+
+def rgb(h):
+    h = h.lstrip("#")
+    return int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16)
+
+
+def swatch(h):
+    r, g, b = rgb(h)
+    ri, gi, bi = rgb(INK)
+    return f"\033[48;2;{r};{g};{b}m\033[38;2;{ri};{gi};{bi}m   \033[0m"
+
+
+def names():
+    table = {}
+    try:
+        src = open(STARSHIP, encoding="utf-8").read()
+    except OSError:
+        return table
+    for m in re.finditer(r"^(pill|tmux|text)_([a-z0-9_]+)\s*=\s*'(#[0-9a-fA-F]{6})'",
+                         src, re.M):
+        table.setdefault(m.group(3).lower(),
+                         re.sub(r"_lifted$|_white$", "", m.group(2)))
+    return table
+
+
+NAMES = names()
+
+
+def block_bright(marker):
+    try:
+        src = open(TMUX_CONF, encoding="utf-8").read()
+    except OSError:
+        return None
+    m = re.search(rf"^# >>> {re.escape(marker)}-managed >>>.*?"
+                  rf"^# bright = (#[0-9a-fA-F]{{6}})", src, re.M | re.S)
+    return m.group(1) if m else None
+
+
+def cc_current(cmd):
+    try:
+        out = subprocess.run([f"{BIN}/{cmd}", "current"], capture_output=True,
+                             text=True, timeout=5)
+        hexes = re.findall(r"#[0-9a-fA-F]{6}", out.stdout + out.stderr)
+        return hexes[0] if hexes else None
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+
+
+def capture():
+    theme = {}
+    missing = []
+    for s in TMUX_SURFACES:
+        h = block_bright(s)
+        (theme.__setitem__(s, h) if h else missing.append(s))
+    for s in CC_SURFACES:
+        h = cc_current(s)
+        (theme.__setitem__(s, h) if h else missing.append(s))
+    if missing:
+        die(f"could not read: {', '.join(missing)}")
+    return theme
+
+
+def theme_path(name):
+    return f"{THEME_DIR}/{name}.json"
+
+
+def load(name):
+    try:
+        with open(theme_path(name), encoding="utf-8") as f:
+            return json.load(f)
+    except OSError:
+        return None
+    except json.JSONDecodeError:
+        die(f"'{name}' is not valid JSON -- fix or rm it")
+
+
+def store(name, theme):
+    os.makedirs(THEME_DIR, exist_ok=True)
+    with open(theme_path(name), "w", encoding="utf-8") as f:
+        json.dump(theme, f, indent=2)
+        f.write("\n")
+
+
+def listing():
+    os.makedirs(THEME_DIR, exist_ok=True)
+    entries = sorted(f[:-5] for f in os.listdir(THEME_DIR) if f.endswith(".json"))
+    if not entries:
+        print(f"no presets yet -- `{PROG} save <name>` snapshots the current scheme")
+        return
+    live = capture()
+    for name in entries:
+        theme = load(name)
+        if not isinstance(theme, dict):
+            continue
+        strip = "".join(swatch(theme[s]) for s in SURFACES if theme.get(s))
+        mark = " *" if theme == live else ""
+        label = "previous (auto-saved on apply)" if name == PREV else ""
+        print(f"  {name:<16} {strip}{mark}  \033[2m{label}\033[0m")
+    print(f"\n  order: {' '.join(SURFACES)}   * = current scheme")
+
+
+def show(name, theme):
+    print(f"{name}:")
+    for s in SURFACES:
+        h = theme.get(s)
+        if h:
+            print(f"  {s:<16} {swatch(h)} {h}  {NAMES.get(h.lower(), '(raw hex)')}")
+        else:
+            print(f"  {s:<16} (not in preset)")
+
+
+def apply(name, theme):
+    missing = [s for s in SURFACES if not theme.get(s)]
+    if missing:
+        die(f"'{name}' is missing: {', '.join(missing)}")
+    live = capture()
+    # cc-fg and friends refuse a no-op write; skipping is also what keeps an
+    # identity apply from stomping each command's own `-` previous.
+    todo = [s for s in SURFACES if live.get(s, "").lower() != theme[s].lower()]
+    if not todo:
+        print(f"'{name}' is already the current scheme -- nothing to do")
+        return
+    store(PREV, live)
+    for s in todo:
+        r = subprocess.run([f"{BIN}/{s}", theme[s]], capture_output=True, text=True)
+        if r.returncode != 0:
+            die(f"{s} {theme[s]} failed:\n{r.stderr.strip()}")
+    # Unpin this session's chip so session-hue owns it again; the global
+    # default set by the line above keeps the preset's colour.
+    subprocess.run([f"{BIN}/tmux-chip", "auto"], capture_output=True, text=True)
+    print(f"applied '{name}' -- `{PROG} -` goes back")
+
+
+def main(argv):
+    if not argv:
+        return listing()
+    if argv[0] == "save":
+        if len(argv) != 2:
+            die("save takes exactly one name")
+        name = argv[1]
+        if name.startswith("_") or "/" in name or not name:
+            die("names cannot start with _ or contain /")
+        theme = capture()
+        existed = load(name) is not None
+        store(name, theme)
+        print(f"{'updated' if existed else 'saved'} '{name}':")
+        show(name, theme)
+        return
+    if argv[0] == "rm":
+        if len(argv) != 2:
+            die("rm takes exactly one name")
+        try:
+            os.remove(theme_path(argv[1]))
+        except OSError:
+            die(f"no preset named '{argv[1]}'")
+        print(f"removed '{argv[1]}'")
+        return
+    if argv[0] == "show":
+        if len(argv) != 2:
+            die("show takes exactly one name")
+        theme = load(argv[1])
+        if theme is None:
+            die(f"no preset named '{argv[1]}'")
+        return show(argv[1], theme)
+    if argv[0] == "-":
+        theme = load(PREV)
+        if theme is None:
+            die("nothing to go back to -- no apply has run yet")
+        return apply(PREV, theme)
+    if len(argv) == 1:
+        theme = load(argv[0])
+        if theme is None:
+            die(f"no preset named '{argv[0]}' -- bare `{PROG}` lists them")
+        return apply(argv[0], theme)
+    die(f"usage: {PROG} [save <name> | <name> | - | show <name> | rm <name>]")
+
+
+if __name__ == "__main__":
+    main(sys.argv[1:])

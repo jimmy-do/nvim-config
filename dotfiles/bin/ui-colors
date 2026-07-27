@@ -1,0 +1,152 @@
+#!/usr/bin/env python3
+"""ui-colors -- one screen: every colour currently chosen across the tmux UI
+and the Claude Code text commands.
+
+    ui-colors              that's it, no args
+
+READ-ONLY. It changes nothing. Sources of truth, in order:
+
+    tmux.conf managed blocks   each tmux-* command records `# bright = #hex`
+                               in its own block header; DIM/SUNK are derived
+                               at the same ratios tmux-color bakes them
+                               (0.48 / 0.20)
+    cc-fg / cc-fg-dim / cc-em  each already has a `current` subcommand
+    starship.toml              pill_/tmux_/text_ tables, to put a NAME next
+                               to each hex; a hex not in the tables prints
+                               as (raw hex)
+    live tmux                  this session's @session_hue, if inside tmux,
+                               since session-hue overrides the tmux-chip
+                               global per session
+"""
+import os, re, subprocess, sys
+
+HOME = os.path.expanduser("~")
+STARSHIP = f"{HOME}/.config/starship.toml"
+TMUX_CONF = os.path.realpath(f"{HOME}/.tmux.conf")
+
+DIM_SCALE = 0.48
+SUNK_SCALE = 0.20
+INK = "#080808"
+
+SURFACES = [
+    # (block marker name, display name, what it paints, extra rows)
+    ("tmux-bar",        "tmux-bar",        "the bar itself: row 1 rule/HUD, popup+menu frames, float border"),
+    ("tmux-color",      "tmux-color",      "written on the bar: inactive windows, rail, date, clock chip"),
+    ("tmux-chip",       "tmux-chip",       "session chip + active window chip (global default)"),
+    ("tmux-pane",       "tmux-pane",       "pane title pills, pane numbers, clock mode"),
+    ("tmux-pane-lines", "tmux-pane-lines", "pane dividers (lit/unlit)"),
+    ("tmux-copy",       "tmux-copy",       "copy mode: border, pill, COPY chip, scrollbar, selection"),
+]
+
+
+def rgb(h):
+    h = h.lstrip("#")
+    return int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16)
+
+
+def scale(h, k):
+    r, g, b = rgb(h)
+    return "#%02x%02x%02x" % (int(r * k), int(g * k), int(b * k))
+
+
+def swatch(h, label=None):
+    r, g, b = rgb(h)
+    ri, gi, bi = rgb(INK)
+    text = label if label is not None else f" {h} "
+    return f"\033[48;2;{r};{g};{b}m\033[38;2;{ri};{gi};{bi}m{text}\033[0m"
+
+
+def names():
+    """hex -> palette name, from the same tables every colour command reads."""
+    table = {}
+    try:
+        src = open(STARSHIP, encoding="utf-8").read()
+    except OSError:
+        return table
+    for m in re.finditer(r"^(pill|tmux|text)_([a-z0-9_]+)\s*=\s*'(#[0-9a-fA-F]{6})'",
+                         src, re.M):
+        # first name wins, same short form the pickers show
+        table.setdefault(m.group(3).lower(),
+                         re.sub(r"_lifted$|_white$", "", m.group(2)))
+    return table
+
+
+NAMES = names()
+
+
+def name_of(h):
+    return NAMES.get(h.lower(), "(raw hex)")
+
+
+def block_bright(marker):
+    try:
+        src = open(TMUX_CONF, encoding="utf-8").read()
+    except OSError:
+        return None
+    m = re.search(rf"^# >>> {re.escape(marker)}-managed >>>.*?"
+                  rf"^# bright = (#[0-9a-fA-F]{{6}})", src, re.M | re.S)
+    return m.group(1) if m else None
+
+
+def cc_current(cmd):
+    try:
+        out = subprocess.run([cmd, "current"], capture_output=True, text=True,
+                             timeout=5)
+        hexes = re.findall(r"#[0-9a-fA-F]{6}", out.stdout + out.stderr)
+        return hexes[0] if hexes else None
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+
+
+def session_hue():
+    if "TMUX" not in os.environ:
+        return None, None
+    try:
+        hue = subprocess.run(["tmux", "display", "-p", "#{@session_hue}"],
+                             capture_output=True, text=True, timeout=5).stdout.strip()
+        name = subprocess.run(["tmux", "display", "-p", "#{session_name}"],
+                              capture_output=True, text=True, timeout=5).stdout.strip()
+        return (hue if re.fullmatch(r"#[0-9a-fA-F]{6}", hue) else None), name
+    except (OSError, subprocess.TimeoutExpired):
+        return None, None
+
+
+def row(label, h, note=""):
+    if not h:
+        print(f"  {label:<10} (not set)")
+        return
+    print(f"  {label:<10} {swatch(h)} {h}  {name_of(h):<14} {note}")
+
+
+def main():
+    bold, dimt, reset = "\033[1m", "\033[2m", "\033[0m"
+    print(f"{bold}tmux UI{reset}")
+    for marker, cmd, what in SURFACES:
+        b = block_bright(marker)
+        print(f"\n{bold}{cmd}{reset}  {dimt}{what}{reset}")
+        if not b:
+            print("  (no managed block found)")
+            continue
+        row("bright", b)
+        row("dim", scale(b, DIM_SCALE))
+        if marker == "tmux-copy":
+            row("sunk", scale(b, SUNK_SCALE), "(scrollbar trough / match bed)")
+
+    hue, sess = session_hue()
+    if hue:
+        print(f"\n{bold}session hue{reset}  {dimt}this session's chip colour "
+              f"(session-hue / pin, overrides the tmux-chip global){reset}")
+        row(sess or "session", hue)
+
+    print(f"\n{bold}Claude Code text{reset}")
+    for cmd, what in [("cc-fg",     "transcript body, active pane"),
+                      ("cc-fg-dim", "transcript body, inactive panes"),
+                      ("cc-em",     "emphasis: inline code, bold, paths (ANSI blue 4/12)")]:
+        h = cc_current(cmd)
+        print(f"\n{bold}{cmd}{reset}  {dimt}{what}{reset}")
+        row("current", h)
+    print()
+
+
+if __name__ == "__main__":
+    main()

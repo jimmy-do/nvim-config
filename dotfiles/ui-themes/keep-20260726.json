@@ -1,0 +1,11 @@
+{
+  "tmux-bar": "#00ffc8",
+  "tmux-color": "#2ff5ff",
+  "tmux-chip": "#00d5ff",
+  "tmux-pane": "#00ffc8",
+  "tmux-pane-lines": "#00ffc8",
+  "tmux-copy": "#be73ff",
+  "cc-fg": "#609ec3",
+  "cc-fg-dim": "#3d4560",
+  "cc-em": "#ff5e7a"
+}

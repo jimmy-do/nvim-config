@@ -1,0 +1,423 @@
+#!/usr/bin/env python3
+"""ui-tui -- one screen to drive the whole tmux UI colour family.
+
+    ui-tui                 no args, q quits
+
+Left: the nine surfaces (tmux-bar, tmux-color, tmux-chip, tmux-pane,
+tmux-pane-lines, tmux-copy, cc-fg, cc-fg-dim, cc-em) with what each is set
+to RIGHT NOW. Right: the palette for the selected surface -- scraped from
+that command's own bare listing, so each surface offers exactly what its
+command offers (cc-fg's luminance band, tmux's saturated set, all of it).
+
+    j/k or arrows   move        Tab / h / l    switch column
+    Enter           apply the highlighted colour to the selected surface
+    u               undo the selected surface (`<cmd> -`)
+    0               restore the scheme from when this TUI started
+    s               save the current scheme as a preset (asks for a name)
+    p               toggle the presets view: Enter applies, x deletes
+    r               re-read everything from disk
+    q / Esc         quit
+
+NOTHING is written until you press Enter on a colour (or apply a preset).
+Startup only reads. The scheme at launch is snapshotted to the preset
+`tui-startup` so `0` (or `ui-theme tui-startup` later) always gets you back.
+
+All writes go THROUGH the existing commands -- tmux-bar, cc-fg, ui-theme --
+which own their block rewriting, live-apply and mirroring. This file never
+edits tmux.conf, starship.toml or the Ghostty config itself.
+"""
+import json, os, re, subprocess, sys, termios, tty
+
+HOME = os.path.expanduser("~")
+TMUX_CONF = os.path.realpath(f"{HOME}/.tmux.conf")
+THEME_DIR = f"{HOME}/.config/nvim/dotfiles/ui-themes"
+BIN = f"{HOME}/.local/bin"
+STARTUP = "tui-startup"
+
+INK = "#080808"
+
+SURFACES = [
+    ("tmux-bar",        "bar frame: rule, HUD, popups, float border"),
+    ("tmux-color",      "on the bar: inactive windows, date, clock"),
+    ("tmux-chip",       "session + active window chips"),
+    ("tmux-pane",       "pane title pills"),
+    ("tmux-pane-lines", "pane dividers"),
+    ("tmux-copy",       "copy mode accent"),
+    ("cc-fg",           "claude body text, active pane"),
+    ("cc-fg-dim",       "claude body text, inactive panes"),
+    ("cc-em",           "claude emphasis (ANSI blue)"),
+]
+TMUX_SET = {s for s, _ in SURFACES[:6]}
+
+ANSI = re.compile(r"\x1b\[[0-9;]*m")
+# \W* skips any leading "you are here" marker (*, the dot, whitespace)
+# without ever eating the first letter of the name itself.
+ROW = re.compile(r"^\W*([a-z0-9_]+)\s+.*(#[0-9a-fA-F]{6})")
+
+
+def rgb(h):
+    h = h.lstrip("#")
+    return int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16)
+
+
+def sw(h, txt="  "):
+    r, g, b = rgb(h)
+    ri, gi, bi = rgb(INK)
+    return f"\x1b[48;2;{r};{g};{b}m\x1b[38;2;{ri};{gi};{bi}m{txt}\x1b[0m"
+
+
+def palette_names():
+    """hex -> name from the starship tables, for labelling the help screen."""
+    table = {}
+    try:
+        s = open(f"{HOME}/.config/starship.toml", encoding="utf-8").read()
+    except OSError:
+        return table
+    for m in re.finditer(r"^(pill|tmux|text)_([a-z0-9_]+)\s*=\s*'(#[0-9a-fA-F]{6})'",
+                         s, re.M):
+        table.setdefault(m.group(3).lower(),
+                         re.sub(r"_lifted$|_white$", "", m.group(2)))
+    return table
+
+
+NAMES = palette_names()
+
+
+def term_size():
+    try:
+        c, l = os.get_terminal_size()
+    except OSError:
+        c, l = 80, 24
+    return (c, l) if c > 0 and l > 0 else (80, 24)
+
+
+def run(cmd, *args, timeout=10):
+    return subprocess.run([f"{BIN}/{cmd}", *args], capture_output=True,
+                          text=True, timeout=timeout)
+
+
+def block_bright(marker):
+    try:
+        src = open(TMUX_CONF, encoding="utf-8").read()
+    except OSError:
+        return None
+    m = re.search(rf"^# >>> {re.escape(marker)}-managed >>>.*?"
+                  rf"^# bright = (#[0-9a-fA-F]{{6}})", src, re.M | re.S)
+    return m.group(1) if m else None
+
+
+def current(surface):
+    if surface in TMUX_SET:
+        return block_bright(surface)
+    out = run(surface, "current")
+    hexes = re.findall(r"#[0-9a-fA-F]{6}", out.stdout + out.stderr)
+    return hexes[0] if hexes else None
+
+
+def palette(surface):
+    """(name, hex) rows scraped from the command's own bare listing."""
+    out = run(surface)
+    rows, seen = [], set()
+    for line in ANSI.sub("", out.stdout + out.stderr).splitlines():
+        m = ROW.match(line)
+        # cc-fg's footer mentions the shell branch with a hex on the line;
+        # it scrapes like a palette row but is not one.
+        if m and m.group(1) not in seen and m.group(1) != "shell":
+            seen.add(m.group(1))
+            rows.append((m.group(1), m.group(2)))
+    return rows
+
+
+def presets():
+    os.makedirs(THEME_DIR, exist_ok=True)
+    out = []
+    for f in sorted(os.listdir(THEME_DIR)):
+        if not f.endswith(".json") or f.startswith("_"):
+            continue
+        try:
+            with open(f"{THEME_DIR}/{f}", encoding="utf-8") as fh:
+                theme = json.load(fh)
+        except (OSError, json.JSONDecodeError):
+            continue
+        if isinstance(theme, dict):
+            out.append((f[:-5], theme))
+    return out
+
+
+class TUI:
+    def __init__(self):
+        self.cur = {s: current(s) for s, _ in SURFACES}
+        self.pal = {}                    # surface -> rows, lazy
+        self.si = 0                      # selected surface
+        self.pi = 0                      # palette cursor
+        self.col = 0                     # 0 = surfaces, 1 = palette
+        self.mode = "colors"             # or "presets"
+        self.pre = presets()
+        self.prei = 0
+        self.msg = ""
+        self.help = False
+        self.quit = False
+
+    # -- data ---------------------------------------------------------------
+    def rows(self):
+        s = SURFACES[self.si][0]
+        if s not in self.pal:
+            self.pal[s] = palette(s)
+        return self.pal[s]
+
+    def refresh(self, surface=None):
+        for s, _ in SURFACES:
+            if surface in (None, s):
+                self.cur[s] = current(s)
+        self.pre = presets()
+
+    # -- actions ------------------------------------------------------------
+    def apply_color(self):
+        s = SURFACES[self.si][0]
+        rows = self.rows()
+        if not rows:
+            self.msg = f"{s}: nothing to pick from"
+            return
+        name, h = rows[self.pi % len(rows)]
+        if (self.cur.get(s) or "").lower() == h.lower():
+            self.msg = f"{s} is already {name}"
+            return
+        r = run(s, name)
+        if r.returncode != 0:
+            self.msg = f"{s} {name} failed: {ANSI.sub('', r.stderr).strip()[:60]}"
+            return
+        self.refresh(s)
+        self.msg = f"{s} -> {name} {h}   (u undoes)"
+
+    def undo_surface(self):
+        s = SURFACES[self.si][0]
+        r = run(s, "-")
+        self.refresh(s)
+        self.msg = (f"{s}: back to previous" if r.returncode == 0 else
+                    f"{s} -: {ANSI.sub('', r.stderr).strip()[:60]}")
+
+    def apply_preset(self, name):
+        r = run("ui-theme", name, timeout=60)
+        self.refresh()
+        out = ANSI.sub("", r.stdout + r.stderr).strip()
+        self.msg = out.splitlines()[-1][:80] if out else f"applied '{name}'"
+
+    def save_preset(self):
+        name = self.prompt("save as: ")
+        if not name:
+            self.msg = "save cancelled"
+            return
+        r = run("ui-theme", "save", name)
+        self.refresh()
+        self.msg = (f"saved '{name}'" if r.returncode == 0 else
+                    ANSI.sub("", r.stderr).strip()[:80])
+
+    def delete_preset(self):
+        if not self.pre:
+            return
+        name = self.pre[self.prei % len(self.pre)][0]
+        if name == STARTUP:
+            self.msg = f"'{STARTUP}' is the safety net -- rm it from ui-theme if you must"
+            return
+        if self.prompt(f"delete '{name}'? type y: ").lower() != "y":
+            self.msg = "kept"
+            return
+        run("ui-theme", "rm", name)
+        self.refresh()
+        self.prei = 0
+        self.msg = f"removed '{name}'"
+
+    # -- terminal -----------------------------------------------------------
+    def prompt(self, label):
+        h = term_size()[1]
+        sys.stdout.write(f"\x1b[{h};1H\x1b[2K\x1b[1m{label}\x1b[0m")
+        sys.stdout.flush()
+        buf = ""
+        while True:
+            c = os.read(0, 1).decode(errors="ignore")
+            if c in ("\r", "\n"):
+                return buf.strip()
+            if c in ("\x1b", "\x03"):
+                return ""
+            if c in ("\x7f", "\x08"):
+                buf = buf[:-1]
+            elif c.isprintable():
+                buf += c
+            sys.stdout.write(f"\x1b[{h};1H\x1b[2K\x1b[1m{label}\x1b[0m{buf}")
+            sys.stdout.flush()
+
+    def key(self):
+        c = os.read(0, 1).decode(errors="ignore")
+        if c != "\x1b":
+            return c
+        # arrows arrive as ESC [ A/B/C/D; a lone ESC is quit
+        import select
+        if not select.select([0], [], [], 0.05)[0]:
+            return "esc"
+        seq = os.read(0, 2).decode(errors="ignore")
+        return {"[A": "k", "[B": "j", "[C": "l", "[D": "h"}.get(seq, "")
+
+    # -- drawing ------------------------------------------------------------
+    def draw(self):
+        cols, lines = term_size()
+        out = ["\x1b[2J\x1b[H"]
+        B, D, R, INV = "\x1b[1m", "\x1b[2m", "\x1b[0m", "\x1b[7m"
+        if self.help:
+            out.append(self.help_screen(B, D, R))
+            sys.stdout.write("".join(out))
+            sys.stdout.flush()
+            return
+        out.append(f"{B} ui-tui{R}  {D}Enter apply · u undo · 0 startup scheme · "
+                   f"s save preset · p presets · ? help · q quit{R}\r\n\r\n")
+        left = 34
+        if self.mode == "colors":
+            rows = self.rows()
+            body = max(len(SURFACES), len(rows))
+            esc = re.compile(r"\x1b\[[0-9;?]*[a-zA-Z]")
+            for i in range(min(body, lines - 5)):
+                l = ""
+                if i < len(SURFACES):
+                    s, _ = SURFACES[i]
+                    h = self.cur.get(s)
+                    cur = f"{sw(h)} {h}" if h else "(unset)"
+                    tag = f"{INV}" if (i == self.si and self.col == 0) else ""
+                    pt = ">" if i == self.si else " "
+                    l = f" {pt} {tag}{s:<16}{R} {cur}"
+                l += " " * max(1, left - len(esc.sub("", l)))
+                r = ""
+                if i < len(rows):
+                    name, h = rows[i]
+                    on = i == self.pi % max(1, len(rows)) and self.col == 1
+                    is_cur = (self.cur.get(SURFACES[self.si][0]) or "").lower() == h.lower()
+                    r = (f"{INV if on else ''}{name:<16}{R} {sw(h, '      ')} "
+                         f"{h}{' *' if is_cur else ''}")
+                out.append(f"{l}   {r}\r\n")
+            out.append(f"\r\n {D}{SURFACES[self.si][1]}  ·  * = current{R}\r\n")
+        else:
+            out.append(f" {B}presets{R}  {D}Enter apply · x delete · p back{R}\r\n\r\n")
+            if not self.pre:
+                out.append(f" {D}none yet -- s saves one{R}\r\n")
+            for i, (name, theme) in enumerate(self.pre):
+                on = i == self.prei % max(1, len(self.pre))
+                strip = "".join(sw(theme[s]) for s, _ in SURFACES if theme.get(s))
+                live = all((self.cur.get(s) or "").lower() == theme.get(s, "").lower()
+                           for s, _ in SURFACES)
+                out.append(f" {'>' if on else ' '} {INV if on else ''}{name:<18}{R} "
+                           f"{strip}{' *' if live else ''}\r\n")
+        out.append(f"\x1b[{lines};1H\x1b[2K {self.msg}")
+        sys.stdout.write("".join(out))
+        sys.stdout.flush()
+
+    def help_screen(self, B, D, R):
+        o = [f"{B} ui-tui help{R}  {D}any key returns{R}\r\n\r\n"]
+        o.append(f" {B}what this is{R}\r\n")
+        o.append("   One screen for the whole colour family. Pick a surface on the\r\n")
+        o.append("   left, a colour on the right, Enter applies it LIVE through the\r\n")
+        o.append("   surface's own command (tmux-bar, cc-fg, ...). Nothing is written\r\n")
+        o.append("   until you press Enter. Startup was snapshotted to the preset\r\n")
+        o.append(f"   '{STARTUP}' -- 0 restores it any time, or `ui-theme {STARTUP}` later.\r\n\r\n")
+        o.append(f" {B}keys{R}\r\n")
+        for k, what in [("j/k or arrows", "move up / down"),
+                        ("Tab / h / l", "switch between surface and palette columns"),
+                        ("Enter", "apply highlighted colour to selected surface"),
+                        ("u", "undo the selected surface (its own `-`)"),
+                        ("0", "restore the scheme from when this TUI started"),
+                        ("s", "save the current scheme as a named preset"),
+                        ("p", "presets view: Enter applies, x deletes"),
+                        ("r", "re-read colours, palettes and presets from disk"),
+                        ("?", "this help"),
+                        ("q / Esc", "quit")]:
+            o.append(f"   {B}{k:<15}{R} {what}\r\n")
+        o.append(f"\r\n {B}current scheme{R}\r\n")
+        for s, what in SURFACES:
+            h = self.cur.get(s)
+            if h:
+                nm = NAMES.get(h.lower(), "")
+                o.append(f"   {s:<16} {sw(h, '      ')} {h}  {nm:<14} {D}{what}{R}\r\n")
+            else:
+                o.append(f"   {s:<16} (unset)\r\n")
+        o.append(f"\r\n {D}outside the TUI: `ui-colors` prints this scheme, `ui-theme` saves/applies presets{R}\r\n")
+        return "".join(o)
+
+    # -- loop ---------------------------------------------------------------
+    def loop(self):
+        while not self.quit:
+            self.draw()
+            k = self.key()
+            self.msg = ""
+            if self.help:
+                self.help = False
+                continue
+            if k == "?":
+                self.help = True
+            elif k in ("q", "esc", "\x03"):
+                self.quit = True
+            elif k == "p":
+                self.mode = "presets" if self.mode == "colors" else "colors"
+            elif k == "r":
+                self.pal.clear()
+                self.refresh()
+                self.msg = "reloaded"
+            elif k == "s":
+                self.save_preset()
+            elif k == "0":
+                self.apply_preset(STARTUP)
+            elif self.mode == "presets":
+                n = max(1, len(self.pre))
+                if k == "j":
+                    self.prei = (self.prei + 1) % n
+                elif k == "k":
+                    self.prei = (self.prei - 1) % n
+                elif k in ("\r", "\n") and self.pre:
+                    self.apply_preset(self.pre[self.prei % n][0])
+                elif k == "x":
+                    self.delete_preset()
+            else:
+                if k in ("\t", "h", "l"):
+                    self.col ^= 1
+                elif k == "j":
+                    if self.col == 0:
+                        self.si = (self.si + 1) % len(SURFACES)
+                        self.pi = 0
+                    else:
+                        self.pi = (self.pi + 1) % max(1, len(self.rows()))
+                elif k == "k":
+                    if self.col == 0:
+                        self.si = (self.si - 1) % len(SURFACES)
+                        self.pi = 0
+                    else:
+                        self.pi = (self.pi - 1) % max(1, len(self.rows()))
+                elif k in ("\r", "\n"):
+                    if self.col == 0:
+                        self.col = 1
+                    else:
+                        self.apply_color()
+                elif k == "u":
+                    self.undo_surface()
+
+
+def main():
+    if any(a in ("-h", "--help") for a in sys.argv[1:]):
+        print(__doc__)
+        return
+    if not sys.stdin.isatty() or not sys.stdout.isatty():
+        print("ui-tui needs a terminal", file=sys.stderr)
+        sys.exit(1)
+    # Safety net BEFORE anything else: the scheme as it is right now.
+    r = run("ui-theme", "save", STARTUP)
+    if r.returncode != 0:
+        print(f"could not snapshot startup scheme:\n{r.stderr}", file=sys.stderr)
+        sys.exit(1)
+    old = termios.tcgetattr(0)
+    sys.stdout.write("\x1b[?1049h\x1b[?25l")   # alt screen, hide cursor
+    try:
+        tty.setcbreak(0)
+        TUI().loop()
+    finally:
+        termios.tcsetattr(0, termios.TCSADRAIN, old)
+        sys.stdout.write("\x1b[?1049l\x1b[?25h")
+        sys.stdout.flush()
+
+
+if __name__ == "__main__":
+    main()
