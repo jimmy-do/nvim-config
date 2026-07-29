@@ -1,0 +1,121 @@
+#!/usr/bin/env bash
+# heat-watch — notice the SLOW heater: something that has been burning CPU for
+# hours without ever tripping a temperature alarm.
+#
+# WHY NOT A TEMP THRESHOLD: the case this exists for was an orphaned process
+# from an earlier session that ran ~8 hours and topped out around 150F. That
+# never reaches a "too hot" line worth alarming on -- yet it was 8 wasted hours
+# of heat that should have been killed in the first ten minutes. Peak temp was
+# never the signal. DURATION OF SUSTAINED BURN was.
+#
+# So the trigger is a process holding a meaningful slice of CPU for a long time,
+# whatever the thermometer says. Temperature is used only as corroboration in
+# the notification text, never as the gate.
+#
+# Called by temp-probe (already backgrounded off the status bar's critical
+# path), with the current CPU temp in F as $1. Writes the current offender to
+# $TMPDIR/tmux-hog for the tmux segment, and fires a macOS notification on an
+# escalating schedule so a long-lived hog nags rather than telling you once.
+set -u
+
+cpu_f="${1:-0}"
+
+hog_file="${TMPDIR:-/tmp}/tmux-hog"
+state="${TMPDIR:-/tmp}/tmux-heat-state"
+
+# A process qualifies at 0.40 average cores held since launch. WindowServer
+# idles around 0.15 over days, so this sits clear of normal desktop noise while
+# still catching a single-threaded test loop (which pins ~1.0).
+# All three are env-overridable so the alert path can be exercised on demand
+# (HOG_MINS=0 TIERS=0 heat-watch) instead of only after a real 15-minute burn.
+HOG_BURN=${HOG_BURN:-0.40}
+# ...and only after 15 minutes. Below that it is a build, a test run, or a video
+# export -- work you started and are waiting on, not something that got away.
+HOG_MINS=${HOG_MINS:-15}
+# Ages (minutes) at which a still-running hog re-notifies. Escalating rather
+# than repeating: it tells you at 15m, again at 1h, then 4h and 12h, so an
+# ignored banner does not become a silent one.
+TIERS=${TIERS:-"15 60 240 720"}
+
+now=$(date +%s)
+
+# --- find the worst sustained burner ---------------------------------------
+# Same burn = cputime/elapsed metric as the `hogs` command. System daemons are
+# excluded by path: they legitimately accumulate CPU forever and are not
+# something the user would kill anyway. Everything the user can actually
+# launch -- and therefore accidentally orphan -- lives outside these prefixes.
+read -r hog_pid hog_burn hog_mins hog_name <<EOF
+$(ps -axo pid=,ppid=,time=,etime=,comm= | awk -v minburn="$HOG_BURN" -v minmins="$HOG_MINS" '
+  function secs(t,   d, p, n, s) {
+    d = 0
+    if (t ~ /-/) { split(t, p, "-"); d = p[1]; t = p[2] }
+    n = split(t, s, ":")
+    if (n == 3)      return d*86400 + s[1]*3600 + s[2]*60 + s[3]
+    else if (n == 2) return d*86400 + s[1]*60 + s[2]
+    else             return d*86400 + s[1]
+  }
+  {
+    pid = $1; ppid = $2; cput = $3; el = $4
+    cmd = ""
+    for (i = 5; i <= NF; i++) cmd = cmd (i > 5 ? " " : "") $i
+    if (cmd ~ /^\/System\//)      next
+    if (cmd ~ /^\/usr\/libexec\//) next
+    if (cmd ~ /^\/usr\/sbin\//)   next
+    if (cmd ~ /^\/usr\/bin\//)    next
+    if (cmd ~ /^\/Library\/Apple\//) next
+    e = secs(el)
+    if (e <= 0) next
+    burn = secs(cput) / e
+    mins = e / 60
+    if (burn < minburn || mins < minmins) next
+    if (burn > best) { best = burn; bp = pid; bm = mins; bc = cmd }
+  }
+  END {
+    if (!bp) exit
+    # Bare basename: the bar has ~15 columns for this, not a full argv.
+    n = split(bc, parts, "/")
+    printf "%s %.2f %d %s\n", bp, best, bm, parts[n]
+  }
+')
+EOF
+
+if [ -z "${hog_pid:-}" ]; then
+  # Nothing qualifies -- clear the bar segment and forget prior state, so the
+  # next hog starts its escalation ladder from the bottom.
+  rm -f "$hog_file" "$state" 2>/dev/null
+  exit 0
+fi
+
+printf '%s %s %s\n' "$hog_name" "$hog_burn" "$hog_mins" > "$hog_file.tmp.$$" 2>/dev/null \
+  && mv -f "$hog_file.tmp.$$" "$hog_file" 2>/dev/null
+rm -f "$hog_file.tmp.$$" 2>/dev/null
+
+# --- escalating notification -----------------------------------------------
+# State is one line: "<pid> <highest tier already notified>". Keyed on PID so a
+# different runaway starts fresh, and so a restarted process is treated as new.
+last_pid=''; last_tier=0
+[ -f "$state" ] && read -r last_pid last_tier < "$state" 2>/dev/null
+[ "$last_pid" = "$hog_pid" ] || last_tier=0
+
+due=0
+for t in $TIERS; do
+  # Fire the highest tier this process has aged past but not yet been told about.
+  [ "$hog_mins" -ge "$t" ] && [ "$t" -gt "${last_tier:-0}" ] && due=$t
+done
+
+if [ "$due" -gt 0 ]; then
+  if [ "$hog_mins" -ge 60 ]; then
+    age=$(awk -v m="$hog_mins" 'BEGIN{ printf "%.1fh", m/60 }')
+  else
+    age="${hog_mins}m"
+  fi
+  # Temp rides along as corroboration only -- the alert already fired on time.
+  msg="${hog_name} · ${hog_burn} cores · ${age}"
+  [ "$cpu_f" -gt 0 ] 2>/dev/null && msg="$msg · ${cpu_f}°F"
+  # Quoting: the process name is interpolated into AppleScript source, so any
+  # embedded quote would break the script. Strip them rather than escape.
+  safe=$(printf '%s' "$msg" | tr -d '"\\')
+  osascript -e "display notification \"$safe\" with title \"still burning\" subtitle \"pid $hog_pid — hogs to inspect\"" \
+    >/dev/null 2>&1
+  printf '%s %s\n' "$hog_pid" "$due" > "$state" 2>/dev/null
+fi

@@ -1,0 +1,57 @@
+#!/usr/bin/env bash
+# temp-probe — sample CPU/GPU temperature once and write it to a cache file.
+#
+# Kept OUT of status-context's own body on purpose: macmon needs ~0.5s of
+# wall-clock to take a sample, and status-context runs on the 1s clock tick.
+# Sampling inline would stall the whole status bar every time its cache expired.
+# Instead status-context reads TEMP_CACHE (instant) and, when the file is older
+# than the refresh interval, fires this script into the background and keeps
+# rendering the previous value. The bar never blocks; the number is at most one
+# interval stale, which is exactly what a temperature reading wants.
+#
+# Output format (single line, no escapes -- the caller does the colouring):
+#   <cpu_F> <gpu_F>
+# e.g.  113 111
+set -u
+
+cache="${TMPDIR:-/tmp}/tmux-temp"
+lock="$cache.lock"
+
+# mkdir is the atomic test-and-set here: if a probe from the previous tick is
+# still sampling, this one exits rather than stacking up macmon processes.
+# A probe killed before its EXIT trap runs would leave the dir behind and freeze
+# the reading forever, so anything older than 60s (vs a ~1s sample) is treated
+# as abandoned and cleared.
+if ! mkdir "$lock" 2>/dev/null; then
+  lmt=$(stat -f %m "$lock" 2>/dev/null || echo 0)
+  [ $(( $(date +%s) - lmt )) -gt 60 ] || exit 0
+  rmdir "$lock" 2>/dev/null
+  mkdir "$lock" 2>/dev/null || exit 0
+fi
+trap 'rmdir "$lock" 2>/dev/null' EXIT
+
+command -v macmon >/dev/null 2>&1 || exit 0
+
+# -s 1 = one sample then exit; -i 400 = 400ms window (enough for a stable SMC
+# read without dragging the probe out). macmon needs no sudo on Apple Silicon.
+line=$(macmon pipe -s 1 -i 400 2>/dev/null | tail -1) || exit 0
+[ -n "$line" ] || exit 0
+
+printf '%s' "$line" | awk '
+  # Pull the two temps straight out of the JSON: no jq dependency, and the
+  # fields are flat floats inside "temp", so a regex match is honest here.
+  # 15 = length of the literal `"cpu_temp_avg":` key prefix, skipped to leave
+  # just the number.
+  match($0, /"cpu_temp_avg":[0-9.]+/) { c = substr($0, RSTART+15, RLENGTH-15) }
+  match($0, /"gpu_temp_avg":[0-9.]+/) { g = substr($0, RSTART+15, RLENGTH-15) }
+  END {
+    if (c == "" && g == "") exit 1
+    printf "%d %d\n", c*9/5+32, g*9/5+32   # macmon reports Celsius
+  }
+' > "$cache.tmp.$$" 2>/dev/null && mv -f "$cache.tmp.$$" "$cache" 2>/dev/null
+rm -f "$cache.tmp.$$" 2>/dev/null
+
+# Piggyback the long-burn watchdog on this same 10s wake-up: we are already off
+# the status bar's critical path here, and it needs the temp we just measured.
+watch="$(dirname "$0")/heat-watch"
+[ -x "$watch" ] && "$watch" "$(awk '{print $1}' "$cache" 2>/dev/null || echo 0)" >/dev/null 2>&1

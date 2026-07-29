@@ -142,7 +142,77 @@ if [ -n "$first_tf" ] && command -v terraform >/dev/null 2>&1; then
   [ -n "$v" ] && add "#[fg=${TF_C}]󱁢 ${v}"
 fi
 
-# --- machine state: battery + load (always shown, dir-independent) --------
+# --- machine state: temps + battery + load (always shown, dir-independent) --
+# Temperature comes from a cache file written by the sibling temp-probe script,
+# never sampled inline: macmon needs ~0.5s per sample and this hook runs on the
+# 1s clock tick. We print whatever the cache holds (instant) and, once the file
+# passes TEMP_TTL, kick temp-probe into the background to refresh it for the
+# *next* redraw. So the bar never stalls and the reading is <=10s old.
+#
+# Thresholds are in Fahrenheit, matched to Apple-silicon behaviour rather than
+# to a desktop's headroom: idle sits ~90-110F, sustained work ~140F, and 176F
+# (80C) is where the SoC starts throttling -- which is the only one that's
+# actually a problem, so it gets CRIT red.
+TEMP_TTL=10
+TEMP_WARN=140
+TEMP_CRIT=176
+temp_cache="${TMPDIR:-/tmp}/tmux-temp"
+temp_probe="$(dirname "$0")/temp-probe"
+
+temp_age=$TEMP_TTL
+if [ -f "$temp_cache" ]; then
+  tmt=$(stat -f %m "$temp_cache" 2>/dev/null || echo 0)
+  temp_age=$(( $(date +%s) - tmt ))
+  read -r cpu_f gpu_f < "$temp_cache" 2>/dev/null || { cpu_f=''; gpu_f=''; }
+fi
+# Detached + fully redirected so tmux's #() reader doesn't wait on the child's
+# stdout staying open -- an inherited pipe here would hang the status bar.
+[ "$temp_age" -ge "$TEMP_TTL" ] && [ -x "$temp_probe" ] \
+  && ( "$temp_probe" >/dev/null 2>&1 & ) &
+
+# Colour one die's reading against the thresholds above.
+temp_col() {
+  if   [ "$1" -ge "$TEMP_CRIT" ]; then printf '%s' "$CRIT_C"
+  elif [ "$1" -ge "$TEMP_WARN" ]; then printf '%s' "$WARN_C"
+  else                                 printf '%s' "$GOOD_C"; fi
+}
+
+if [ -n "${cpu_f:-}" ]; then
+  # Both dies, always, each coloured on its own reading -- no averaging and no
+  # single "hottest" figure. Two numbers cost ~6 columns and remove the guess
+  # about which one you are looking at; only the CPU carries the unit, since
+  # repeating °F on the second number is noise.
+  tseg="#[fg=$(temp_col "$cpu_f")]󰔏 ${cpu_f}°F"
+  [ -n "${gpu_f:-}" ] && tseg="$tseg #[fg=$(temp_col "$gpu_f")]󰢮 ${gpu_f}°"
+  # A long-burn hog (written by heat-watch) is shown WHENEVER it exists, not
+  # only when the bar is red -- the whole point is that the 8-hour orphan never
+  # got hot enough to turn anything red. Yellow because it wants a look, not
+  # because the machine is in danger.
+  hog_file="${TMPDIR:-/tmp}/tmux-hog"
+  if [ -f "$hog_file" ]; then
+    read -r hog_name hog_burn hog_mins < "$hog_file" 2>/dev/null || hog_name=''
+    if [ -n "${hog_name:-}" ]; then
+      if [ "${hog_mins:-0}" -ge 60 ]; then
+        hage=$(awk -v m="$hog_mins" 'BEGIN{ printf "%.0fh", m/60 }')
+      else
+        hage="${hog_mins}m"
+      fi
+      tseg="$tseg #[fg=${WARN_C}]󱠇 ${hog_name} ${hage}"
+    fi
+  fi
+  add "$tseg"
+fi
+
+# 1-minute load, coloured relative to core count: quiet < 0.7/core, busy to
+# 1.5/core, then saturated. Same speedometer read at any machine size.
+if load1=$(sysctl -n vm.loadavg 2>/dev/null); then
+  load1=$(printf '%s' "$load1" | awk '{print $2}')
+  ncpu=$(sysctl -n hw.ncpu 2>/dev/null || echo 8)
+  lcol=$(awk -v l="$load1" -v n="$ncpu" -v g="$GOOD_C" -v w="$WARN_C" -v c="$CRIT_C" \
+    'BEGIN{ if (l < n*0.7) print g; else if (l < n*1.5) print w; else print c }')
+  [ -n "$load1" ] && add "#[fg=${lcol}]󰓅 ${load1}"
+fi
+
 # Reuses the same GOOD/WARN/CRIT vocabulary as git, so a green battery and a
 # green branch mean the same "all fine" at a glance.
 if command -v pmset >/dev/null 2>&1; then
@@ -163,16 +233,6 @@ if command -v pmset >/dev/null 2>&1; then
     esac
     add "#[fg=${bcol}]${bicon} ${pct}%"
   fi
-fi
-
-# 1-minute load, coloured relative to core count: quiet < 0.7/core, busy to
-# 1.5/core, then saturated. Same speedometer read at any machine size.
-if load1=$(sysctl -n vm.loadavg 2>/dev/null); then
-  load1=$(printf '%s' "$load1" | awk '{print $2}')
-  ncpu=$(sysctl -n hw.ncpu 2>/dev/null || echo 8)
-  lcol=$(awk -v l="$load1" -v n="$ncpu" -v g="$GOOD_C" -v w="$WARN_C" -v c="$CRIT_C" \
-    'BEGIN{ if (l < n*0.7) print g; else if (l < n*1.5) print w; else print c }')
-  [ -n "$load1" ] && add "#[fg=${lcol}]󰓅 ${load1}"
 fi
 
 # Render once, then write it to the cache (even when empty, so a plain dir

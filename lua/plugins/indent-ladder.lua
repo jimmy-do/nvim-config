@@ -30,7 +30,7 @@ if not enabled then
 end
 
 local config = {
-  char = "│", -- keep in sync with indent.lua's indent char
+  char = "│", -- matches snacks' DEFAULT indent char (indent.lua never overrides it)
   hl = "SnacksIndentScope", -- theme.lua pins this to the maxed cyan on storm
   priority = 250, -- above snacks' dim guides (priority 1) so our colour wins
 }
@@ -425,6 +425,10 @@ local focused = true
 -- breathe's skip-unchanged-frames optimisation would leave newly scrolled-in rows
 -- unpainted until the colour happened to tick over.
 local anim_dirty = false
+-- True from the first WinScrolled until the scroll has been quiet for
+-- scroll_quiet_ms. Declared up here for the same reason as `focused` above:
+-- repaint() closes over it, and a later declaration would read a nil global.
+local scrolling = false
 
 local function stop_timer()
   if timer then
@@ -596,6 +600,41 @@ local function repaint()
   if vim.bo.buftype ~= "" then
     return clear()
   end
+
+  -- Mid-scroll: do NOT recompute the scope.
+  --
+  -- u/d glide the view a row at a time and drag the cursor with it, so repaint()
+  -- runs ~20 times during one press, each time landing on a different intermediate
+  -- line. Recomputing there meant every scope the cursor swept THROUGH got painted
+  -- flat for a frame -- that is the "it blinks the level I came from, then animates
+  -- the right one" flash. The landing scope is not knowable at scroll start (snacks
+  -- owns the cursor for the whole glide), so the fix is to stop guessing: hold the
+  -- scope that was lit when the scroll began and keep drawing exactly that.
+  --
+  -- Extmarks are line-anchored, so the guide already on screen slides with its own
+  -- text without anyone touching it -- that block really is moving up the screen.
+  -- So the whole scroll path is: do NOTHING. No scope scan, no draw.
+  --
+  -- Redrawing here (to paint rows scrolling INTO view) is what made the glide
+  -- choppy: snacks fires WinScrolled once per animated row, ~20 per press at 15ms
+  -- apart, and each draw() re-ran guide_indent() over every visible row -- dozens
+  -- of vimscript round-trips wedged between the animation's own frames. The
+  -- animation path memoises that test for exactly this reason; this path competing
+  -- with the scroll for the main loop is not worth a few rows of guide arriving
+  -- 120ms early. They get painted when scroll_settled() drops last_key and the
+  -- landing scope animates, once.
+  -- Do NOT stop the timer here: killing the fill on every WinScrolled (and k/j
+  -- near the window edge scrolls one row PER PRESS) chopped the animation into a
+  -- stop/restart slideshow. The extmarks are line-anchored and slide with the
+  -- text; the fill just keeps running, and the dirty flag repaints rows that
+  -- scrolled into view.
+  if scrolling then
+    if timer then
+      anim_dirty = true
+    end
+    return
+  end
+
   local sw = vim.fn.shiftwidth()
   if sw == 0 then
     sw = vim.bo.tabstop
@@ -663,11 +702,45 @@ local function schedule()
   end)
 end
 
+-- snacks' scroll animation runs ~450ms and fires WinScrolled once per animated
+-- row, so the quiet window has to outlast a single glide before we call the
+-- scroll finished and let the guide animate again.
+local scroll_quiet_ms = 120
+local scroll_timer = nil
+
+local function note_scroll()
+  scrolling = true
+  if not scroll_timer then
+    scroll_timer = vim.uv.new_timer()
+  end
+  scroll_timer:stop()
+  scroll_timer:start(
+    scroll_quiet_ms,
+    0,
+    vim.schedule_wrap(function()
+      scrolling = false
+      -- last_key is deliberately KEPT: dropping it here re-grew the guide from
+      -- scratch after every 120ms scroll lull, so holding k re-triggered the
+      -- whole animation over and over (the slideshow). If the scroll landed in a
+      -- DIFFERENT scope the key comparison in repaint() catches it and animates;
+      -- same scope just gets a full-extent repaint, which is all it needs.
+      schedule()
+    end)
+  )
+end
+
 local group = vim.api.nvim_create_augroup("IndentLadder", { clear = true })
 vim.api.nvim_create_autocmd(
-  { "CursorMoved", "CursorMovedI", "WinScrolled", "BufWinEnter", "TextChanged", "TextChangedI", "ColorScheme" },
+  { "CursorMoved", "CursorMovedI", "BufWinEnter", "TextChanged", "TextChangedI", "ColorScheme" },
   { group = group, callback = schedule }
 )
+vim.api.nvim_create_autocmd("WinScrolled", {
+  group = group,
+  callback = function()
+    note_scroll()
+    schedule()
+  end,
+})
 
 -- FocusLost/FocusGained fire for the terminal pane (tmux, and any terminal with
 -- focus reporting) as well as GUI windows. Losing focus stops the loop
@@ -693,6 +766,174 @@ vim.api.nvim_create_autocmd("FocusGained", {
 -- resting colour it fades up to has probably changed anyway. Drop the cache key
 -- so the next animation rebuilds from the new theme.
 vim.api.nvim_create_autocmd("ColorScheme", { group = group, callback = invalidate_ramp })
+
+-- ---- :IndentColor -----------------------------------------------------------
+--
+-- Pick the lit guide's colour from the cmdline.
+--
+--   :IndentColor            open a picker over the presets below
+--   :IndentColor magenta    set by preset name (tab-completes)
+--   :IndentColor #ff00aa    set any hex
+--   :IndentColor!           clear the override, back to whatever the theme picks
+--
+-- The colour is written to vim.g.indent_scope_color, which theme.lua's
+-- apply_active_indent_scope_highlights() reads as its LAST word -- setting the
+-- highlight group directly from here would be undone by the theme's own deferred
+-- re-pins (0/50/200/330/655ms after any colorscheme). Setting the group here too
+-- is just so the change lands on this frame rather than the next theme pass.
+--
+-- Only fg/sp are touched. Nothing here goes near the background.
+local COLOR_FILE = vim.fn.stdpath("data") .. "/indent-scope-color.txt"
+
+-- Deliberately maxed/neon rather than tasteful midtones: this guide is a single
+-- thin column that has to read against the dim ladder behind it.
+local presets = {
+  cyan = "#00ffff",
+  aqua = "#5ffbf1",
+  mint = "#4bffb3",
+  green = "#39ff14",
+  yellow = "#ffe45c",
+  amber = "#ffb000",
+  orange = "#ff8c42",
+  red = "#ff4d5a",
+  magenta = "#ff2fd6",
+  pink = "#ff8ad8",
+  purple = "#bd93f9",
+  blue = "#5aa2ff",
+  white = "#ffffff",
+  gray = "#6b7394",
+}
+
+local function preset_names()
+  local names = {}
+  for name in pairs(presets) do
+    names[#names + 1] = name
+  end
+  table.sort(names)
+  return names
+end
+
+-- Re-light the guide immediately: the ramp is built from the OLD resting colour
+-- and cached, and last_key would otherwise dismiss this as "same scope, nothing
+-- to do" and leave the guide sitting at the previous colour until you moved.
+local function refresh_guide()
+  invalidate_ramp()
+  last_key = nil
+  stop_timer()
+  schedule()
+end
+
+local function set_color(hex_str, persist)
+  vim.g.indent_scope_color = hex_str
+  for _, g in ipairs({ "SnacksIndentScope", "SnacksIndentChunk" }) do
+    local ok, hl = pcall(vim.api.nvim_get_hl, 0, { name = g, link = false })
+    local adj = {}
+    if ok and type(hl) == "table" then
+      for k, v in pairs(hl) do
+        adj[k] = v
+      end
+    end
+    adj.fg, adj.sp = hex_str, hex_str
+    pcall(vim.api.nvim_set_hl, 0, g, adj)
+  end
+  if persist then
+    pcall(vim.fn.writefile, { hex_str }, COLOR_FILE)
+  end
+  refresh_guide()
+end
+
+local function clear_color()
+  vim.g.indent_scope_color = nil
+  pcall(vim.fn.delete, COLOR_FILE)
+  -- Cheapest honest way back to the theme's own value: re-run the colorscheme so
+  -- apply_active_indent_scope_highlights() recomputes it. Recomputing it here
+  -- would mean duplicating theme.lua's base16/storm logic, which would then rot.
+  local name = vim.g.colors_name
+  if name and name ~= "" then
+    pcall(vim.cmd.colorscheme, name)
+  end
+  refresh_guide()
+end
+
+-- Accepts a preset name or #rrggbb (the # is optional).
+local function resolve(arg)
+  arg = vim.trim(arg or "")
+  if arg == "" then
+    return nil
+  end
+  if presets[arg:lower()] then
+    return presets[arg:lower()]
+  end
+  local hex_body = arg:match("^#?(%x%x%x%x%x%x)$")
+  if hex_body then
+    return "#" .. hex_body:lower()
+  end
+  return nil
+end
+
+vim.api.nvim_create_user_command("IndentColor", function(opts)
+  if opts.bang then
+    clear_color()
+    vim.notify("IndentColor: override cleared, back to the theme's colour", vim.log.levels.INFO)
+    return
+  end
+
+  if vim.trim(opts.args) == "" then
+    local names = preset_names()
+    local items = vim.list_extend({ "<clear override>" }, names)
+    vim.ui.select(items, {
+      prompt = "Indent guide colour",
+      format_item = function(item)
+        if item == "<clear override>" then
+          return item
+        end
+        return string.format("%-8s %s", item, presets[item])
+      end,
+    }, function(choice)
+      if not choice then
+        return
+      end
+      if choice == "<clear override>" then
+        return clear_color()
+      end
+      set_color(presets[choice], true)
+      vim.notify("IndentColor: " .. choice .. " " .. presets[choice], vim.log.levels.INFO)
+    end)
+    return
+  end
+
+  local hex_str = resolve(opts.args)
+  if not hex_str then
+    vim.notify(
+      "IndentColor: not a preset or #rrggbb -- " .. opts.args .. "\npresets: " .. table.concat(preset_names(), ", "),
+      vim.log.levels.ERROR
+    )
+    return
+  end
+  set_color(hex_str, true)
+  vim.notify("IndentColor: " .. hex_str, vim.log.levels.INFO)
+end, {
+  nargs = "?",
+  bang = true,
+  complete = function(lead)
+    return vim.tbl_filter(function(n)
+      return n:find(lead, 1, true) == 1
+    end, preset_names())
+  end,
+  desc = "Set the lit indent guide colour (preset name, #rrggbb, or ! to clear)",
+})
+
+-- Restore a previously chosen colour. Only the g: variable matters -- theme.lua
+-- reads it on every pass -- so this is safe to run before the theme has loaded.
+do
+  local ok, lines = pcall(vim.fn.readfile, COLOR_FILE)
+  if ok and type(lines) == "table" and lines[1] then
+    local hex_str = resolve(lines[1])
+    if hex_str then
+      vim.g.indent_scope_color = hex_str
+    end
+  end
+end
 
 -- :IndentLadderDebug -- why does the lit guide end where it ends?
 --

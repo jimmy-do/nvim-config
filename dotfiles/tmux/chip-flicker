@@ -1,15 +1,12 @@
 #!/bin/bash
-# chip-flicker -- the active window chip flickers like a tube, rarely.
+# chip-flicker -- the active window chip flickers like a tube, once per arrival.
 #
-# This is the CHEAP relative of a pulse. A breathing chip repaints the status
-# line ~7x a second forever, which is a background process burning battery to
-# decorate a bar you are not looking at. This sleeps 20-30 seconds, spends
-# ~0.4s flickering, and goes back to sleep: about 10 repaints per half minute
-# against a pulse's ~175, and the process is asleep for ~98% of its life.
-#
-# It also reads better. A CRT does not breathe -- it glitches: a fast dip, a
-# recovery, sometimes a second dip. The shader's bloom follows the colour down
-# and back, so the halo snaps with it.
+# Triggered by tmux hooks (after-select-window, client-attached) instead of a
+# background daemon. Landing on a window flickers it once; sitting in that
+# window and working does NOT keep flickering it -- there is no loop, no
+# process asleep in the background, nothing burning a wakeup every 20-30s.
+# Switching to a different window (and back) re-arms it, because that fires
+# the hook again.
 #
 # WHAT IT SETS. Per session, only during a flicker: @session_hue_lit, the
 # session's hue scaled down for a frame or two. The chip template reads
@@ -19,16 +16,13 @@
 # the flat hue exactly as it was before this script existed.
 #
 #   tmux set -g @chip_flicker off    stop it
-#   @chip_flicker_min                seconds, soonest next flicker (default 20)
-#   @chip_flicker_max                seconds, latest next flicker (default 30)
 set -euo pipefail
-
-DEFAULT_MIN=20
-DEFAULT_MAX=30
 
 # Single instance. NOT flock -- that is util-linux and absent on macOS, where
 # `flock -n 9 || exit 0` silently takes the exit branch and the daemon never
-# runs at all. A PID file plus a liveness check is portable.
+# runs at all. A PID file plus a liveness check is portable. Here it just
+# guards against two hooks (e.g. window switch + client-attached) firing
+# back-to-back and stacking flickers on top of each other.
 PIDFILE="${TMPDIR:-/tmp}/chip-flicker.$(id -u).pid"
 if [ -f "$PIDFILE" ] && kill -0 "$(cat "$PIDFILE" 2>/dev/null)" 2>/dev/null; then
   exit 0
@@ -92,15 +86,6 @@ flicker() {
   set_lit ""      # back to the flat hue, option unset
 }
 
-while :; do
-  # Pick the gap FIRST, then sleep it -- so a disabled or unattached server
-  # spends its life in one long sleep rather than spinning on the checks.
-  min=$(tmux show-options -gqv @chip_flicker_min 2>/dev/null); min=${min:-$DEFAULT_MIN}
-  max=$(tmux show-options -gqv @chip_flicker_max 2>/dev/null); max=${max:-$DEFAULT_MAX}
-  span=$((max - min)); [ "$span" -gt 0 ] || span=1
-  sleep $(( min + RANDOM % span ))
-
-  [ "$(tmux show-options -gqv @chip_flicker 2>/dev/null)" = "off" ] && continue
-  [ -n "$(attached)" ] || continue
-  flicker
-done
+[ "$(tmux show-options -gqv @chip_flicker 2>/dev/null)" = "off" ] && exit 0
+[ -n "$(attached)" ] || exit 0
+flicker

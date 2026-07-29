@@ -1,0 +1,245 @@
+#!/usr/bin/env python3
+"""cc-em -- recolour the EMPHASIS text in Claude Code chats, from `pill`.
+
+    cc-em                  list every colour, mark the active one
+    cc-em habamax_violet   inline `code`, **bold** spans, file paths
+    cc-em #af87d7          any raw hex
+    cc-em -                back to the previous
+    cc-em current          print the active hex
+
+The third of the set: `cc-fg` owns the lit body text, `cc-fg-dim` the unlit
+body text, `cc-em` the accent inside it.
+
+WHY THIS EDITS GHOSTTY. Claude does not colour emphasis from its theme at all
+-- measured, `capture-pane -e` shows those spans wearing a bare `ESC[94m`,
+which is ANSI BRIGHT BLUE. An ANSI index is a request the TERMINAL answers, so
+the colour lives in Ghostty's palette, not in ~/.claude/themes/<slug>.json and
+not in tmux:
+
+    ESC[94m  ->  palette 12  ->  #7aa2f7   the faint blue
+    ESC[34m  ->  palette 4                 its non-bright twin
+
+Both are written together and kept equal. They are the same blue in the config
+today, and splitting them would make **bold** and plain-weight emphasis
+disagree for no gain -- Claude reaches for 94 almost exclusively.
+
+SCOPE, and it is wider than Claude. This is the terminal's blue: every program
+in every Ghostty window that asks for ANSI blue gets it -- ls, grep matches,
+diff headers, a shell prompt that uses colour 4. That is the price of the only
+lever that exists here. Everything that already sets its own truecolor (the
+prompt, the tmux chrome, nvim) is untouched, so in practice this lands on
+Claude's emphasis and on plain ANSI-coloured CLI output.
+
+LIVE. The config file is rewritten AND the running terminal is updated in place
+via OSC 4, tunnelled through tmux's passthrough, so the change is visible
+immediately in every pane. Ghostty re-reads the file on its own reload
+(Cmd+Shift+,) -- the write is what makes it survive a restart.
+
+Colours come from the same starship.toml tables as `pill`, `tmux-*` and
+`cc-fg`: text_* first, then the pill_*/tmux_* accents. Unlike cc-fg this
+command does NOT filter by luminance -- emphasis is a handful of words that
+should stand OFF the page, so the bright accents are exactly what it wants.
+"""
+import os, re, sys, shutil, subprocess
+
+HOME = os.path.expanduser("~")
+STARSHIP = f"{HOME}/.config/starship.toml"
+GHOSTTY = (f"{HOME}/Library/Application Support/com.mitchellh.ghostty/"
+           f"config.ghostty")
+STATE_DIR = os.environ.get("XDG_STATE_HOME", f"{HOME}/.local/state")
+STATE = f"{STATE_DIR}/cc-em-previous"
+TMUX_CONF = os.path.realpath(f"{HOME}/.tmux.conf")
+
+BG = "#080806"           # Ghostty's background
+SLOTS = (4, 12)          # ANSI blue and bright blue, written together
+MODE = "cc-em"
+
+
+def die(msg):
+    print(f"{MODE}: {msg}", file=sys.stderr)
+    sys.exit(1)
+
+
+def rgb(h):
+    h = h.lstrip("#")
+    return int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16)
+
+
+def lum(h):
+    def ch(v):
+        v /= 255
+        return v / 12.92 if v <= 0.03928 else ((v + 0.055) / 1.055) ** 2.4
+    r, g, b = (ch(c) for c in rgb(h))
+    return 0.2126 * r + 0.7152 * g + 0.0722 * b
+
+
+def on_bg(hexv, label):
+    r, g, b = rgb(hexv)
+    br, bgc, bb = rgb(BG)
+    return f"\033[48;2;{br};{bgc};{bb}m\033[38;2;{r};{g};{b}m{label}\033[0m"
+
+
+def read_table(prefix):
+    if not os.path.isfile(STARSHIP):
+        return []
+    src = open(STARSHIP, encoding="utf-8").read()
+    return [(re.sub(r"_lifted$|_white$", "", m.group(1)), m.group(2))
+            for m in re.finditer(
+                rf"^{prefix}_([a-z0-9_]+)\s*=\s*'(#[0-9a-fA-F]{{6}})'", src, re.M)]
+
+
+def palette():
+    """Every colour on the machine, one table after another, first name wins."""
+    out, seen = [], set()
+    for name, hexv in read_table("text") + read_table("pill") + read_table("tmux"):
+        if name not in seen:
+            seen.add(name)
+            out.append((name, hexv))
+    if not out:
+        die(f"no text_*/pill_*/tmux_* colours found in {STARSHIP}")
+    return out
+
+
+def read_ghostty():
+    if not os.path.isfile(GHOSTTY):
+        die(f"no ghostty config at {GHOSTTY}")
+    return open(GHOSTTY, encoding="utf-8").read()
+
+
+def current(src=None):
+    src = src if src is not None else read_ghostty()
+    m = re.search(rf"^palette = {SLOTS[1]}=(#?[0-9a-fA-F]{{6}})", src, re.M)
+    return ("#" + m.group(1).lstrip("#").lower()) if m else None
+
+
+def body_fg():
+    """What cc-fg has the body set to, so the preview shows the accent against
+    the text it will actually sit inside rather than against nothing."""
+    if os.path.isfile(TMUX_CONF):
+        m = re.search(r'^set -g\s+window-active-style\s+"#\{\?#\{E:@is_claude\},'
+                      r'fg=(#[0-9a-fA-F]{6})', open(TMUX_CONF).read(), re.M)
+        if m:
+            return m.group(1)
+    return "#9aa0b0"
+
+
+def resolve(want, names):
+    if want in names:
+        return want
+    hits = [n for n in names if n.startswith(want)] or [n for n in names if want in n]
+    if not hits:
+        return None
+    if len(hits) > 1:
+        die(f"'{want}' is ambiguous: {', '.join(hits)}")
+    return hits[0]
+
+
+def preview(hexv, fg):
+    """A sentence of body text with an emphasis span inside it -- the only way
+    to judge an accent is next to the text it interrupts."""
+    return (on_bg(fg, " run ") + on_bg(hexv, "cc-em habamax_violet") +
+            on_bg(fg, " to see it  "))
+
+
+def live(hexv):
+    """OSC 4 sets a palette slot on the running terminal. Inside tmux it has to
+    be tunnelled: tmux owns the output stream and would otherwise swallow or
+    mangle the sequence. The DCS wrapper is tmux's documented passthrough, and
+    every ESC inside the payload must be DOUBLED -- that is the escaping rule,
+    not a typo. Needs `allow-passthrough on`, which this config sets."""
+    seq = "".join(f"\033]4;{n};rgb:{hexv[1:3]}/{hexv[3:5]}/{hexv[5:7]}\033\\"
+                  for n in SLOTS)
+    if os.environ.get("TMUX"):
+        got = subprocess.run(["tmux", "show", "-gv", "allow-passthrough"],
+                             capture_output=True, text=True).stdout.strip()
+        if got not in ("on", "all"):
+            return "  -> ghostty reload (Cmd+Shift+,)   [passthrough off]"
+        seq = "\033Ptmux;" + seq.replace("\033", "\033\033") + "\033\\"
+    sys.stdout.write(seq)
+    sys.stdout.flush()
+    return "  (live)"
+
+
+def write(hexv, label):
+    src = read_ghostty()
+    prev = current(src)
+    if prev:
+        os.makedirs(os.path.dirname(STATE), exist_ok=True)
+        open(STATE, "w").write(prev)
+
+    new, hits = src, 0
+    for n in SLOTS:
+        new, k = re.subn(rf"^(palette = {n}=)#?[0-9a-fA-F]{{6}}",
+                         lambda m: m.group(1) + hexv, new, count=1, flags=re.M)
+        hits += k
+    if hits != len(SLOTS):
+        die(f"expected a `palette = N=` line for each of {SLOTS} in "
+            f"{os.path.basename(GHOSTTY)}; found {hits}")
+
+    shutil.copy2(GHOSTTY, GHOSTTY + ".bak-cc-em")
+    tmp = GHOSTTY + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
+        f.write(new)
+    os.replace(tmp, GHOSTTY)
+
+    where = live(hexv)
+    print(f"  claude emphasis: {label}  {preview(hexv, body_fg())}{where}")
+
+
+def main(arg):
+    colors = palette()
+    names = [c[0] for c in colors]
+    active = current()
+    fg = body_fg()
+
+    if arg is None:
+        print()
+        for name, hexv in colors:
+            mark = " *" if active and hexv.lower() == active.lower() else "  "
+            print(f"{mark} {name:<20} {preview(hexv, fg)}  {hexv}"
+                  f"  {lum(hexv) * 100:4.0f}%")
+        print()
+        print(f"  * = active    usage: {MODE} <name|hex>    ({MODE} - to go back)")
+        print(f"  paints ghostty palette {SLOTS[0]} + {SLOTS[1]} (ANSI blue), "
+              f"which is what claude")
+        print(f"  emits for inline code and bold. Applies live, and to every "
+              f"program")
+        print(f"  in every ghostty window that asks for ANSI blue -- see the "
+              f"header.")
+        print(f"  body text is {fg} (`cc-fg`); these previews sit inside it.")
+        print()
+        return
+
+    if arg == "current":
+        if not active:
+            die("could not read the palette line from ghostty's config")
+        name = next((n for n, h in colors if h.lower() == active.lower()), None)
+        print(f"{active}  {name}" if name else active)
+        return
+
+    if arg == "__complete":
+        print("\n".join(["-", "current"] + names))
+        return
+
+    if arg == "-":
+        if not os.path.isfile(STATE):
+            die("no previous recorded")
+        write(open(STATE).read().strip(), "previous")
+        return
+
+    m = re.fullmatch(r"#?([0-9a-fA-F]{6})", arg)
+    if m:
+        hexv = "#" + m.group(1).lower()
+        write(hexv, hexv)
+        return
+
+    name = resolve(arg, names)
+    if not name:
+        die(f"no colour matching '{arg}'   (run `{MODE}` for the list)")
+    write(dict(colors)[name], name)
+
+
+if __name__ == "__main__":
+    if len(sys.argv) > 2:
+        die("one argument at most")
+    main(sys.argv[1] if len(sys.argv) > 1 else None)

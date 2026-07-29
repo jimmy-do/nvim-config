@@ -6,6 +6,13 @@ local keymap = vim.keymap.set
 -- Save fast
 keymap("n", "<leader>w", "<cmd>w<cr>", { desc = "Save file" })
 
+-- LazyVim also binds <leader>wd (close window) and <leader>wm (zoom), which
+-- makes <leader>w an ambiguous prefix: every save stalls the full timeoutlen
+-- waiting for a possible d/m. Delete them — window close stays on <C-w>c and
+-- zoom stays on <leader>uZ — so save fires instantly.
+pcall(vim.keymap.del, "n", "<leader>wd")
+pcall(vim.keymap.del, "n", "<leader>wm")
+
 -- Clear search highlight
 keymap("n", "<Esc>", "<cmd>nohlsearch<cr>", { desc = "Clear search highlight" })
 
@@ -37,19 +44,28 @@ keymap("n", "<leader>cq", vim.diagnostic.setloclist, { desc = "Diagnostics list"
 -- Quick terminal
 keymap("n", "<leader>tt", "<cmd>terminal<cr>", { desc = "Open terminal" })
 
--- Open common DevOps files quickly
-keymap("n", "<leader>er", "<cmd>edit README.md<cr>", { desc = "Edit README" })
-keymap("n", "<leader>eg", "<cmd>edit .github/workflows<cr>", { desc = "Edit GitHub workflows" })
-keymap("n", "<leader>ek", "<cmd>edit k8s<cr>", { desc = "Edit k8s folder" })
-keymap("n", "<leader>et", "<cmd>edit terraform<cr>", { desc = "Edit Terraform folder" })
+-- Open common DevOps files quickly.
+--
+-- On <leader>o, NOT <leader>e. <leader>e is the explorer toggle, and any mapping
+-- that extends it turns it into an ambiguous prefix: nvim then has to wait the
+-- full timeoutlen (300ms here) on every <leader>e press to find out whether an
+-- r/g/k/t is coming. Since <leader>e is pressed constantly, that delay was the
+-- single most-felt bit of latency in this config. Nothing extends <leader>o.
+keymap("n", "<leader>or", "<cmd>edit README.md<cr>", { desc = "Open README" })
+keymap("n", "<leader>og", "<cmd>edit .github/workflows<cr>", { desc = "Open GitHub workflows" })
+keymap("n", "<leader>ok", "<cmd>edit k8s<cr>", { desc = "Open k8s folder" })
+keymap("n", "<leader>ot", "<cmd>edit terraform<cr>", { desc = "Open Terraform folder" })
 
-vim.keymap.set("n", "<leader>th", "<cmd>Telescope colorscheme<CR>", { desc = "Pick colorscheme" })
+-- <leader>th lives in plugins/colorscheme-picker.lua (custom scroll-preview picker; telescope removed 2026-07-26).
 
 -- Buffer navigation
 vim.keymap.set("n", "<S-l>", "<cmd>bnext<CR>", { desc = "Next buffer" })
 vim.keymap.set("n", "<S-h>", "<cmd>bprevious<CR>", { desc = "Previous buffer" })
-vim.keymap.set("n", "J", "<cmd>bprevious<CR>", { desc = "Previous buffer" })
-vim.keymap.set("n", "K", "<cmd>bnext<CR>", { desc = "Next buffer" })
+
+-- NOTE: bare J / K used to duplicate <S-h> / <S-l> here. Removed deliberately:
+-- they are the same two commands already bound one row up, and holding them cost
+-- both K (LSP hover -- the docs popup, with no gK fallback bound either) and J
+-- (join lines). Buffer nav lives on <S-h>/<S-l> only.
 
 -- Close current buffer
 -- Safely delete current buffer without letting Neo-tree take over the screen
@@ -126,6 +142,10 @@ vim.keymap.set("x", "<C-u>", "u", { desc = "Lowercase selection" })
 -- selection, and operator-pending is what makes the doubled form (<C-d><C-d>)
 -- resolve to linewise dd.
 vim.keymap.set({ "n", "x", "o" }, "<C-d>", "d", { desc = "Delete (operator)" })
+
+-- Enter command mode without Shift: Ctrl+; acts as ":". Ghostty speaks the
+-- kitty keyboard protocol, so <C-;> arrives as a distinct key in nvim.
+vim.keymap.set({ "n", "x" }, "<C-;>", ":", { desc = "Command mode (no Shift)" })
 
 -- ---------------------------------------------------------------------------
 -- Cmdline practicality

@@ -1,8 +1,10 @@
 -- SCRATCH / TESTING ONLY.
 --
--- Nothing here fires on its own: no autocmds, no ThemeAdjusted listener, no
--- re-apply loop. Edit the hexes below, save, then run :YamlTone to see them.
--- That is the whole edit/see cycle.
+-- One autocmd IS live at import time: a BufLeave handler (YamlToneRevert group,
+-- ~line 114) that runs ThemeReload when leaving a yaml buffer — but only after
+-- a tone command has marked the session dirty; it no-ops otherwise. Everything
+-- else is inert until you run a command. Edit the hexes below, save, then run
+-- :YamlTone to see them. That is the whole edit/see cycle.
 --
 -- ---------------------------------------------------------------------------
 -- ONE-OFF TESTING (no file edit, no command -- just type it in nvim):
@@ -43,13 +45,28 @@
 -- those knobs until the next :ThemeReload -- that is expected for testing.
 
 local colors = {
-  ["@property.yaml"] = "#49638f", -- fields (keys)
+  ["@property.yaml"] = "#49638f", -- nested fields (keys)
+  ["@property.yaml.toplevel"] = "#7aa2f7", -- document-root keys only
   ["@punctuation.delimiter.yaml"] = "#ff8c1a", -- colons, commas, periods
   ["@punctuation.special.yaml"] = "#ff8c1a", -- list dashes, anchors
   ["@punctuation.bracket"] = "#f7ff00", -- [] {}
-  ["@string.yaml"] = "#00ffff", -- values
+  ["@string.yaml"] = "#00ffff", -- plain values (the catch-all)
   ["@comment"] = "#243745",
   ["Comment"] = "#243745",
+
+  -- Value SHAPES. These are separate captures, defined in
+  -- after/queries/yaml/highlights.scm -- a value only reaches one of these if
+  -- its text matches that rule, otherwise it stays @string.yaml above. So if a
+  -- hex here appears to do nothing, the value is not matching the pattern; run
+  -- :Inspect on it to see which capture it actually got.
+  ["@type.yaml.enum"] = "#e0af68", -- Deployment, RollingUpdate, ClusterIP
+  ["@constant.yaml.env"] = "#f7768e", -- LOG_LEVEL, POSTGRES_HOST
+  ["@string.yaml.image"] = "#bb9af7", -- registry.io/api:1.2.3
+  ["@string.yaml.version"] = "#9ece6a", -- apps/v1, 1.2.3
+  ["@string.yaml.url"] = "#73daca", -- https://, oci://
+  ["@string.yaml.path"] = "#a9b1d6", -- /healthz, values.yaml
+  -- Quantities (512Mi, 30s) deliberately have no entry: they inherit @number,
+  -- so they track the number colour instead of being tunable separately.
 }
 
 -- Not a highlight group -- the indent scope line ("guide line") is drawn by its

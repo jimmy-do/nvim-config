@@ -316,7 +316,7 @@ font-family = jetbrainsmono nerd font
 
 
 #jetbrainsmono nerd font
-font-style = regular
+font-style = light
 font-size = 20
 font-thicken = false
 font-thicken-strength = 0
@@ -343,6 +343,13 @@ window-decoration = auto
 # color (#070808). "native"/"transparent" hand the tab bar to AppKit, which
 # always draws it in system gray. Shaders never touch the titlebar.
 macos-titlebar-style = hidden
+
+# Start every new window in fullscreen (incl. the one launched at login).
+fullscreen = true
+
+# Without this, macOS state restoration replays the last window's saved size
+# and beats `fullscreen = true` -- Raycast-launched windows came up tiny.
+window-save-state = never
 
 # font-family = DroidSansM Nerd Font Mono
 # font-family = RobotoMono Nerd Font Mono

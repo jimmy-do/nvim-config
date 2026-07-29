@@ -67,22 +67,59 @@ local function smooth_wheel(direction)
   end
 end
 
+-- Nesting-safe. Presses can land closer together than the 40ms restore delay
+-- (that is the whole point of the spam path below), so a naive save/restore would
+-- have press #2 capture the ALREADY-SUPPRESSED value and then restore `false`
+-- permanently -- snacks scroll silently dead for the rest of the session. The
+-- depth counter means only the outermost press owns the saved value, and only the
+-- last one in a burst restores it.
+local suppress_depth = 0
+local suppress_saved = nil
+
 local function instant_page_scroll(keys)
   return function()
     local count = vim.v.count > 0 and tostring(vim.v.count) or ""
-    local previous = vim.g.snacks_scroll
+    if suppress_depth == 0 then
+      suppress_saved = vim.g.snacks_scroll
+    end
+    suppress_depth = suppress_depth + 1
     vim.g.snacks_scroll = false
     vim.api.nvim_feedkeys(count .. termcode(keys), "nx", false)
     vim.defer_fn(function()
-      vim.g.snacks_scroll = previous
+      suppress_depth = math.max(0, suppress_depth - 1)
+      if suppress_depth == 0 then
+        vim.g.snacks_scroll = suppress_saved
+      end
     end, 40)
   end
 end
 
 -- Smooth (animated) page scroll: feed <C-u>/<C-d> with snacks scroll left ON so
 -- the resulting WinScrolled is animated. Opposite of instant_page_scroll above.
-local function smooth_page_scroll(keys)
+--
+-- ...EXCEPT while you are spamming the SAME direction. A snacks page glide walks
+-- the cursor's SCREEN position one row at a time for the whole animation, and
+-- Ghostty's cursor shaders (cursor_tail + sonic_boom) restart their trail on every
+-- one of those steps -- so a held `d` leaves ~20 half-finished smears raking down
+-- the column instead of one tail. Repeats in the same direction therefore go
+-- INSTANT: one cursor jump, one clean trail, no restart storm.
+--
+-- The first press of a direction, and any reversal, still glides -- that is the
+-- press you actually watch. Nothing here touches snacks' indent animation.
+local repeat_window_ms = 220 -- quiet for this long => next press is a "first" press again
+local last_dir, last_at = nil, 0
+
+local function smooth_page_scroll(keys, dir)
+  local instant = instant_page_scroll(keys)
   return function()
+    local now = (vim.uv or vim.loop).now()
+    local spamming = last_dir == dir and (now - last_at) < repeat_window_ms
+    last_dir, last_at = dir, now
+
+    if spamming then
+      return instant()
+    end
+
     local count = vim.v.count > 0 and tostring(vim.v.count) or ""
     vim.api.nvim_feedkeys(count .. termcode(keys), "nx", false)
   end
@@ -127,8 +164,8 @@ return {
       -- smooth_page_scroll feeds <C-u>/<C-d> with snacks scroll left ON, so the
       -- half-page jump animates. (Swap to instant_page_scroll here if you ever
       -- want u/d to jump instantly instead.)
-      vim.keymap.set({ "n", "x" }, "u", smooth_page_scroll("<C-u>"), { desc = "Page up (smooth)" })
-      vim.keymap.set({ "n", "x" }, "d", smooth_page_scroll("<C-d>"), { desc = "Page down (smooth)" })
+      vim.keymap.set({ "n", "x" }, "u", smooth_page_scroll("<C-u>", -1), { desc = "Page up (smooth)" })
+      vim.keymap.set({ "n", "x" }, "d", smooth_page_scroll("<C-d>", 1), { desc = "Page down (smooth)" })
     end,
   },
 }

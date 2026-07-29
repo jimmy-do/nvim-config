@@ -1,5 +1,14 @@
 ; extends
 
+; NOTE -- injecting `helm` into ${{ ... }} scalars does NOT work, don't retry it.
+; The query side is fine: the merged injections query resolves lang=helm for
+; those nodes (verified with q:iter_matches), and the helm parser does parse the
+; fragment standalone. Neovim 0.12.4 still never spawns the child parser --
+; LanguageTree:children() stays empty even in a file with no competing `bash`
+; injection from a `run:` key. So the injection is silently dropped downstream.
+;
+; ${{ ... }} is handled in highlights.scm instead, as a whole-scalar capture.
+
 ; JSON block scalars (keys ending in .json)
 (block_mapping_pair
   key: (flow_node) @_key

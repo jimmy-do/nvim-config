@@ -1,0 +1,535 @@
+#!/usr/bin/env python3
+"""cc-fg / cc-fg-dim -- recolour Claude Code's transcript TEXT, from `pill`.
+
+    cc-fg                  list the colours, mark the active one
+    cc-fg slate            transcript text in the ACTIVE pane
+    cc-fg #717fab          any raw hex
+    cc-fg -                back to the previous
+    cc-fg current          print the active hex
+
+    cc-fg-dim              same list, marked against the INACTIVE-pane colour,
+                           and it leads with a suggestion derived from the
+                           current active colour
+    cc-fg-dim auto         apply that suggestion
+    cc-fg-dim shadow       or pick one yourself, same as cc-fg
+
+Two commands, one palette, mirroring the tmux-bar / tmux-chip split: `cc-fg`
+owns the LIT text (focused pane), `cc-fg-dim` owns the UNLIT text (every other
+pane), and each keeps its own previous so `cc-fg -` never disturbs the dim
+colour and vice versa. Takes effect IMMEDIATELY -- no restart, no reload.
+
+WHY THIS EDITS TMUX AND NOT JUST THE THEME. Claude renders its chat body with
+NO foreground escape at all -- measured, `capture-pane -e` shows bare text --
+so the body is painted by whatever the terminal's DEFAULT foreground is. Three
+things can supply that, and the innermost wins:
+
+    Ghostty  foreground = #00b012        the phosphor green, outermost
+    tmux     window-active-style          per-pane default fg, focused
+             window-style                 per-pane default fg, unfocused
+    theme    ~/.claude/themes/<slug>.json only for text Claude DOES colour
+
+tmux's per-pane default fg therefore OVERRIDES Ghostty for the body, which is
+the only reason "wall of green chat text" is fixable at all. Both tmux styles
+are conditional on @is_claude (`#{?#{E:@is_claude},fg=<claude>,fg=<shell>}`),
+so shells keep the phosphor green and Claude panes get these colours.
+
+Each command rewrites ONLY the claude branch of its own line, live-applies it,
+and mirrors the same hex into the theme's `text` / `inactive` key so the bits
+Claude DOES colour explicitly agree with the body. The shell branch is never
+touched -- that one belongs to Ghostty, and `cc-fg` warns if the two have
+drifted apart.
+
+WHERE IT STILL GOES GREEN. A pane whose `pane_current_command` is not Claude
+does not match @is_claude and keeps the shell colour by design -- notably a
+floax float that is sitting at a SHELL prompt. Once Claude is running in it the
+match fires and it recolours. `cc-fg where` prints the live verdict per pane.
+
+This file is invoked under both names; cc-fg-dim is a symlink.
+"""
+import json, os, re, sys, shutil, subprocess
+
+HOME = os.path.expanduser("~")
+STARSHIP = f"{HOME}/.config/starship.toml"
+SETTINGS = f"{HOME}/.claude/settings.json"
+THEME_DIR = f"{HOME}/.claude/themes"
+TMUX_CONF = os.path.realpath(f"{HOME}/.tmux.conf")
+GHOSTTY = (f"{HOME}/Library/Application Support/com.mitchellh.ghostty/"
+           f"config.ghostty")
+STATE_DIR = os.environ.get("XDG_STATE_HOME", f"{HOME}/.local/state")
+
+DIM_SCALE = 0.55         # active colour -> suggested inactive colour
+BG = "#080806"           # Ghostty's background, so a colour is judged as TEXT
+
+MODES = {
+    # option:    the tmux option whose claude branch this command owns
+    # theme_key: the theme key mirrored to match
+    "cc-fg":     {"option": "window-active-style", "theme_key": "text",
+                  "what": "claude fg", "pane": "active pane"},
+    "cc-fg-dim": {"option": "window-style", "theme_key": "inactive",
+                  "what": "claude fg (dim)", "pane": "inactive panes"},
+}
+
+# Body-text colours, which the pill_* table has none of -- every colour there
+# is a saturated accent built to sit on a slab for a few characters, and a
+# whole transcript set to one of them is unreadable.
+#
+# Two groups, both text-first and both sized for a near-black ground:
+#
+#   PHOSPHORS  the CRT lineage plus the popular dark-theme body colours. These
+#              are what a terminal has actually been read in for forty years.
+#   TMUX       the bar/border hues (teal, cyan, the copy-mode violet) pulled
+#              down to body level, for when the transcript should belong to
+#              the frame around it rather than contrast with it. Listed at the
+#              tail of TERMINAL.
+#   PAPER      e-paper and the famous editor foregrounds -- the reading end.
+#              Also at the tail of TERMINAL; see the note there for why the
+#              neutral ones collapse into a single entry.
+#   GLOW       near-whitepoint tints that still clear the ghostty shader's
+#              saturation gate. The ONLY group allowed above the luminance
+#              band -- see ALWAYS_SHOW and the note by them for the physics.
+#   NEUTRALS   greys and slates, for when the hue is doing the talking
+#              elsewhere (the pane borders, the prompt) and the text should
+#              just get out of the way.
+#
+# BRIGHTNESS. The listing prints relative luminance (WCAG, the same number
+# contrast ratios are computed from) so these are comparable across hues rather
+# than by eye -- #00b012 looks blazing but is only 31%, because green carries
+# most of luminance and there is no red or blue under it, while gruvbox's cream
+# #ebdbb2 is 72% and glares on a black ground in a dark room.
+#
+# EVERY entry below is inside that band. The famous dark-theme foregrounds are
+# NOT listed at their poster values -- gruvbox's #ebdbb2 is 72%, dracula's
+# #f8f8f2 is 94%, P1 green is 72%, and on a black ground in a dark room they
+# glare. Each is listed at its own hue scaled down to ~31%, which is where
+# #00b012 already sits, so switching between any two of these changes the
+# COLOUR and nothing else. The originals are one `cc-fg <hex>` away if wanted.
+# The listing is filtered to this; see the footer. Mode-dependent, because the
+# two commands want opposite ends: an ACTIVE-pane colour has to be readable
+# (~31%, phosphor's own level), an INACTIVE-pane colour has to visibly recede
+# without becoming unreadable if you glance at it -- roughly a third of that.
+BANDS = {"cc-fg": (0.18, 0.36), "cc-fg-dim": (0.04, 0.20)}
+TERMINAL = [
+    # --- the phosphors, at phosphor brightness -------------------------
+    ("phosphor",  "#00b012"),   # Ghostty's foreground -- the green you liked
+    ("p1",        "#23af23"),   # P1 CRT green (#33ff33 at 31%)
+    ("matrix",    "#00b02c"),   # blue-shifted green (#00ff41 at 31%)
+    ("amber",     "#c98b00"),   # P3 amber, the classic alternative (#ffb000)
+    ("amber_soft","#c78c34"),   # same hue, softer edge
+    ("vt220",     "#b79300"),   # the yellower DEC amber (#ffcc00)
+    ("sepia",     "#b49358"),   # amber gone paper -- warmest, lowest strain
+    # --- the popular dark themes' body text, same brightness -----------
+    ("solarized", "#839496"),   # base0, already in band at its real value
+    ("gruvbox",   "#a2977a"),   # warm cream (#ebdbb2 at 31%)
+    ("nord",      "#93979f"),   # cool off-white (#d8dee9)
+    ("tokyo",     "#8e96b6"),   # tokyo-night fg (#c0caf5) -- near periblue
+    ("onedark",   "#9297a3"),   # muted blue-grey (#abb2bf)
+    ("cyanterm",  "#609ec3"),   # the cold-CRT option (#7dcfff)
+    # --- the tmux chrome's own hues, brought down to body level ---------
+    # Each of these is a colour already on screen in the bar or the pane
+    # borders, scaled to ~27% luminance so the transcript reads at the same
+    # effort as phosphor while sharing a hue with the frame around it. The
+    # source accent is in the comment; `cc-fg <that hex>` gets the raw one.
+    ("acidteal",  "#00a17f"),   # @pane_lines_bright / @ui-bright (#00ffc8)
+    ("tron",      "#00a265"),   # tron green, greener lean (#00ff9f)
+    ("turquoise", "#2ea07a"),   # pill_turquoise (#47f5bb)
+    ("lasercyan", "#1e9da3"),   # @bar_bright, the window-list cyan (#2ff5ff)
+    ("session",   "#009cba"),   # @session_hue, the active-tab blue (#00d5ff)
+    ("iceblue",   "#6396a0"),   # pill_ice_blue, the desaturated end (#9fefff)
+    ("copyviolet","#b46df2"),   # @copy_mode_color, the one non-teal (#be73ff)
+    # --- e-paper and the famous editor foregrounds -----------------------
+    # Brightness-matching is what makes these comparable and it also collapses
+    # them: dracula #f8f8f2, monokai #f8f8f2, vscode #d4d4d4, base16 #d8d8d8
+    # and e-ink's own white all land within three units of #979797 at 31%.
+    # They are one colour at different brightnesses, and the brightness is the
+    # part that glares -- so `chalk` stands for the whole neutral family and
+    # the rest are here only because they have a HUE that survives the match.
+    ("chalk",      "#979797"),  # dracula / monokai / vscode / base16
+    ("eink",       "#989892"),  # E Ink Carta grey -- the reference paper
+    ("paper",      "#9a978f"),  # newsprint, a touch warm
+    ("parchment",  "#9d9687"),  # the warm end, aged paper
+    ("catppuccin", "#9097ac"),  # mocha fg (#cdd6f4) -- blue lean
+    ("everforest", "#a09681"),  # everforest fg (#d3c6aa) -- warm green-grey
+    ("rosepine",   "#9795a4"),  # rose-pine text (#e0def4) -- violet grey
+    ("kanagawa",   "#9b9783"),  # fujiWhite (#dcd7ba) -- paper yellow
+    ("material",   "#8f9999"),  # material fg (#eeffff) -- coldest, cyan grey
+    # --- glow tints, the one group that sits ABOVE the reading band --------
+    # The live ghostty shader weights its neon halo as
+    #     w = smoothstep(0.22, 0.55, tsat) * peak_channel * (1 + 0.9*blueBias)
+    # with tsat = (max-min)/max, so "near white" and "glows" pull against each
+    # other by construction: whiter means min climbs, tsat falls, gate closes.
+    # Nothing is both whiter AND glowier than #b46df2 (tsat 0.55, w 1.16) --
+    # that hex already sits at the top of the ramp. So these hold tsat just
+    # under the ceiling (HSV S=0.45) and spend BRIGHTNESS instead: peak channel
+    # pinned at 255. Measured w in the comments, 67-84% of copyviolet's, over a
+    # far brighter glyph. NO GREEN -- fgHueExclude kills bloom within ~36 deg
+    # of the foreground hue (#00b012), so a white-green glows exactly zero.
+    ("glow_violet","#d98cff"),  # w 0.89 -- copyviolet's hue toward white
+    ("glow_blue",  "#8cbcff"),  # w 0.97 -- strongest, blue compensation
+    ("glow_cyan",  "#8cecff"),  # w 0.84
+    ("glow_amber", "#ffdd8c"),  # w 0.78 -- white amber
+    ("glow_rose",  "#ff8c9f"),  # w 0.78 -- white red
+    ("pale_violet","#e4adff"),  # w 0.25 -- the whiter tier, S=0.32
+    ("pale_blue",  "#adcfff"),  # w 0.26
+    ("pale_cyan",  "#adf1ff"),  # w 0.24
+    ("pale_amber", "#ffe7ad"),  # w 0.23
+    ("pale_rose",  "#ffadbb"),  # w 0.23
+]
+
+# Prefixes that are listed regardless of the luminance band. The band exists to
+# keep the reading effort constant across a swap; the glow group is the one
+# deliberate exception, since halo weight is bought with brightness. Hiding
+# them would mean shipping colours the picker refuses to show.
+ALWAYS_SHOW = ("glow_", "pale_")
+
+NEUTRALS = [
+    ("slate",    "#9aa0b0"),
+    ("periblue", "#717fab"),   # the current active fg
+    ("steel",    "#6c7d9c"),
+    ("ash",      "#8a8f9e"),
+    ("graphite", "#6f7486"),
+    ("shadow",   "#565b6e"),
+    ("ink",      "#3d4560"),   # the current inactive fg
+]
+
+MODE = os.path.basename(sys.argv[0])
+if MODE not in MODES:
+    MODE = "cc-fg"
+M = MODES[MODE]
+STATE = f"{STATE_DIR}/{MODE}-previous"
+BAND = BANDS[MODE]
+
+# The conditional both styles are written as. Group 1 is the claude branch --
+# the ONLY thing these commands ever substitute; group 2 is the shell branch,
+# which belongs to Ghostty and is carried through verbatim.
+STYLE_RE = re.compile(
+    r'(?m)^(set -g\s+%s\s+")(#\{\?#\{E:@is_claude\},fg=)(#[0-9a-fA-F]{6})(,fg=)'
+    r'(#[0-9a-fA-F]{6})(\}")')
+
+
+def die(msg):
+    print(f"{MODE}: {msg}", file=sys.stderr)
+    sys.exit(1)
+
+
+def rgb(h):
+    h = h.lstrip("#")
+    return int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16)
+
+
+def scale(h, k):
+    r, g, b = rgb(h)
+    return "#%02x%02x%02x" % (min(255, int(r * k)),
+                              min(255, int(g * k)),
+                              min(255, int(b * k)))
+
+
+def lum(h):
+    """WCAG relative luminance, 0-1. Printed as a percentage so colours of
+    different hues can be compared for BRIGHTNESS rather than by eye -- a
+    saturated green and a grey that read the same on screen land within a few
+    points of each other here."""
+    def ch(v):
+        v /= 255
+        return v / 12.92 if v <= 0.03928 else ((v + 0.055) / 1.055) ** 2.4
+    r, g, b = (ch(c) for c in rgb(h))
+    return 0.2126 * r + 0.7152 * g + 0.0722 * b
+
+
+def on_bg(hexv, label):
+    """Text in `hexv` over Ghostty's real background -- the only honest way to
+    preview a foreground colour."""
+    r, g, b = rgb(hexv)
+    br, bgc, bb = rgb(BG)
+    return f"\033[48;2;{br};{bgc};{bb}m\033[38;2;{r};{g};{b}m{label}\033[0m"
+
+
+def read_table(prefix):
+    """One `<prefix>_name = '#hex'` table out of starship.toml, in file order."""
+    if not os.path.isfile(STARSHIP):
+        return []
+    src = open(STARSHIP, encoding="utf-8").read()
+    out = []
+    for m in re.finditer(rf"^{prefix}_([a-z0-9_]+)\s*=\s*'(#[0-9a-fA-F]{{6}})'",
+                         src, re.M):
+        out.append((re.sub(r"_lifted$|_white$", "", m.group(1)), m.group(2)))
+    return out
+
+
+def palette():
+    """The body-text table first, then the accents -- all read live from
+    starship.toml, the same file `pill` and the tmux-* commands read, so every
+    picker on this machine draws from one set.
+
+        text_*   body foregrounds. cc-* owns this table; see the block comment
+                 by it for why these must NOT be named pill_*.
+        pill_*   shared with the prompt and the tmux chrome.
+        tmux_*   tmux only, too saturated to carry brand logos.
+
+    The built-in tables are a FALLBACK for a machine whose starship.toml has no
+    text_* block yet; once it does, the file wins and these commands need no
+    edit to learn a new colour."""
+    text = read_table("text") or (list(TERMINAL) + list(NEUTRALS))
+    out, seen = list(text), {n for n, _ in text}
+    for name, hexv in read_table("pill") + read_table("tmux"):
+        if name not in seen:
+            seen.add(name)
+            out.append((name, hexv))
+    return out, {n for n, _ in text}
+
+
+_, CURATED = palette()
+
+if MODE == "cc-fg-dim":
+    # Same hues, at unlit level. Derived rather than hand-listed so the dim
+    # picker can never drift from the lit one -- add a colour to TERMINAL and
+    # its dimmed twin appears here on the next run.
+    TERMINAL = [(n, scale(h, DIM_SCALE)) for n, h in TERMINAL]
+
+
+def in_band(hexv):
+    return BAND[0] <= lum(hexv) <= BAND[1]
+
+
+def read_conf():
+    if not os.path.isfile(TMUX_CONF):
+        die(f"no tmux config at {TMUX_CONF}")
+    return open(TMUX_CONF, encoding="utf-8").read()
+
+
+def find(src, option):
+    """(claude_fg, shell_fg) for one of the two style lines."""
+    m = re.search(STYLE_RE.pattern % re.escape(option), src)
+    return (m.group(3), m.group(5)) if m else (None, None)
+
+
+def ghostty_fg():
+    if not os.path.isfile(GHOSTTY):
+        return None
+    m = re.search(r"^foreground\s*=\s*#?([0-9a-fA-F]{6})",
+                  open(GHOSTTY, encoding="utf-8").read(), re.M)
+    return "#" + m.group(1).lower() if m else None
+
+
+def theme_path():
+    """The live theme, found through settings.json rather than guessed, so a
+    theme switch carries these commands with it."""
+    if not os.path.isfile(SETTINGS):
+        return None
+    try:
+        conf = json.load(open(SETTINGS, encoding="utf-8"))
+    except json.JSONDecodeError:
+        return None
+    theme = conf.get("theme", "")
+    if not theme.startswith("custom:"):
+        return None
+    path = f"{THEME_DIR}/{theme.split(':', 1)[1]}.json"
+    return path if os.path.isfile(path) else None
+
+
+def resolve(want, names):
+    if want in names:
+        return want
+    hits = [n for n in names if n.startswith(want)] or [n for n in names if want in n]
+    if not hits:
+        return None
+    if len(hits) > 1:
+        die(f"'{want}' is ambiguous: {', '.join(hits)}")
+    return hits[0]
+
+
+def preview(hexv, lit, dim):
+    """The lit/unlit step in one row -- the colour under test in its own slot,
+    the other slot showing what it will actually sit next to."""
+    if MODE == "cc-fg-dim":
+        lit, dim = lit or "#717fab", hexv
+    else:
+        lit, dim = hexv, dim or scale(hexv, DIM_SCALE)
+    return (on_bg("#bb9af7", " ⏺ ") + on_bg(lit, "focused pane ") +
+            on_bg(dim, "· unfocused  "))
+
+
+def write(hexv, label):
+    src = read_conf()
+    claude_fg, shell_fg = find(src, M["option"])
+    if not claude_fg:
+        die(f"could not find the managed `set -g {M['option']}` line in "
+            f"{TMUX_CONF} -- it must keep its #{{?#{{E:@is_claude}},...}} shape")
+
+    os.makedirs(os.path.dirname(STATE), exist_ok=True)
+    open(STATE, "w").write(claude_fg)
+
+    new = re.sub(STYLE_RE.pattern % re.escape(M["option"]),
+                 lambda m: m.group(1) + m.group(2) + hexv + m.group(4) +
+                           m.group(5) + m.group(6), src, count=1)
+    if new == src:
+        die("substitution changed nothing -- refusing to write")
+    shutil.copy2(TMUX_CONF, TMUX_CONF + ".bak-cc-fg")
+    open(TMUX_CONF, "w", encoding="utf-8").write(new)
+
+    # Live-apply: the style is a global option, so one set-option recolours
+    # every Claude pane in every session at once, with no reload.
+    live = "  -> next tmux start"
+    if os.environ.get("TMUX"):
+        style = f"#{{?#{{E:@is_claude}},fg={hexv},fg={shell_fg}}}"
+        r = subprocess.run(["tmux", "set-option", "-g", M["option"], style],
+                           capture_output=True, text=True)
+        live = "  (live)" if r.returncode == 0 else f"  tmux: {r.stderr.strip()}"
+
+    # Mirror into the theme so the text Claude DOES colour explicitly agrees
+    # with the body colour tmux is painting. Optional -- a missing or non-custom
+    # theme is not an error, the tmux half is what carries the body.
+    tpath = theme_path()
+    mirrored = ""
+    if tpath:
+        try:
+            theme = json.load(open(tpath, encoding="utf-8"))
+        except json.JSONDecodeError:
+            theme = None
+        if theme is not None:
+            theme.setdefault("overrides", {})[M["theme_key"]] = hexv
+            shutil.copy2(tpath, tpath + ".bak")
+            tmp = tpath + ".tmp"
+            with open(tmp, "w", encoding="utf-8") as f:
+                json.dump(theme, f, indent=2, ensure_ascii=False)
+                f.write("\n")
+            os.replace(tmp, tpath)
+            mirrored = f'  ·  theme "{M["theme_key"]}" mirrored (next claude start)'
+
+    lit = hexv if MODE == "cc-fg" else find(src, "window-active-style")[0]
+    dim = hexv if MODE == "cc-fg-dim" else find(src, "window-style")[0]
+    print(f"  {M['what']}: {label}  {preview(hexv, lit, dim)}{live}{mirrored}")
+
+
+def where():
+    """Live verdict per pane: which branch each one is actually taking. This is
+    the answer to "why is that pane still green" -- a pane at a shell prompt is
+    SUPPOSED to be green."""
+    if not os.environ.get("TMUX"):
+        die("not inside tmux")
+    fmt = ("#{session_name}:#{window_index}.#{pane_index}\t"
+           "#{pane_current_command}\t#{E:@is_claude}\t#{?pane_active,active,}")
+    out = subprocess.run(["tmux", "list-panes", "-a", "-F", fmt],
+                         capture_output=True, text=True).stdout
+    src = read_conf()
+    cl_a, sh_a = find(src, "window-active-style")
+    cl_i, sh_i = find(src, "window-style")
+    print()
+    for line in out.strip().splitlines():
+        pane, cmd, is_cl, act = (line.split("\t") + ["", "", "", ""])[:4]
+        claude = is_cl == "1"
+        hexv = (cl_a if act else cl_i) if claude else (sh_a if act else sh_i)
+        tag = "claude" if claude else "shell "
+        print(f"  {pane:<14} {cmd:<12} {tag}  {act or 'inactive':<8} "
+              f"{on_bg(hexv, ' default fg ')}  {hexv}")
+    print()
+    print("  a `shell` pane keeps Ghostty's phosphor green on purpose --")
+    print("  that includes a floax float sitting at a prompt.")
+    print()
+
+
+def main(arg):
+    src = read_conf()
+    colors, _ = palette()
+    names = [c[0] for c in colors]
+    lit, shell_fg = find(src, "window-active-style")
+    dim, shell_dim = find(src, "window-style")
+    active = lit if MODE == "cc-fg" else dim
+
+    if arg == "where":
+        where()
+        return
+
+    show_all = arg == "all"
+    if show_all:
+        arg = None
+
+    if arg is None:
+        print()
+        if MODE == "cc-fg-dim" and lit:
+            sug = scale(lit, DIM_SCALE)
+            print(f"   suggested      {preview(sug, lit, dim)}  {sug}"
+                  f"   <- {int(DIM_SCALE * 100)}% of the active fg ({lit})")
+            print(f"                  apply it with `{MODE} auto`")
+            print()
+        hidden = 0
+        for name, hexv in colors:
+            is_active = bool(active) and hexv.lower() == active.lower()
+            # The active colour is always shown, in band or not -- a picker
+            # that cannot show you what you are currently running is useless.
+            curated = name in CURATED
+            glow = name.startswith(ALWAYS_SHOW)
+            if not (is_active or show_all or glow or (curated and in_band(hexv))):
+                hidden += 1
+                continue
+            mark = " *" if is_active else "  "
+            print(f"{mark} {name:<14} {preview(hexv, lit, dim)}  {hexv}"
+                  f"  {lum(hexv) * 100:4.0f}%")
+        print()
+        if hidden:
+            print(f"  {hidden} hidden: the pill_*/tmux_* accents (built to sit "
+                  f"on a slab for three words, not to be read by the page) and")
+            print(f"  anything outside {int(BAND[0] * 100)}-"
+                  f"{int(BAND[1] * 100)}% luminance. `{MODE} all` shows them; "
+                  f"any hex still works. Nothing is blocked, only hidden.")
+        print(f"  * = active    usage: {MODE} <name|hex>    ({MODE} - to go back)")
+        print(f"  % = relative luminance. Everything listed sits in a narrow "
+              f"band around")
+        print(f"  phosphor's 31%, so a swap changes the COLOUR and not how hard "
+              f"you read.")
+        print(f"  paints the DEFAULT foreground of claude panes ({M['pane']})")
+        print(f"  via tmux {M['option']}; applies live.")
+        gh = ghostty_fg()
+        shell = shell_fg if MODE == "cc-fg" else shell_dim
+        if gh and MODE == "cc-fg" and shell and gh.lower() != shell.lower():
+            print(f"  ! ghostty foreground is {gh} but the shell branch says "
+                  f"{shell} -- they have drifted; shells will not match "
+                  f"un-tmux'd text.")
+        elif gh:
+            print(f"  shell panes keep ghostty's {gh}; `{MODE} where` shows "
+                  f"which panes take which.")
+        print()
+        return
+
+    if arg == "current":
+        if not active:
+            die("could not read the current colour from tmux.conf")
+        name = next((n for n, h in colors if h.lower() == active.lower()), None)
+        print(f"{active}  {name}" if name else active)
+        return
+
+    if arg == "auto":
+        if MODE != "cc-fg-dim":
+            die("`auto` is a cc-fg-dim thing -- it derives from the active fg")
+        if not lit:
+            die("no active fg to derive from")
+        sug = scale(lit, DIM_SCALE)
+        write(sug, f"{sug}  ({int(DIM_SCALE * 100)}% of {lit})")
+        return
+
+    if arg == "__complete":
+        extra = ["auto"] if MODE == "cc-fg-dim" else []
+        print("\n".join(["-", "current", "where", "all"] + extra + names))
+        return
+
+    if arg == "-":
+        if not os.path.isfile(STATE):
+            die("no previous recorded")
+        write(open(STATE).read().strip(), "previous")
+        return
+
+    m = re.fullmatch(r"#?([0-9a-fA-F]{6})", arg)
+    if m:
+        hexv = "#" + m.group(1).lower()
+        write(hexv, hexv)
+        return
+
+    name = resolve(arg, names)
+    if not name:
+        die(f"no colour matching '{arg}'   (run `{MODE}` for the list)")
+    write(dict(colors)[name], name)
+
+
+if __name__ == "__main__":
+    if len(sys.argv) > 2:
+        die("one argument at most")
+    main(sys.argv[1] if len(sys.argv) > 1 else None)

@@ -19,6 +19,11 @@ return {
         follow_current_file = {
           enabled = false,
         },
+        -- LazyVim's neo-tree extra hijacks netrw, so `nvim .` (or `nvim <dir>`)
+        -- opens the tree on startup. The tree is a toggle here, not a permanent
+        -- sidebar -- launching into it just costs a `<leader>e` to reclaim the
+        -- width. Directory args are handled by the VimEnter autocmd instead.
+        hijack_netrw_behavior = "disabled",
       },
       window = {
         mappings = {

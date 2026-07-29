@@ -1,0 +1,62 @@
+#!/bin/sh
+# Debounced, self-trigger-proof wrapper around relayout-stale, for CLIENT RESIZES
+# (Cmd +/- font-size changes, window drags, fullscreen toggles). Those resize the
+# client, so every window that is not the active one keeps the old size and tmux
+# paints the uncovered area with the pane-border pattern -- the dots.
+#
+# WHY A WRAPPER EXISTS AT ALL -- read before editing:
+#   relayout-stale calls `resize-window`, and `resize-window` EMITS
+#   `client-resized`. Hooking relayout-stale directly to `client-resized` is a
+#   hook that fires itself. That mistake pinned the GPU at 76% and cooked the
+#   machine once already. This wrapper makes the hook safe with a lock that is
+#   held ACROSS the self-emitted events, so they land while it is held and are
+#   dropped instead of starting another pass:
+#
+#     acquire lock -> debounce -> relayout-stale -> HOLD past the echo -> release
+#
+#   The hold (COOLDOWN) is the load-bearing part. relayout-stale's own no-op
+#   guards would make a re-fire cheap, but not free -- it would still walk every
+#   window and shell out per window on each echo. The lock makes it literally zero.
+#
+#   `mkdir` is the lock because it is atomic: two concurrent resizes cannot both
+#   win it. Do NOT switch this to `[ -f ]` + `touch`, which races.
+#
+# DEBOUNCE: Cmd +/- held down emits a burst of resizes. The first one wins the
+# lock and everything for the next DEBOUNCE+COOLDOWN seconds is dropped, so the
+# relayout runs ONCE, after the burst settles, against the final size.
+#
+# Touches nothing but window geometry -- restore, chip-flicker, and the
+# client-attached chain are all untouched.
+
+DEBOUNCE=0.35   # let a burst of resize events settle before measuring
+COOLDOWN=0.75   # keep holding while our own resize-window echoes come back
+
+LOCK="${TMPDIR:-/tmp}/tmux-relayout-onresize.lock"
+DIR="$(dirname "$0")"
+
+# The lock records its OWNER PID, and a lock whose owner is gone is broken on the
+# spot. This matters more than it looks: `run-shell -b` jobs are killed when the
+# tmux server or client goes away, which happens mid-cooldown routinely, and the
+# trap does not always get to run. A time-based breaker was tried first and was
+# WRONG -- `find -mmin` is minute-granular, so one killed run silently disabled
+# the dot cleanup for a full minute. Measured 2026-07-28: the wrapper exited 0 at
+# the lock check and healed nothing. `kill -0` is exact and immediate.
+if ! mkdir "$LOCK" 2>/dev/null; then
+  owner=$(cat "$LOCK/pid" 2>/dev/null)
+  # Owner still alive -> a real pass is in flight (or in its cooldown, swallowing
+  # its own echoed client-resized events). Drop this fire; that is the point.
+  if [ -n "$owner" ] && kill -0 "$owner" 2>/dev/null; then exit 0; fi
+  rm -rf "$LOCK"
+  mkdir "$LOCK" 2>/dev/null || exit 0
+fi
+echo $$ > "$LOCK/pid"
+trap 'rm -rf "$LOCK"' EXIT INT TERM HUP
+
+sleep "$DEBOUNCE"
+"$DIR/relayout-stale"
+# Geometry is right now, but cells the old layout painted can survive as leftover
+# dots until something repaints them. refresh-client is a pure redraw -- it does
+# NOT emit client-resized, so it is safe on this path (resize-window is the one
+# that echoes). One extra redraw per resize is nothing.
+tmux refresh-client 2>/dev/null
+sleep "$COOLDOWN"

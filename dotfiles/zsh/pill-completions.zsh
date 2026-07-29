@@ -16,4 +16,4 @@ _pill_family() {
   (( ${#cands} )) && compadd -a cands
 }
 compdef _pill_family pill pill2 tmux-bar tmux-chip tmux-pane tmux-pane-lines \
-                     tmux-copy tmux-copymode-color
+                     tmux-copy tmux-copymode-color cc-fg cc-fg-dim cc-em

@@ -30,12 +30,13 @@ INK = "#080808"
 
 SURFACES = [
     # (block marker name, display name, what it paints, extra rows)
-    ("tmux-bar",        "tmux-bar",        "the bar itself: row 1 rule/HUD, popup+menu frames, float border"),
+    ("tmux-bar",        "tmux-bar",        "the bar itself: row 1 rule/HUD, popup+menu frames"),
     ("tmux-color",      "tmux-color",      "written on the bar: inactive windows, rail, date, clock chip"),
     ("tmux-chip",       "tmux-chip",       "session chip + active window chip (global default)"),
     ("tmux-pane",       "tmux-pane",       "pane title pills, pane numbers, clock mode"),
     ("tmux-pane-lines", "tmux-pane-lines", "pane dividers (lit/unlit)"),
     ("tmux-copy",       "tmux-copy",       "copy mode: border, pill, COPY chip, scrollbar, selection"),
+    ("tmux-float",      "tmux-float",      "scratch float frame (prefix o) -- off-palette on purpose"),
 ]
 
 

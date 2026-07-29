@@ -5,7 +5,7 @@ local bg_transparency = 100 -- 0 = opaque, 50 = default (0.20 base + 1.00 extra 
 local bg_brightness = 50 -- 0-100, sepia-aware bg brightness. 0 = dark, 50 = original, 100 = brighter
 local bg_contrast = 50 -- 0-100, background contrast. 50 = original, lower = flatter, higher = punchier
 local fg_lightness = 50 -- 0-100, HSL L channel. 50 = original, <50 = darker, >50 = brighter
-local fg_saturation = 40 -- 0-100, HSL S channel. 50 = original, 0 = grayscale, 100 = max vivid
+local fg_saturation = 50 -- 0-100, HSL S channel. 50 = original, 0 = grayscale, 100 = max vivid
 local normalize_background = 0 -- 0-100, bg saturation toward neutral gray (same luminance). 0 = original hue, 100 = fully neutral
 local chrome_darken = 50 -- 0 = pure black, 50 = original theme bg, 100 = fully transparent
 local gruvbox_red_saturation = 100 -- gruvbox only: 100 = vivid GruvboxRed (if/end/keywords), lower = muted toward gray
@@ -15,6 +15,7 @@ local gruvbox_green_saturation = 100 -- gruvbox only: 100 = vivid GruvboxGreen (
 local gruvbox_fg1_lightness = 100 -- gruvbox only: white-font brightness. 100 = peak #ebdbb2, lower = dimmer cream (hue locked). Applied to Normal + GruvboxFg1.
 local kanagawa_dragon_bracket_lightness = 50 -- kanagawa-dragon only: HSL L of the bracket color. 50 = original (#ded3b4), <50 = darker, >50 = brighter (warm ceiling). :DragonBracketLightness
 local retrobox_string_lightness = 50 -- retrobox only: @string.yaml / @string.yaml.value.yaml / @string.helm lightness. 50 = original String.
+local comment_brightness = 50 -- 0-100, HSL L of comment groups ONLY. 50 = colorscheme-native, <50 = dimmer, >50 = brighter. The one knob allowed to touch comments. :CommentBrightness
 
 -- Chrome groups: tab bar (top), NeoTree title (side), status line (bottom).
 -- Controlled exclusively by chrome_darken. Other color knobs must not touch
@@ -330,6 +331,25 @@ local function desaturate_hex(hex, keep)
   return rgb_to_hex(hsl_to_rgb(h, s, l))
 end
 
+-- Scale HSL Lightness by a percentage (95 = 5% dimmer). Multiplicative, not a
+-- fixed offset, so each rung of a ramp steps by the same PROPORTION of what it
+-- started at instead of marching toward black at a constant rate.
+local function scale_l(hex, pct)
+  local r, g, b = hex_to_rgb(hex)
+  local h, s, l = rgb_to_hsl(r, g, b)
+  l = math.max(0, math.min(100, l * (math.max(0, pct) / 100)))
+  return rgb_to_hex(hsl_to_rgb(h, s, l))
+end
+
+-- Scale saturation by a percentage, allowing values above 100 (a boost). Hue and
+-- lightness are untouched; S is clamped at 100 so an already-vivid hue is a no-op.
+local function scale_sat(hex, pct)
+  local r, g, b = hex_to_rgb(hex)
+  local h, s, l = rgb_to_hsl(r, g, b)
+  s = math.max(0, math.min(100, s * (math.max(0, pct) / 100)))
+  return rgb_to_hex(hsl_to_rgb(h, s, l))
+end
+
 -- Lift fg's HSL Lightness to min_lightness if below that floor; H and S unchanged.
 -- bg_hex is accepted for interface consistency but lightness floor is sufficient here.
 local function ensure_readable_fg(fg_hex, _bg_hex, min_lightness)
@@ -594,9 +614,41 @@ local ONEDARK_DARK_SOFT_PURPLE = "#5194CB"
 -- already built into this system.
 local STORM_PERIOD = "#ff8c1a"
 
+-- Storm's {{ }} / [[ ]] colour, mirroring STORM_PERIOD above.
+--
+-- These braces are NOT treesitter-coloured -- apply_global_punct_matches paints
+-- them with a matchadd overlay that outranks the treesitter capture, so every
+-- filetype got the same PUNCT_BLUE regardless of what its grammar captured. That
+-- is why helm templates, values.yaml and Actions expressions all rendered the
+-- identical washed-out blue while ordinary ()[]{} elsewhere came from
+-- @punctuation.bracket (yellow) -- braces looked arbitrarily different depending
+-- on which file you were in.
+--
+-- Matching @punctuation.bracket's yellow makes every bracket-ish glyph read the
+-- same colour across every language. Change this one constant to re-tune.
+local STORM_BRACKET = "#f7ff00"
+
+-- Storm and its copies. stormv2 (colors/stormv2.lua) is a byte-identical
+-- palette copy, and every storm-specific branch below is keyed to the theme
+-- NAME -- so without this the copy would silently lose the punctuation
+-- overlay, the cyan indent scope, the dim indent guides and the yaml startup
+-- pass, and would render nothing like the theme it was copied from. Add
+-- further copies here; do NOT scatter more name equality checks.
+--
+-- 2026-07-28: base16-tokyo-night-terminal-storm was REMOVED from this list at
+-- Jimmy's request -- the upstream base16 scheme now renders stock (no orange
+-- periods, no yellow {{ }}, no cyan indent scope, no dim guides, no yaml
+-- key/value ramp). Its theme_baseline.lua entry was deleted in the same pass.
+-- All of that tuning still lives on in stormv2, which is what this gate is now
+-- for; re-adding the base16 name here plus its baseline table brings it back.
+local function is_storm_family(theme)
+  theme = theme or vim.g.colors_name or ""
+  return theme == "stormv2"
+end
+
 local function apply_global_punct_highlights()
   local theme = vim.g.colors_name or ""
-  local storm = theme == "base16-tokyo-night-terminal-storm"
+  local storm = is_storm_family(theme)
   local full_punct_overlay = theme:match("^kanagawa") or theme:match("^gruvbox") or storm
   local bracket_overlay = full_punct_overlay or theme == "retrobox"
   if not bracket_overlay then
@@ -617,12 +669,13 @@ local function apply_global_punct_highlights()
       url_fg = color_to_hex(c_hl.fg)
     end
   end
-  vim.api.nvim_set_hl(0, "GlobalPunctBlue", { fg = storm and STORM_PERIOD or PUNCT_BLUE })
+  local period_fg = storm and STORM_PERIOD or PUNCT_BLUE
+  vim.api.nvim_set_hl(0, "GlobalPunctBlue", { fg = period_fg })
   -- {{ }} / [[ ]] brackets ride on their own group so Dragon can recolor them
   -- (see apply_kanagawa_dragon_fixed_fg) without touching periods, which stay blue.
   -- Retrobox opts into only these double-bracket overlays with a muted tan that
   -- fits retrobox. Periods and other punctuation are not matched there.
-  local bracket_fg = theme == "retrobox" and RETROBOX_BRACKET or PUNCT_BLUE
+  local bracket_fg = theme == "retrobox" and RETROBOX_BRACKET or storm and STORM_BRACKET or PUNCT_BLUE
   vim.api.nvim_set_hl(0, "GlobalPunctBracket", { fg = bracket_fg })
   vim.api.nvim_set_hl(0, "GlobalUrlReset", { fg = url_fg })
   -- Periods / brackets / URLs inside comments must NOT pick up the blue period
@@ -649,7 +702,7 @@ local function apply_global_punct_matches()
   local theme = vim.g.colors_name or ""
   local full_punct_overlay = theme:match("^kanagawa")
     or theme:match("^gruvbox")
-    or theme == "base16-tokyo-night-terminal-storm"
+    or is_storm_family(theme)
   local bracket_overlay = full_punct_overlay or theme == "retrobox"
   if not bracket_overlay then
     clear_global_punct_matches()
@@ -669,7 +722,10 @@ local function apply_global_punct_matches()
     add("GlobalPunctBlue", [[\v\.]], 95)
     add("GlobalUrlReset", [[\vhttps?://\S+]], 96)
   end
-  -- {{ }} and [[ ]] — double-curly (Helm/Jinja) and double-square (Lua/Markdown/Neorg)
+  -- {{ }} and [[ ]] — double-curly (Helm/Jinja) and double-square (Lua/Markdown/Neorg).
+  -- The second pattern MUST use the [=[ ]=] long-bracket form: written as
+  -- [[\v\[\[|\]\]]] the string terminates at the inner ]], which is a syntax
+  -- error that takes the whole file (and therefore every plugin) down with it.
   add("GlobalPunctBracket", [[\v\{\{|\}\}]], 95)
   add("GlobalPunctBracket", [=[\v\[\[|\]\]]=], 95)
   -- Comment-region reset at priority 200 (above treesitter 100 and LSP semantic
@@ -737,6 +793,23 @@ local retrobox_string_lightness_group_patterns = {
   "^@lsp%.type%.string",
 }
 
+-- ...except the yaml value SHAPES, which are only nominally "@string.*".
+-- @string.yaml.url / .image / .version / .path are separate token classes that
+-- happen to live under the @string prefix, and "^@string" above swept all four
+-- into retrobox's single yellow -- so retrobox was the one theme where a URL, an
+-- image ref, a version and a path were indistinguishable from a plain value
+-- (measured: 4 distinct value colours against 9 for every other scheme).
+-- @string.yaml and @string.yaml.value are deliberately NOT listed here: those
+-- ARE the plain string colour and should keep tracking the knob.
+local retrobox_string_lightness_exempt_patterns = {
+  "^@string%.yaml%.url",
+  "^@string%.yaml%.image",
+  "^@string%.yaml%.version",
+  "^@string%.yaml%.path",
+  "^@string%.yaml%.condition",
+  "^@string%.yaml%.quoted",
+}
+
 local function read_highlights()
   local ok, all = pcall(vim.api.nvim_get_hl, 0, {})
   return ok and type(all) == "table" and all or {}
@@ -763,13 +836,534 @@ local function load_theme_baseline_colors()
   return (ok2 and type(mod) == "table") and mod or {}
 end
 
+-- ===========================================================================
+-- DERIVED yaml palette — the same range of colour, for EVERY colorscheme.
+-- ===========================================================================
+--
+-- The captures in after/queries/yaml/highlights.scm split a manifest into ~14
+-- token classes, but a class only gets a COLOUR if some table assigns one.
+-- theme_baseline.lua does that by hand, per theme, which meant exactly two
+-- themes (storm and its copy) showed the range and every other colorscheme
+-- rendered yaml as flat as it ever was: keys one colour, values another.
+--
+-- Hand-writing a table per theme does not scale and produces colours that
+-- fight the scheme. Instead we DERIVE: read the hexes the active colorscheme
+-- already uses for its own @string / @number / @type / @constant / ... and map
+-- those onto the yaml classes. Every theme then shows yaml with the same
+-- structural range, painted entirely in its own palette. Nothing is forced.
+--
+-- Precedence: derived first, then theme_baseline.lua stamped ON TOP. So a
+-- hand-tuned entry always wins for the theme that has one, and everything else
+-- gets the derived set. Deleting a hand-tuned line falls back to derived, not
+-- to flat.
+
+-- First group in the list that actually has a foreground, resolved through
+-- links. Returns nil if none do, so callers can skip rather than paint junk.
+local function first_fg(groups)
+  for _, name in ipairs(groups) do
+    local ok, hl = pcall(vim.api.nvim_get_hl, 0, { name = name, link = false })
+    if ok and hl and hl.fg then
+      return color_to_hex(hl.fg)
+    end
+  end
+  return nil
+end
+
+-- Shift HSL lightness by delta points, clamped. Used to build the key ramp out
+-- of a single key colour, so the three rungs are guaranteed to be the same hue.
+local function lightness_of(hex)
+  local r, g, b = hex_to_rgb(hex)
+  local _, _, l = rgb_to_hsl(r, g, b)
+  return l
+end
+
+local function shift_l(hex, delta)
+  if not hex then
+    return nil
+  end
+  local r, g, b = hex_to_rgb(hex)
+  local h, s, l = rgb_to_hsl(r, g, b)
+  l = math.max(0, math.min(100, l + delta))
+  return rgb_to_hex(hsl_to_rgb(h, s, l))
+end
+
+local function derive_yaml_baseline()
+  -- REWRITTEN 2026-07-27. One assignment pass, one rule set:
+  --   * colours come ONLY from the theme's own palette — no invented hues,
+  --     no hue rotation (deleted), no shade-dimmed variants of other classes;
+  --   * keys are claimed FIRST: no value class may take a key colour;
+  --   * families assign in traffic order, each maximizing on-screen (post-
+  --     knob) clearance from everything already placed;
+  --   * classes in one family share their colour EXACTLY (url=path=image).
+  -- Hand tables in theme_baseline.lua stamp over all of this and always win.
+  local out = {}
+  local function put(group, hex)
+    if hex then
+      out[group] = hex
+    end
+  end
+
+  local key = first_fg({ "@property", "@variable.member", "Identifier" })
+  local str = first_fg({ "@string", "String" })
+  local num = first_fg({ "@number", "Number" })
+  local bool = first_fg({ "@boolean", "Boolean", "@constant.builtin" })
+  local typ = first_fg({ "@type", "Type" })
+  local const = first_fg({ "@constant", "Constant" })
+  local func = first_fg({ "@function", "Function" })
+  local pre = first_fg({ "@constant.builtin", "PreProc", "Special" })
+  local kw = first_fg({ "@keyword", "Keyword", "Statement" })
+  local special = first_fg({ "@punctuation.special", "@label", "Label", "Special" })
+  local bracket = first_fg({ "@punctuation.bracket", "Delimiter", "Special" })
+  local comment = first_fg({ "@comment", "Comment" })
+  local url = first_fg({ "@string.special.url", "Underlined", "@constant" })
+
+  -- Key ramp: one hue for all three rungs here. The brightness ramp itself is
+  -- NOT applied at this point — apply_yaml_key_ramp does it at the end of the
+  -- pipeline, off the level2 rung, so derived and hand-tuned themes get the
+  -- identical treatment. Putting the same base in all three keeps that function's
+  -- input predictable and stops the ramp being applied twice.
+  if key then
+    put("@property.yaml.toplevel", scale_sat(key, 115))
+    put("@property.yaml.level2", key)
+    put("@property.yaml", key)
+  end
+
+  put("@punctuation.bracket.yaml", bracket)
+  put("@punctuation.special.doc", bracket)
+  -- Colons/commas recede below the dimmest key rung.
+  if comment then
+    local delim = shift_l(comment, 12)
+    if key then
+      -- 110 = the dimmest key rung (see apply_yaml_key_ramp); delimiters sit
+      -- below it so colons never compete with the deepest keys.
+      local floor_l = lightness_of(scale_l(key, 110)) - 6
+      if lightness_of(delim) > floor_l then
+        delim = shift_l(delim, floor_l - lightness_of(delim))
+      end
+    end
+    put("@punctuation.delimiter.yaml", delim)
+  end
+
+  -- Measure in POST-KNOB space: distances are judged on what the pixels will
+  -- actually be after sepia/fg knobs, but the STORED colour stays raw.
+  local function knobbed(hex)
+    local o = sepia_hex(hex, (sepia_amount or 0) / 100)
+    if fg_lightness ~= 50 or fg_saturation ~= 50 then
+      o = adjust_fg_hsl(o, fg_lightness, fg_saturation)
+    end
+    return o or hex
+  end
+  local function rgb_dist(a, b)
+    local r1, g1, b1 = hex_to_rgb(a)
+    local r2, g2, b2 = hex_to_rgb(b)
+    return math.sqrt((r1 - r2) ^ 2 + (g1 - g2) ^ 2 + (b1 - b2) ^ 2)
+  end
+
+  -- The theme's own accent pool (greys excluded — a value in plain-text grey
+  -- reads as unstyled, which is what this file exists to prevent).
+  local pool = {}
+  do
+    local seen = {}
+    local cands = { str, typ, num, bool, const, func, pre, kw, special, bracket, url }
+    for _, name in ipairs({
+      "@string.special", "@character", "@attribute", "@tag", "@module",
+      "@operator", "@variable.builtin", "@type.builtin", "@keyword.function",
+      "@function.builtin", "@label",
+    }) do
+      cands[#cands + 1] = first_fg({ name })
+    end
+    for _, cand in ipairs(cands) do
+      if cand and not seen[cand] then
+        seen[cand] = true
+        local _, s2 = rgb_to_hsl(hex_to_rgb(cand))
+        if s2 >= 15 then
+          pool[#pool + 1] = cand
+        end
+      end
+    end
+  end
+
+  local claimed = {}
+  local function claim(hex)
+    if hex then
+      claimed[#claimed + 1] = knobbed(hex)
+    end
+  end
+  local function clearance(hex)
+    local worst = math.huge
+    local k = knobbed(hex)
+    for _, c in ipairs(claimed) do
+      worst = math.min(worst, rgb_dist(k, c))
+    end
+    return worst
+  end
+  -- Keys and comments are claimed before ANY value assigns: the invariant
+  -- "values never wear key colours" holds by construction.
+  claim(out["@property.yaml.toplevel"])
+  claim(out["@property.yaml.level2"])
+  claim(out["@property.yaml"])
+  claim(comment)
+
+  local SEP = 45
+  -- Take the first preferred source that clears SEP on screen; otherwise the
+  -- pool colour with the best clearance. Never a colour outside the theme.
+  local function assign(preferred)
+    for _, cand in ipairs(preferred) do
+      if cand and clearance(cand) >= SEP then
+        claim(cand)
+        return cand
+      end
+    end
+    -- Fallback: best-clearance pool colour, but colours near the KEY RAMP are
+    -- hard-filtered first — at the margin, sitting near another value is
+    -- tolerable; sitting near a key never is (the #1 invariant).
+    local function near_ramp(hex)
+      local k = knobbed(hex)
+      for _, r in ipairs({ out["@property.yaml.toplevel"], out["@property.yaml.level2"], out["@property.yaml"] }) do
+        if r and rgb_dist(k, knobbed(r)) < 40 then
+          return true
+        end
+      end
+      return false
+    end
+    local best, best_d = nil, -1
+    for _, cand in ipairs(pool) do
+      if not near_ramp(cand) then
+        local d = clearance(cand)
+        if d > best_d then
+          best, best_d = cand, d
+        end
+      end
+    end
+    if not best then
+      for _, cand in ipairs(pool) do
+        local d = clearance(cand)
+        if d > best_d then
+          best, best_d = cand, d
+        end
+      end
+    end
+    best = best or preferred[1]
+    claim(best)
+    return best
+  end
+
+  -- Families, highest traffic first — earlier families get first pick of the
+  -- theme's semantically-matching slot.
+  local strings = assign({ str })
+  local dashes = assign({ special, kw })
+  local words = assign({ kw, const })
+  local enums = assign({ typ, func })
+  local locators = assign({ url, pre, const })
+  local hot = assign({ num, const, kw })
+  local versions = assign({ func, typ })
+  local bools = assign({ bool, num })
+
+  put("@string.yaml", strings)
+  put("@string.yaml.value", strings)
+  put("@string.yaml.quoted", strings) -- exact share: same kind, same colour
+  put("@punctuation.special.yaml", dashes)
+  put("@punctuation.special.merge", dashes)
+  put("@label.yaml", dashes)
+  put("@label", dashes)
+  put("@string.yaml.word", words)
+  put("@type.yaml.enum", enums)
+  put("@string.yaml.url", locators)
+  put("@string.yaml.path", locators) -- exact share: one locator family
+  put("@string.yaml.image", locators)
+  put("@number.yaml.kdragon", hot)
+  put("@number.yaml.quantity", hot)
+  put("@constant.yaml.env", hot)
+  put("@string.yaml.condition", hot)
+  put("@string.yaml.version", versions)
+  put("@boolean.yaml.kdragon", bools)
+  put("@constant.builtin.yaml.kdragon", comment) -- null/~ is absence: muted
+
+  -- ${{ }} tokens ride the same families (painted by yaml-expr.lua).
+  put("YamlExprBrace", bracket)
+  put("YamlExprContext", enums)
+  put("YamlExprProp", words) -- data/selector, NEVER the key colour
+  put("YamlExprDot", out["@punctuation.delimiter.yaml"])
+  put("YamlExprFunc", versions)
+  put("YamlExprOp", dashes)
+  put("YamlExprStr", strings)
+  put("YamlExprNum", hot)
+  -- Sigil: `$` marks the exit from string-land; it takes whatever slot has
+  -- the most on-screen clearance from everything placed so far.
+  put("YamlExprSigil", assign({ kw, const }))
+
+  -- Bash injected into run: scalars — values, never key-coloured.
+  put("@function.call.bash", strings)
+  put("@variable.parameter.bash", enums)
+
+  return out
+end
+
 local function apply_theme_baseline_colors()
-  local baseline = load_theme_baseline_colors()[vim.g.colors_name or ""]
-  if not baseline then
+  -- Derived set first: gives every colorscheme the full yaml range in its own
+  -- colours. Guarded so a failure here can never stop the hand-tuned baseline
+  -- below from applying.
+  -- Stamp a fg WITHOUT destroying the rest of the group. nvim_set_hl replaces
+  -- a highlight wholesale, so the old `{ fg = fg }` form silently dropped every
+  -- other attribute the colorscheme had set -- which is exactly how italic
+  -- comments used to vanish: a colorscheme set italic on Comment, then this
+  -- function overwrote the group with a bare fg. These
+  -- tables only ever carry COLOUR; they should never be able to clear bold,
+  -- italic, underline or undercurl.
+  local function stamp_fg(group, fg)
+    local ok_hl, hl = pcall(vim.api.nvim_get_hl, 0, { name = group, link = false })
+    local adj = (ok_hl and type(hl) == "table") and vim.deepcopy(hl) or {}
+    adj.fg = fg
+    pcall(vim.api.nvim_set_hl, 0, group, adj)
+  end
+
+  local ok, derived = pcall(derive_yaml_baseline)
+  if ok and type(derived) == "table" then
+    for group, fg in pairs(derived) do
+      stamp_fg(group, fg)
+    end
+  end
+
+  -- Hand-tuned entries stamped on top, so they always win where they exist.
+  local baseline_key = vim.g.colors_name or ""
+  if baseline_key == "kanagawa" then
+    -- kanagawa sets colors_name = "kanagawa" for every variant; resolve so
+    -- each variant can carry its own hand table (2026-07-27).
+    local okk, kn = pcall(require, "kanagawa")
+    -- _CURRENT_THEME is what :colorscheme actually loaded; config.theme is
+    -- only what setup() was called with and lags behind variant switches.
+    local variant = okk and (kn._CURRENT_THEME or (kn.config and kn.config.theme)) or "wave"
+    baseline_key = "kanagawa-" .. variant
+  end
+  local baseline = load_theme_baseline_colors()[baseline_key]
+  if baseline then
+    for group, fg in pairs(baseline) do
+      stamp_fg(group, fg)
+    end
+  end
+
+end
+
+-- The yaml key brightness ramp: every key is LIFTED, then steps down 5% per
+-- level of nesting.
+--
+--   depth 1 (toplevel)  120%   + bold
+--   depth 2 (level2)    115%
+--   depth 3+            110%
+--
+-- All three are above 100%, so nesting deeper never makes a key darker than the
+-- theme's own key colour -- it only makes it slightly less bright than the rung
+-- above. The old ramp went the other way (down to -12 lightness at depth 3+) and
+-- there is no headroom below a muted key hue on a dark background: depth 3 met
+-- Comment and disappeared. Depth 3 is where the actual content of a manifest
+-- lives, so it is the last thing that should be fading out.
+--
+-- The 5% step is a hint, not the hierarchy signal -- bold on the toplevel rung
+-- is what actually separates the manifest skeleton from everything under it.
+--
+-- Base is the level2 fg, whatever the active theme ended up with, so hand-tuned
+-- themes (which hardcode three separate hexes in theme_baseline.lua) get the
+-- same ramp as derived ones. Their own toplevel/depth-3 hexes are deliberately
+-- overridden -- the point is that every theme ramps identically.
+--
+-- Same placement rule as fix_sigil_collision above: this runs at the END of
+-- adjust_all_highlights, NOT in apply_theme_baseline_colors. Anything stamped
+-- before the adjust pass is restored from the pristine base cache
+-- (get_highlights) and silently loses both the ramp and the bold. It does not
+-- compound across reloads for the same reason: the cache holds the theme's
+-- original key colour, so each run ramps from that, never from its own output.
+-- Yaml KEY knobs (:YamlKeyBrightness / :YamlKeyColor / :YamlKeyBold). They ride
+-- the ramp below, so they inherit its placement guarantees for free: applied at
+-- the end of adjust_all_highlights, recomputed from the pristine base each run,
+-- never compounding. Session-only; reset by apply_knob_defaults on theme switch.
+local yaml_key_brightness = 50 -- 0-100 HSL L of the key rungs, applied AFTER the ramp. 50 = ramp output as-is.
+local yaml_key_color = nil -- #rrggbb override for the ramp's base colour, or nil = theme-native level2 fg
+local yaml_key_bold = nil -- nil = ramp default (toplevel bold only), true = all rungs bold, false = none bold
+
+local function apply_yaml_key_ramp()
+  local ok, hl = pcall(vim.api.nvim_get_hl, 0, { name = "@property.yaml.level2", link = false })
+  -- A colour override replaces the ramp BASE (so the 120/115/110 rungs still
+  -- separate depths); without one the theme's own level2 fg is the base.
+  local base = yaml_key_color or (ok and type(hl) == "table" and normalize_hex(hl.fg) or nil)
+  if not base then
     return
   end
-  for group, fg in pairs(baseline) do
-    pcall(vim.api.nvim_set_hl, 0, group, { fg = fg })
+
+  local rungs = {
+    { group = "@property.yaml.toplevel", pct = 120, bold = true },
+    { group = "@property.yaml.level2", pct = 115 },
+    { group = "@property.yaml", pct = 110 },
+  }
+  for _, rung in ipairs(rungs) do
+    local ok_g, cur = pcall(vim.api.nvim_get_hl, 0, { name = rung.group, link = false })
+    local adj = (ok_g and type(cur) == "table") and vim.deepcopy(cur) or {}
+    adj.fg = scale_l(base, rung.pct)
+    if yaml_key_brightness ~= 50 then
+      -- Saturation pinned at 50 (neutral): only lightness moves, hue stays put.
+      adj.fg = adjust_fg_hsl(adj.fg, yaml_key_brightness, 50)
+    end
+    if yaml_key_bold ~= nil then
+      -- Explicit false, not "leave alone": the pristine cache re-stamp already
+      -- ran, so writing false here is what actually clears a forced bold.
+      adj.bold = yaml_key_bold
+    else
+      adj.bold = rung.bold == true
+    end
+    -- yaml keys are ALSO plain @string scalars in the treesitter grammar, so a
+    -- key's render stack is @string.yaml UNDER @property.yaml.*. The key group
+    -- wins on colour but COMBINES attrs from below — which is how :YamlValueBold
+    -- (bold on @string.yaml) bled bold into every key and looked like it did
+    -- nothing. nocombine makes the key rungs replace attrs instead of merging,
+    -- so key weight is decided here and only here.
+    adj.nocombine = true
+    pcall(vim.api.nvim_set_hl, 0, rung.group, adj)
+  end
+end
+
+-- ---------------------------------------------------------------------------
+-- yaml VALUE bold (:YamlValueBold).
+-- ---------------------------------------------------------------------------
+-- Bolds every yaml value class and nothing else: keys (@property.yaml*),
+-- structural punctuation, and comments keep whatever weight the theme gave
+-- them. The toplevel key rung is bold by default (see apply_yaml_key_ramp), so
+-- with this on the two are told apart by COLOUR, not weight.
+--
+-- Same placement rule as the ramp: this runs at the end of
+-- adjust_all_highlights, after every group has been re-stamped from the
+-- pristine cache -- anything set earlier is silently overwritten.
+--
+-- Toggling off writes bold = false rather than leaving the group alone: the
+-- base cache is only re-read on a theme switch, so an untouched group would
+-- keep the bold it was just given until the next :colorscheme.
+local yaml_value_groups = {
+  "@string.yaml",
+  "@string.yaml.value",
+  "@string.yaml.quoted",
+  "@string.yaml.word",
+  "@string.yaml.url",
+  "@string.yaml.path",
+  "@string.yaml.image",
+  "@string.yaml.version",
+  "@string.yaml.condition",
+  "@type.yaml.enum",
+  "@number.yaml.kdragon",
+  "@number.yaml.quantity",
+  "@constant.yaml.env",
+  "@boolean.yaml.kdragon",
+  "@constant.builtin.yaml.kdragon",
+}
+
+local yaml_value_bold = false
+
+-- 0-100 HSL L of every yaml VALUE class. 50 = whatever the pipeline delivered,
+-- <50 dimmer, >50 brighter. The field-side equivalent is yaml_key_brightness,
+-- which rides apply_yaml_key_ramp -- the two are deliberately separate knobs so
+-- keys and values can be pulled apart without touching each other.
+--
+-- NOT compounding, for the same reason the key ramp is not: this pass runs at
+-- the very end of adjust_all_highlights, by which point every group here has
+-- already been re-stamped from the pristine base cache. So `cur.fg` read below
+-- is the theme's delivered colour, never this function's own previous output.
+-- Moving this call earlier in the pipeline breaks that and the value fg walks
+-- darker on every reload -- same trap documented on apply_evergarden_comment_style.
+local yaml_value_brightness = 50
+
+local function apply_yaml_value_style()
+  for _, group in ipairs(yaml_value_groups) do
+    local ok, cur = pcall(vim.api.nvim_get_hl, 0, { name = group, link = false })
+    local adj = (ok and type(cur) == "table") and vim.deepcopy(cur) or {}
+    adj.bold = yaml_value_bold
+    if yaml_value_brightness ~= 50 then
+      local hex = normalize_hex(adj.fg)
+      if hex then
+        -- Saturation pinned at 50 (neutral): only lightness moves, hue stays
+        -- put. Matches the key ramp's call exactly.
+        adj.fg = adjust_fg_hsl(hex, yaml_value_brightness, 50)
+      end
+    end
+    pcall(vim.api.nvim_set_hl, 0, group, adj)
+  end
+end
+
+-- ---------------------------------------------------------------------------
+-- Sigil collision guard.
+-- ---------------------------------------------------------------------------
+-- `$` only works as a sigil if it is visibly NOT the colours it sits against --
+-- the braces beside it and the value colours around it. Deriving it from the
+-- scheme's keyword/constant hue usually lands somewhere clear, but not always:
+-- in gruvbox and catppuccin the keyword hue sits right next to the image-ref
+-- colour, and the `$` read as just another value.
+--
+-- This MUST run at the very end of adjust_all_highlights, not in
+-- derive_yaml_baseline and not in apply_theme_baseline_colors. Both of those
+-- run before adjust_all_highlights, which re-stamps every group from the
+-- captured base -- so a correction made earlier is simply overwritten, and the
+-- comparison is against pre-transform hexes that are not what gets drawn.
+-- Fixing this in the wrong place is why gruvbox and catppuccin stayed broken
+-- through two attempts.
+--
+-- A theme that hand-tunes YamlExprSigil has made a deliberate choice and is
+-- skipped.
+local function fix_sigil_collision()
+  local baseline_key = vim.g.colors_name or ""
+  if baseline_key == "kanagawa" then
+    -- kanagawa sets colors_name = "kanagawa" for every variant; resolve so
+    -- each variant can carry its own hand table (2026-07-27).
+    local okk, kn = pcall(require, "kanagawa")
+    -- _CURRENT_THEME is what :colorscheme actually loaded; config.theme is
+    -- only what setup() was called with and lags behind variant switches.
+    local variant = okk and (kn._CURRENT_THEME or (kn.config and kn.config.theme)) or "wave"
+    baseline_key = "kanagawa-" .. variant
+  end
+  local baseline = load_theme_baseline_colors()[baseline_key]
+  if baseline and baseline["YamlExprSigil"] then
+    return
+  end
+  local function fg_of(group)
+    local ok, hl = pcall(vim.api.nvim_get_hl, 0, { name = group, link = false })
+    return (ok and hl and hl.fg) and color_to_hex(hl.fg) or nil
+  end
+  local sigil = fg_of("YamlExprSigil")
+  if not sigil then
+    return
+  end
+  local avoid = {
+    fg_of("@string.yaml.image"),
+    fg_of("@string.yaml"),
+    fg_of("YamlExprBrace"),
+    fg_of("YamlExprContext"),
+  }
+  local function min_dist(hex)
+    local r1, g1, b1 = hex_to_rgb(hex)
+    local worst = math.huge
+    for _, o in ipairs(avoid) do
+      if o then
+        local r2, g2, b2 = hex_to_rgb(o)
+        worst = math.min(worst, math.sqrt((r1 - r2) ^ 2 + (g1 - g2) ^ 2 + (b1 - b2) ^ 2))
+      end
+    end
+    return worst
+  end
+  if min_dist(sigil) >= 60 then
+    return
+  end
+  -- Keep the scheme's lightness so it still belongs; floor the saturation
+  -- because a single character has to carry, then take the hue furthest from
+  -- everything it sits beside.
+  local r, g, b = hex_to_rgb(sigil)
+  local h, s, l = rgb_to_hsl(r, g, b)
+  s = math.max(s, 70)
+  l = math.max(l, 45)
+  local best, best_d = nil, -1
+  for deg = 0, 345, 15 do
+    local cand = rgb_to_hex(hsl_to_rgb((h + deg) % 360, s, l))
+    local d = min_dist(cand)
+    if d > best_d then
+      best, best_d = cand, d
+    end
+  end
+  if best then
+    pcall(vim.api.nvim_set_hl, 0, "YamlExprSigil", { fg = best })
   end
 end
 
@@ -895,8 +1489,16 @@ local function apply_active_indent_scope_highlights()
     scope_color = vim.g.base16_gui0C
   end
   -- Storm wants the maxed cyan rather than its palette's softer base0C.
-  if (vim.g.colors_name or "") == "base16-tokyo-night-terminal-storm" then
+  if is_storm_family() then
     scope_color = "#00ffff"
+  end
+  -- Manual override from :IndentColor (indent-ladder.lua), which wins over every
+  -- rule above. It has to be honoured HERE rather than set from outside: this
+  -- function re-runs at 0/50/200/330/655ms after any colorscheme, so an external
+  -- nvim_set_hl would be stomped a few frames later. :IndentColor! clears the
+  -- variable and the theme's own choice comes straight back.
+  if type(vim.g.indent_scope_color) == "string" and vim.g.indent_scope_color ~= "" then
+    scope_color = vim.g.indent_scope_color
   end
   for _, group in ipairs(active_indent_scope_groups) do
     local ok, hl = pcall(vim.api.nvim_get_hl, 0, { name = group, link = false })
@@ -929,7 +1531,7 @@ local dim_indent_guide_groups = {
 }
 
 local function apply_dim_indent_guide_highlights()
-  if (vim.g.colors_name or "") ~= "base16-tokyo-night-terminal-storm" then
+  if not is_storm_family() then
     return
   end
   for _, group in ipairs(dim_indent_guide_groups) do
@@ -963,13 +1565,42 @@ end
 -- and comments are the only groups meant to be immune to the knobs; yaml fields and
 -- values are meant to stay testable. Do NOT "helpfully" add this to the deferred
 -- pass list -- that is exactly what made the knobs look dead before.
-local STORM_YAML_STARTUP_GROUPS = { "@property.yaml", "@string.yaml", "@string.yaml.value" }
+local STORM_YAML_STARTUP_GROUPS = {
+  "@property.yaml",
+  "@string.yaml",
+  "@string.yaml.value",
+  -- Value-shape groups: same deal as the two above -- they carry exact hexes in
+  -- theme_baseline.lua, so they need the same re-stamp or fg_lightness=60 moves
+  -- them off the typed value before it is ever seen.
+  "@property.yaml.toplevel",
+  "@type.yaml.enum",
+  "@constant.yaml.env",
+  "@string.yaml.image",
+  "@string.yaml.version",
+  "@string.yaml.url",
+  "@string.yaml.condition",
+  "@string.yaml.path",
+  -- Plain ()[]{} only. The {{ }} overlay is a separate mechanism (STORM_BRACKET).
+  "@punctuation.bracket",
+  -- Not a yaml group, but it is what colours shell flags in `run:` blocks.
+  "@variable.parameter.bash",
+}
 
 local function apply_storm_yaml_startup_colors()
-  if (vim.g.colors_name or "") ~= "base16-tokyo-night-terminal-storm" then
+  if not is_storm_family() then
     return
   end
-  local baseline = load_theme_baseline_colors()["base16-tokyo-night-terminal-storm"] or {}
+  local baseline_key = vim.g.colors_name or ""
+  if baseline_key == "kanagawa" then
+    -- kanagawa sets colors_name = "kanagawa" for every variant; resolve so
+    -- each variant can carry its own hand table (2026-07-27).
+    local okk, kn = pcall(require, "kanagawa")
+    -- _CURRENT_THEME is what :colorscheme actually loaded; config.theme is
+    -- only what setup() was called with and lags behind variant switches.
+    local variant = okk and (kn._CURRENT_THEME or (kn.config and kn.config.theme)) or "wave"
+    baseline_key = "kanagawa-" .. variant
+  end
+  local baseline = load_theme_baseline_colors()[baseline_key] or {}
   for _, group in ipairs(STORM_YAML_STARTUP_GROUPS) do
     -- @string.yaml.value has no baseline entry of its own; it follows @string.yaml.
     local fg = baseline[group] or baseline["@string.yaml"]
@@ -1021,7 +1652,10 @@ local function apply_retrobox_string_lightness()
   end
   local fg = adjust_fg_hsl(source, retrobox_string_lightness, 50)
   for group in pairs(read_highlights()) do
-    if matches(group, retrobox_string_lightness_group_patterns) then
+    if
+      matches(group, retrobox_string_lightness_group_patterns)
+      and not matches(group, retrobox_string_lightness_exempt_patterns)
+    then
       local ok, hl = pcall(vim.api.nvim_get_hl, 0, { name = group, link = false })
       local adj = {}
       if ok and type(hl) == "table" then
@@ -1166,12 +1800,24 @@ local function adjust_all_highlights()
             -- themes, leaving the raw integer from nvim_get_hl.
             adj[key] = adjust_fg_hsl(normalize_hex(adj[key]) or hex, fg_lightness, fg_saturation)
           end
+          -- Comments are immune to every global fg knob above; comment_brightness
+          -- is their one dedicated dial. Saturation is pinned at 50 (neutral) so
+          -- only lightness moves — hue and chroma stay colorscheme-native.
+          if key == "fg" and comment_fg and comment_brightness ~= 50 then
+            adj[key] = adjust_fg_hsl(normalize_hex(adj[key]) or hex, comment_brightness, 50)
+          end
           changed = true
         end
       end
 
       -- Strip italics globally, except Gruvbox Material Dark variants where italic syntax is part of the theme.
-      local preserve_italics = (vim.g.colors_name or ""):match("^base16%-gruvbox%-material%-dark")
+      -- evergarden opts in too: its comments are deliberately italic (stock, and
+      -- re-asserted by apply_evergarden_comment_style). Without this line that
+      -- italic is set correctly and then cleared right here, a few hundred
+      -- milliseconds later -- which looks exactly like "the italic never
+      -- applied". This is the ONLY place italics are turned off.
+      local theme_name = vim.g.colors_name or ""
+      local preserve_italics = theme_name:match("^base16%-gruvbox%-material%-dark") or theme_name == "evergarden"
       if adj.italic and not (native_text_theme or preserve_italics) then
         adj.italic = false
         changed = true
@@ -1260,6 +1906,13 @@ local function adjust_all_highlights()
   -- Prevent Neovim's own float-level transparency from doubling up
   vim.o.winblend = 0
   vim.o.pumblend = 0
+
+  -- Last thing in the pipeline, deliberately: it compares FINAL drawn colours,
+  -- so it has to run after the loop above has re-stamped every group. See the
+  -- function's header.
+  fix_sigil_collision()
+  apply_yaml_key_ramp()
+  apply_yaml_value_style()
 end
 
 -- ── Habamax-specific overrides ───────────────────────────────────────────────
@@ -1429,6 +2082,41 @@ local function apply_soft_white_overrides()
   end
 end
 
+-- ── Evergarden: dimmed + italic comments (post-pipeline) ─────────────────────
+-- comment_protected_groups keeps comments out of the global fg pipeline, so the
+-- only way to move them is a per-theme pass like this one.
+--
+-- The target is a hardcoded CONSTANT, not "read the current fg and halve it":
+-- this runs on every pipeline pass, and re-deriving from live state would halve
+-- an already-halved value each time until comments went black. #839e9a is
+-- evergarden's stock Comment fg; at 50% brightness that is #414f4d.
+local EVERGARDEN_COMMENT_FG = "#414f4d"
+
+local EVERGARDEN_COMMENT_GROUPS = {
+  "Comment",
+  "SpecialComment",
+  "@comment",
+  "@lsp.type.comment",
+}
+
+local function apply_evergarden_comment_style()
+  if (vim.g.colors_name or "") ~= "evergarden" then
+    return
+  end
+  for _, group in ipairs(EVERGARDEN_COMMENT_GROUPS) do
+    local ok, hl = pcall(vim.api.nvim_get_hl, 0, { name = group, link = false })
+    if ok then
+      local adj = {}
+      for k, v in pairs(hl) do
+        adj[k] = v
+      end
+      adj.fg = EVERGARDEN_COMMENT_FG
+      adj.italic = true
+      pcall(vim.api.nvim_set_hl, 0, group, adj)
+    end
+  end
+end
+
 -- ── Kanagawa Dragon: fixed foreground overrides (post-pipeline) ──────────────
 -- A few Dragon groups need an exact fg that must survive the global fg pipeline
 -- (sepia / HSL lightness + saturation), which would otherwise shift these colors.
@@ -1578,7 +2266,7 @@ local function apply_theme_adjustments(refresh_base)
     -- HERE, after adjust_all_highlights has already run the fg pipeline on
     -- @string.yaml -- copying earlier caught the darker pre-adjust baseline.
     -- Plain fg copy, no link.
-    if (vim.g.colors_name or "") == "base16-tokyo-night-terminal-storm" then
+    if is_storm_family() then
       local ok, hl = pcall(vim.api.nvim_get_hl, 0, { name = "@string.yaml", link = false })
       if ok and hl.fg then
         pcall(vim.api.nvim_set_hl, 0, "GlobalUrlReset", { fg = string.format("#%06x", hl.fg) })
@@ -1599,6 +2287,8 @@ local function apply_theme_adjustments(refresh_base)
   vim.defer_fn(apply_soft_white_overrides, 300)
   vim.defer_fn(apply_kanagawa_dragon_fixed_fg, 300)
   vim.defer_fn(apply_kanagawa_dragon_fixed_fg, 600)
+  vim.defer_fn(apply_evergarden_comment_style, 300)
+  vim.defer_fn(apply_evergarden_comment_style, 600)
   vim.defer_fn(apply_chrome_readability_fix, 350)
   vim.defer_fn(apply_chrome_readability_fix, 600)
   vim.defer_fn(apply_gruvbox_accent_adjust, 300)
@@ -1703,9 +2393,14 @@ return {
 
   {
     "LazyVim/LazyVim",
-    opts = {
-      colorscheme = "base16-tokyo-night-terminal-storm",
-    },
+    opts = function(_, opts)
+      -- Boot on whatever <leader>uC last left you on. Falls back to storm when
+      -- nothing has been picked yet, or when the saved scheme is gone.
+      local ok, state = pcall(require, "config.colorscheme_state")
+      opts.colorscheme = ok and state.startup("base16-tokyo-night-terminal-storm")
+        or "base16-tokyo-night-terminal-storm"
+      return opts
+    end,
     init = function()
       -- :ThemeAdjust to manually re-run the pipeline
       vim.api.nvim_create_user_command("ThemeAdjust", function()
@@ -1793,6 +2488,299 @@ return {
           apply_theme_adjustments()
         end
       end, { nargs = 1 })
+
+      -- :YamlValueBrightness <0-100> — 50 = pipeline output as-is, <50 dimmer,
+      -- >50 brighter. Hue and saturation are pinned; only lightness moves. This
+      -- is the VALUE half of the pair -- :YamlKeyBrightness is the field half,
+      -- and neither touches the other's groups.
+      vim.api.nvim_create_user_command("YamlValueBrightness", function(opts)
+        if set_fg_knob("YamlValueBrightness", function(v)
+          yaml_value_brightness = v
+        end, opts.args) then
+          apply_theme_adjustments()
+        end
+      end, { nargs = 1 })
+
+      -- :YamlValueBold [on|off|toggle] — bold every yaml VALUE, never the keys.
+      -- No argument reports the current state. Survives theme switches because
+      -- apply_yaml_value_style runs at the end of the pipeline; session-only,
+      -- nothing is written to disk.
+      vim.api.nvim_create_user_command("YamlValueBold", function(opts)
+        local arg = vim.trim(opts.args):lower()
+        if arg == "" then
+          vim.notify("YamlValueBold: " .. (yaml_value_bold and "on" or "off"))
+          return
+        end
+        if arg == "on" then
+          yaml_value_bold = true
+        elseif arg == "off" then
+          yaml_value_bold = false
+        elseif arg == "toggle" then
+          yaml_value_bold = not yaml_value_bold
+        else
+          vim.notify("YamlValueBold: expected on, off or toggle", vim.log.levels.ERROR)
+          return
+        end
+        apply_theme_adjustments()
+        vim.notify("YamlValueBold: " .. (yaml_value_bold and "on" or "off"))
+      end, {
+        nargs = "?",
+        complete = function()
+          return { "on", "off", "toggle" }
+        end,
+        desc = "Bold all yaml values (keys untouched)",
+      })
+
+      -- :SepiaLock <-100..100> — make a sepia value survive theme switches.
+      -- :SepiaLock off        — release it (the next switch resets to defaults)
+      -- :SepiaLock            — report what is locked
+      --
+      -- Needed because the ColorScheme handler calls apply_knob_defaults() on
+      -- every switch, which resets sepia_amount to the theme's default (0 for
+      -- most). This installs an autocmd that re-applies the value afterwards.
+      --
+      -- 900ms is not arbitrary: the pipeline's deferred passes land at 700ms and
+      -- apply_storm_yaml_startup_colors at 800ms. Re-applying any earlier just
+      -- gets overwritten by those, which reads as "the lock didn't work".
+      --
+      -- Session-only by design -- it is a knob you are auditioning, not config.
+      -- Nothing here writes to disk; restarting nvim clears it.
+      local sepia_lock = nil
+      local sepia_lock_group = vim.api.nvim_create_augroup("ThemeSepiaLock", { clear = true })
+      vim.api.nvim_create_user_command("SepiaLock", function(opts)
+        local arg = vim.trim(opts.args)
+
+        if arg == "" then
+          vim.notify(sepia_lock and ("SepiaLock: " .. sepia_lock) or "SepiaLock: off")
+          return
+        end
+
+        vim.api.nvim_clear_autocmds({ group = sepia_lock_group })
+
+        if arg == "off" then
+          sepia_lock = nil
+          vim.notify("SepiaLock: off (knobs reset with the theme again)")
+          return
+        end
+
+        local v = tonumber(arg)
+        if not v or v < -100 or v > 100 then
+          vim.notify("SepiaLock: expected -100..100 or 'off', e.g. :SepiaLock -99", vim.log.levels.ERROR)
+          return
+        end
+
+        sepia_lock = v
+        vim.api.nvim_create_autocmd("ColorScheme", {
+          group = sepia_lock_group,
+          pattern = "*",
+          nested = true,
+          callback = function()
+            vim.defer_fn(function()
+              if sepia_lock and not vim.g.theme_raw then
+                pcall(vim.cmd, "Sepia " .. sepia_lock)
+              end
+            end, 900)
+          end,
+        })
+
+        -- Apply to the CURRENT theme too, not just the next one switched to.
+        pcall(vim.cmd, "Sepia " .. v)
+        vim.notify("SepiaLock: " .. v .. " (persists across theme switches this session)")
+      end, { nargs = "?", desc = "Lock a sepia value across theme switches for this session" })
+
+      -- :CommentBrightness <0-100> — lightness of comment groups only. Comments
+      -- are immune to :FgAdjust/:Sepia by design; this is their dedicated dial.
+      -- 50 = colorscheme-native, <50 dimmer, >50 brighter. Hue/saturation locked.
+      vim.api.nvim_create_user_command("CommentBrightness", function(opts)
+        if set_fg_knob("CommentBrightness", function(v)
+          comment_brightness = v
+        end, opts.args) then
+          apply_theme_adjustments()
+        end
+      end, { nargs = 1 })
+
+      -- Shared lock machinery, same semantics as :SepiaLock: session-only, one
+      -- autocmd per lock re-applying the knob command 900ms after ColorScheme
+      -- (after the 700ms deferred passes and the 800ms yaml startup colors —
+      -- any earlier and the re-apply is overwritten, which reads as "the lock
+      -- didn't work"). `:XLock <args>` sets, `:XLock off` releases, bare `:XLock`
+      -- reports. Nothing is written to disk; restarting nvim clears every lock.
+      local function make_knob_lock(lock_name, knob_cmd, validate, opts_decl)
+        local locked = nil
+        local group = vim.api.nvim_create_augroup("Theme" .. lock_name, { clear = true })
+        vim.api.nvim_create_user_command(lock_name, function(opts)
+          local arg = vim.trim(opts.args)
+
+          if arg == "" then
+            vim.notify(locked and (lock_name .. ": " .. locked) or (lock_name .. ": off"))
+            return
+          end
+
+          vim.api.nvim_clear_autocmds({ group = group })
+
+          if arg == "off" then
+            locked = nil
+            vim.notify(lock_name .. ": off (knob resets with the theme again)")
+            return
+          end
+
+          local canonical = validate(arg)
+          if not canonical then
+            vim.notify(lock_name .. ": " .. opts_decl.usage, vim.log.levels.ERROR)
+            return
+          end
+
+          locked = canonical
+          vim.api.nvim_create_autocmd("ColorScheme", {
+            group = group,
+            pattern = "*",
+            nested = true,
+            callback = function()
+              vim.defer_fn(function()
+                if locked and not vim.g.theme_raw then
+                  pcall(vim.cmd, knob_cmd .. " " .. locked)
+                end
+              end, 900)
+            end,
+          })
+
+          -- Apply to the CURRENT theme too, not just the next one switched to.
+          pcall(vim.cmd, knob_cmd .. " " .. canonical)
+          vim.notify(lock_name .. ": " .. canonical .. " (persists across theme switches this session)")
+        end, { nargs = "?", desc = opts_decl.desc })
+      end
+
+      -- :CommentBrightnessLock <0-100> | off | (report)
+      make_knob_lock("CommentBrightnessLock", "CommentBrightness", function(arg)
+        local v = tonumber(arg)
+        return (v and v >= 0 and v <= 100) and tostring(v) or nil
+      end, {
+        usage = "expected 0..100 or 'off', e.g. :CommentBrightnessLock 65",
+        desc = "Lock comment brightness across theme switches for this session",
+      })
+
+      -- :FgAdjustLock <lightness> <saturation> | off | (report)
+      make_knob_lock("FgAdjustLock", "FgAdjust", function(arg)
+        local lv, sv = arg:match("^(%d+%.?%d*)%s+(%d+%.?%d*)$")
+        lv, sv = tonumber(lv), tonumber(sv)
+        if lv and sv and lv >= 0 and lv <= 100 and sv >= 0 and sv <= 100 then
+          return lv .. " " .. sv
+        end
+      end, {
+        usage = "expected two numbers 0..100 or 'off', e.g. :FgAdjustLock 65 70",
+        desc = "Lock FgAdjust lightness+saturation across theme switches for this session",
+      })
+
+      -- ── Yaml KEY knobs ──────────────────────────────────────────────────────
+      -- All three ride apply_yaml_key_ramp (end of the pipeline), so they only
+      -- touch @property.yaml.toplevel / .level2 / bare — values, punctuation and
+      -- comments are untouched. On storm the 800ms startup re-stamp overwrites
+      -- key fg, but every command here routes through apply_theme_adjustments
+      -- which runs the ramp again afterwards — same story as :FgAdjust.
+
+      -- :YamlKeyBrightness <0-100> — 50 = ramp output as-is, <50 dimmer, >50 brighter.
+      vim.api.nvim_create_user_command("YamlKeyBrightness", function(opts)
+        if set_fg_knob("YamlKeyBrightness", function(v)
+          yaml_key_brightness = v
+        end, opts.args) then
+          apply_theme_adjustments()
+        end
+      end, { nargs = 1 })
+
+      -- :YamlKeyColor <#rrggbb | r g b | native> — replace the ramp's BASE colour
+      -- (the depth rungs still apply on top). 'native' returns to the theme's own
+      -- key colour.
+      local function parse_color_fargs(fargs)
+        if #fargs == 1 then
+          return normalize_hex(fargs[1])
+        end
+        if #fargs == 3 then
+          local r, g, b = tonumber(fargs[1]), tonumber(fargs[2]), tonumber(fargs[3])
+          if r and g and b and r >= 0 and r <= 255 and g >= 0 and g <= 255 and b >= 0 and b <= 255 then
+            return rgb_to_hex(r, g, b)
+          end
+        end
+      end
+      vim.api.nvim_create_user_command("YamlKeyColor", function(opts)
+        local arg = vim.trim(opts.args):lower()
+        if arg == "native" or arg == "off" then
+          yaml_key_color = nil
+          apply_theme_adjustments()
+          return
+        end
+        local hex = parse_color_fargs(opts.fargs)
+        if not hex then
+          vim.notify("YamlKeyColor: expected #rrggbb, three RGB numbers, or 'native'", vim.log.levels.ERROR)
+          return
+        end
+        yaml_key_color = hex
+        apply_theme_adjustments()
+      end, { nargs = "+" })
+
+      -- :YamlKeyBold on|none|default — on = every rung bold, none = no rung bold,
+      -- default = the ramp's own weighting (toplevel bold only). Bare reports.
+      -- 'off' is an alias for 'none' here; the LOCK reserves 'off' for release.
+      vim.api.nvim_create_user_command("YamlKeyBold", function(opts)
+        local arg = vim.trim(opts.args):lower()
+        if arg == "" then
+          local state = yaml_key_bold == true and "on" or yaml_key_bold == false and "none" or "default"
+          vim.notify("YamlKeyBold: " .. state)
+          return
+        end
+        if arg == "on" then
+          yaml_key_bold = true
+        elseif arg == "none" or arg == "off" then
+          yaml_key_bold = false
+        elseif arg == "default" then
+          yaml_key_bold = nil
+        else
+          vim.notify("YamlKeyBold: expected on, none or default", vim.log.levels.ERROR)
+          return
+        end
+        apply_theme_adjustments()
+      end, {
+        nargs = "?",
+        complete = function()
+          return { "on", "none", "default" }
+        end,
+        desc = "Bold yaml keys: on = all rungs, none = no rungs, default = toplevel only",
+      })
+
+      -- :YamlKeyBrightnessLock <0-100> | off | (report)
+      make_knob_lock("YamlKeyBrightnessLock", "YamlKeyBrightness", function(arg)
+        local v = tonumber(arg)
+        return (v and v >= 0 and v <= 100) and tostring(v) or nil
+      end, {
+        usage = "expected 0..100 or 'off', e.g. :YamlKeyBrightnessLock 70",
+        desc = "Lock yaml FIELD brightness across theme switches for this session",
+      })
+
+      -- :YamlValueBrightnessLock <0-100> | off | (report)
+      make_knob_lock("YamlValueBrightnessLock", "YamlValueBrightness", function(arg)
+        local v = tonumber(arg)
+        return (v and v >= 0 and v <= 100) and tostring(v) or nil
+      end, {
+        usage = "expected 0..100 or 'off', e.g. :YamlValueBrightnessLock 70",
+        desc = "Lock yaml VALUE brightness across theme switches for this session",
+      })
+
+      -- :YamlKeyColorLock <#rrggbb | r g b> | off | (report)
+      make_knob_lock("YamlKeyColorLock", "YamlKeyColor", function(arg)
+        return parse_color_fargs(vim.split(arg, "%s+", { trimempty = true }))
+      end, {
+        usage = "expected #rrggbb / three RGB numbers, or 'off', e.g. :YamlKeyColorLock #00ffff",
+        desc = "Lock the yaml key colour across theme switches for this session",
+      })
+
+      -- :YamlKeyBoldLock on|none|default | off | (report) — 'off' releases the
+      -- lock; use 'none' to lock keys UNbold.
+      make_knob_lock("YamlKeyBoldLock", "YamlKeyBold", function(arg)
+        arg = arg:lower()
+        return (arg == "on" or arg == "none" or arg == "default") and arg or nil
+      end, {
+        usage = "expected on/none/default, or 'off' to release, e.g. :YamlKeyBoldLock on",
+        desc = "Lock yaml key bolding across theme switches for this session",
+      })
 
       -- :BgBase <#rrggbb | r g b> - owned editor/UI background base before other bg knobs.
       vim.api.nvim_create_user_command("BgBase", function(opts)
@@ -1928,6 +2916,9 @@ return {
         gruvbox_fg1_lightness = 100,
         kanagawa_dragon_bracket_lightness = 50,
         retrobox_string_lightness = 50,
+        comment_brightness = 50,
+        yaml_key_brightness = 50,
+        yaml_value_brightness = 50,
       }
 
       local function apply_knob_defaults(defaults)
@@ -1947,6 +2938,12 @@ return {
         gruvbox_fg1_lightness = defaults.gruvbox_fg1_lightness
         kanagawa_dragon_bracket_lightness = defaults.kanagawa_dragon_bracket_lightness
         retrobox_string_lightness = defaults.retrobox_string_lightness
+        comment_brightness = defaults.comment_brightness or 50
+        yaml_key_brightness = defaults.yaml_key_brightness or 50
+        yaml_value_brightness = defaults.yaml_value_brightness or 50
+        -- nil-valued knobs can't live in the defaults tables; reset explicitly.
+        yaml_key_color = nil
+        yaml_key_bold = nil
       end
 
       -- To preserve manual values across theme switches, remove the relevant entry below.
@@ -1958,7 +2955,20 @@ return {
           bg_contrast = 50,
           chrome_darken = 50,
           sepia_amount = 0,
-          fg_lightness = 60,
+          fg_lightness = 50,
+          fg_saturation = 50,
+          normalize_background = 0,
+        },
+        -- stormv2 is the copy in colors/stormv2.lua. Same knobs as its source,
+        -- so the two open looking identical; retune here, not above.
+        ["stormv2"] = {
+          bg_base = "#0f0f0f",
+          bg_transparency = 100,
+          bg_brightness = 50,
+          bg_contrast = 50,
+          chrome_darken = 50,
+          sepia_amount = 0,
+          fg_lightness = 50,
           fg_saturation = 50,
           normalize_background = 0,
         },
@@ -1969,9 +2979,9 @@ return {
           bg_brightness = 50,
           bg_contrast = 50,
           chrome_darken = 50,
-          sepia_amount = -38,
-          fg_saturation = 55,
-          fg_lightness = 75,
+          sepia_amount = 0,
+          fg_saturation = 70,
+          fg_lightness = 50,
           normalize_background = 0,
           gruvbox_red_saturation = 100,
           gruvbox_orange_saturation = 100,
@@ -1980,14 +2990,25 @@ return {
           gruvbox_fg1_lightness = 100,
           kanagawa_dragon_bracket_lightness = 46,
         },
+        ["evergarden"] = {
+          bg_base = "#0f0f0f",
+          bg_transparency = 0,
+          bg_brightness = 50,
+          bg_contrast = 50,
+          chrome_darken = 50,
+          sepia_amount = 0,
+          fg_lightness = 50,
+          fg_saturation = 100,
+          normalize_background = 0,
+        },
         ["gruvbox"] = {
           bg_base = "#0f0f0f",
           bg_transparency = 0,
           bg_brightness = 50,
           bg_contrast = 50,
-          fg_lightness = 70,
+          fg_lightness = 50,
           fg_saturation = 50,
-          sepia_amount = 15,
+          sepia_amount = 0,
           gruvbox_red_saturation = 100,
           gruvbox_orange_saturation = 100,
           gruvbox_yellow_saturation = 100,
@@ -2003,9 +3024,9 @@ return {
           bg_brightness = 50,
           bg_contrast = 50,
           chrome_darken = 50,
-          fg_lightness = 70,
+          fg_lightness = 50,
           fg_saturation = 50,
-          sepia_amount = 5,
+          sepia_amount = 0,
           retrobox_string_lightness = 59,
         },
         ["catppuccin-mocha"] = {
@@ -2014,17 +3035,57 @@ return {
           bg_brightness = 50,
           bg_contrast = 50,
           chrome_darken = 50,
-          sepia_amount = 25,
-          fg_saturation = 29,
-          fg_lightness = 37,
+          sepia_amount = 0,
+          fg_saturation = 50,
+          fg_lightness = 50,
           normalize_background = 0,
           kanagawa_dragon_bracket_lightness = 50,
         },
       }
 
+      -- :ThemeRaw — session-wide bypass of the ENTIRE pipeline. While on, every
+      -- theme renders bone-stock: its own background, its own palette, no bg_base
+      -- stamp, no knobs, no yaml derivation, no overlays. Nothing is persisted;
+      -- :ThemeRaw off (or a restart) restores the pipeline.
+      vim.api.nvim_create_user_command("ThemeRaw", function(opts)
+        local arg = vim.trim(opts.args)
+        local cur = vim.g.theme_raw and true or false
+        local want
+        if arg == "on" then
+          want = true
+        elseif arg == "off" then
+          want = false
+        elseif arg == "" or arg == "toggle" then
+          want = not cur
+        else
+          vim.notify("ThemeRaw: expected on, off or toggle", vim.log.levels.ERROR)
+          return
+        end
+        vim.g.theme_raw = want
+        -- Re-run the colorscheme: `hi clear` inside it wipes the pipeline's
+        -- stamps when turning ON, and re-entering the pipeline restores them
+        -- when turning OFF.
+        local name = vim.g.colors_name
+        if name and name ~= "" then
+          pcall(vim.cmd.colorscheme, name)
+        end
+        vim.notify("ThemeRaw: " .. (want and "ON — themes render stock for this session" or "off — pipeline restored"))
+      end, {
+        nargs = "?",
+        complete = function()
+          return { "on", "off", "toggle" }
+        end,
+        desc = "Bypass the theme pipeline for the session: every theme renders stock",
+      })
+
+      -- Grouped with clear=true so re-sourcing this file can't stack handlers.
       vim.api.nvim_create_autocmd("ColorScheme", {
+        group = vim.api.nvim_create_augroup("ThemePipelineColorScheme", { clear = true }),
         pattern = "*",
         callback = function()
+          if vim.g.theme_raw then
+            return -- :ThemeRaw is on: leave the theme exactly as it loaded
+          end
           local key = vim.g.colors_name or ""
           -- kanagawa.nvim sets colors_name = "kanagawa" for all variants.
           -- Resolve the actual variant via its config to get the correct lookup key.
@@ -2178,6 +3239,7 @@ return {
       end
 
       vim.api.nvim_create_autocmd("ColorScheme", {
+        group = vim.api.nvim_create_augroup("ThemeLualineColorScheme", { clear = true }),
         callback = function()
           vim.schedule(rebuild_lualine)
         end,
@@ -2304,6 +3366,75 @@ return {
     priority = 1000,
   },
   { "RRethy/base16-nvim", lazy = false, priority = 1000 },
+
+  -- ── Library expansion (2026-07-27) ──────────────────────────────────────────
+  -- All lazy. lazy.nvim owns a ColorSchemePre handler (lazy/core/loader.lua:32)
+  -- that loads the plugin shipping the requested colors/ file, so `lazy = true`
+  -- costs nothing at startup and these still preview instantly in <leader>uC —
+  -- the picker already globs unloaded plugins' colors/ dirs to list them.
+  --
+  -- The eagerly-loaded schemes above are left as they are on purpose: several
+  -- carry setup()/opts the theme.lua pipeline reads by name, and flipping them
+  -- is a separate, testable change.
+  { "rose-pine/neovim", name = "rose-pine", lazy = true },
+  { "nyoom-engineering/oxocarbon.nvim", lazy = true },
+  { "AlexvZyl/nordic.nvim", lazy = true },
+  { "vague2k/vague.nvim", lazy = true },
+  { "ribru17/bamboo.nvim", lazy = true },
+  { "olivercederborg/poimandres.nvim", lazy = true },
+  { "eldritch-theme/eldritch.nvim", lazy = true },
+  { "sainnhe/gruvbox-material", lazy = true },
+  { "sainnhe/edge", lazy = true },
+  { "marko-cerovac/material.nvim", lazy = true },
+  { "Shatur/neovim-ayu", name = "ayu", lazy = true },
+  { "tiagovla/tokyodark.nvim", lazy = true },
+  { "comfysage/evergarden", lazy = true },
+  { "datsfilipe/vesper.nvim", lazy = true },
+  { "wtfox/jellybeans.nvim", lazy = true },
+  { "slugbyte/lackluster.nvim", lazy = true },
+  { "maxmx03/fluoromachine.nvim", lazy = true },
+  { "oahlen/iceberg.nvim", lazy = true },
+  { "bluz71/vim-nightfly-colors", name = "nightfly", lazy = true },
+  { "bluz71/vim-moonfly-colors", name = "moonfly", lazy = true },
+
+  -- ── Library expansion round 2 (2026-07-28) ──────────────────────────────────
+  -- 30 more popular non-base16 schemes from the LazyVim ecosystem. Same deal as
+  -- the block above: all `lazy = true`, no setup() — the picker globs unloaded
+  -- plugins' colors/ dirs and lazy.nvim's ColorSchemePre handler loads them on
+  -- preview. lush.nvim is a build-time dep for zenbones/arctic/bluloco.
+  { "rktjmp/lush.nvim", lazy = true },
+  { "shaunsingh/nord.nvim", lazy = true },
+  { "rmehri01/onenord.nvim", lazy = true },
+  { "projekt0n/github-nvim-theme", lazy = true },
+  { "Mofiqul/vscode.nvim", lazy = true },
+  { "loctvl842/monokai-pro.nvim", lazy = true },
+  { "tanvirtin/monokai.nvim", lazy = true },
+  { "zenbones-theme/zenbones.nvim", dependencies = { "rktjmp/lush.nvim" }, lazy = true },
+  { "rockyzhang24/arctic.nvim", dependencies = { "rktjmp/lush.nvim" }, branch = "v2", lazy = true },
+  { "uloco/bluloco.nvim", dependencies = { "rktjmp/lush.nvim" }, lazy = true },
+  { "craftzdog/solarized-osaka.nvim", lazy = true },
+  { "dgox16/oldworld.nvim", lazy = true },
+  { "thesimonho/kanagawa-paper.nvim", lazy = true },
+  { "cdmill/neomodern.nvim", lazy = true },
+  { "ficcdaf/ashen.nvim", lazy = true },
+  { "AstroNvim/astrotheme", lazy = true },
+  -- flow crashes on `:colorscheme flow*` unless setup() ran first (config.options
+  -- stays {} and palette.get indexes config.theme = nil). opts={} makes lazy call it.
+  { "0xstepit/flow.nvim", lazy = true, opts = {} },
+  { "Yazeed1s/oh-lucy.nvim", lazy = true },
+  { "HoNamDuong/hybrid.nvim", lazy = true },
+  { "NTBBloodbath/doom-one.nvim", lazy = true },
+  { "embark-theme/vim", name = "embark", lazy = true },
+  { "bettervim/yugen.nvim", lazy = true },
+  { "water-sucks/darkrose.nvim", lazy = true },
+  { "yorumicolors/yorumi.nvim", lazy = true },
+  { "rafamadriz/neon", lazy = true },
+  { "Mofiqul/adwaita.nvim", lazy = true },
+  { "samharju/synthweave.nvim", lazy = true },
+  { "Verf/deepwhite.nvim", lazy = true },
+  { "xiantang/darcula-dark.nvim", lazy = true },
+  { "sekke276/dark_flat.nvim", lazy = true },
+  { "diegoulloao/neofusion.nvim", lazy = true },
 
   -- Catppuccin: remap peach/orange → red for constants/characters.
   -- Number, Float, Boolean intentionally keep their default peach.

@@ -1,21 +1,41 @@
 #!/usr/bin/env python3
-"""tmux-bar / tmux-chip / tmux-pane / tmux-pane-lines / tmux-copy — reskin tmux
-from `pill`.
+"""tmux-bar / tmux-color / tmux-chip / tmux-pane / tmux-pane-lines / tmux-copy /
+tmux-float —
+reskin tmux from `pill`.
 
     tmux-bar               list the colors, mark the active one
-    tmux-bar turquoise     status bar BODY: kube/git/clock, dividers, the rule,
-                           inactive windows -- everything but the two chips
+    tmux-bar turquoise     the BAR ITSELF: row 1 (the rule, the HUD, the
+                           resize/prefix/copy/zoom cheatsheets) and the shared
+                           chrome it publishes -- popup and menu frames, the
+                           copy-mode mark, @ui-* (NOT the float -- see
+                           tmux-float)
     tmux-bar -             back to the previous
 
+    tmux-color amber       the bar's CONTENTS: inactive window labels and their
+                           rail, plus status-right -- git/language context,
+                           the DATE, and the clock chip
+
     tmux-chip synth_orange the two CHIPS: session name + active window
+    tmux-chip auto         let THIS session go back to its automatic colour
+                           (see PINNING, below)
     tmux-pane amber        pane TITLES: the pill, pane numbers, the clock
     tmux-pane-lines cyan   pane DIVIDERS: the borders
+    tmux-float neon_pink   the SCRATCH FLOAT's frame (prefix o). Off the bar's
+                           palette on purpose: on the bar's dim it was the same
+                           hex as an unlit pane border and the float stopped
+                           reading as a float. Pick by HUE, not brightness.
     tmux-copy matrix       COPY MODE, from one hex: the copy-tinted border and
                            pill, the COPY chip, the scrollbar thumb, and the
                            scrollbar track at SUNK_SCALE of it
                            (tmux-copymode-color is an alias for this)
 
-Four surfaces, four commands, one palette. They are split where a surface can
+`tmux-color` used to be a bare alias for `tmux-bar` -- an unrecognised argv[0]
+fell through to the tmux-bar mode, so the two names painted the same block and
+there was no way to say "keep the rule where it is, move the clock". They are
+two surfaces now: tmux-bar is the bar's own frame, tmux-color is what is written
+on it (inactive labels, date, clock).
+
+Surfaces, commands, one palette. They are split where a surface can
 sensibly disagree with its neighbour -- a hot chip on a quiet bar, a lit pane
 title on a dim divider. Give them all the same colour and you get exactly what
 one command would have produced. Each keeps its own previous, so `tmux-chip -`
@@ -34,6 +54,15 @@ at DIM they disappeared into the background.
 
 Colors come from the same `pill_*` table in ~/.config/starship.toml that `pill`
 reads, so the prompt and the tmux chrome are always drawn from one palette.
+
+PINNING (tmux-chip only). Session chips are normally auto-assigned by the
+session-hue script -- deterministic per name, re-run on every new session and
+every config reload. Without a pin, that reassignment silently overwrote any
+manual `tmux-chip <colour>`, because it always wins the per-session vs. global
+option resolution tmux does (see the note by the "tmux-chip" block below). A
+manual colour change now also sets @session_hue and @session_hue_pin on the
+CURRENT session directly, so session-hue skips it from then on. `tmux-chip
+auto` clears the pin and hands the session back to session-hue immediately.
 
 Each command rewrites ONLY the block between its own markers in tmux.conf. The
 option lines inside those blocks are generated from the templates below --
@@ -137,6 +166,11 @@ SLANT_THIN = chr(0xE0BB)                                    # hairline: window r
 # Checked alternates that ARE present, if the read ever wants changing:
 #   U+F066 compress   U+EB81   U+F0294   U+F04DE   U+F0B2 arrows-alt
 ZOOM = chr(0xF065)    # expand -- window is zoomed
+# TALL is the @dimzoom state: not tmux's own zoom, a user-set flag for a pane
+# grown to full height while its neighbours stay on screen. It gets its own
+# branch because "prefix Z restores" is a different key from the real zoom's
+# "prefix z". U+F07D is arrows-v, mapped in JetBrainsMono Nerd Font.
+TALL = chr(0xF07D)    # arrows-v -- pane is height-zoomed via @dimzoom
 BELL = chr(0xF0092)   # bell -- window rang
 # ACT is U+25CF BLACK CIRCLE, a plain BMP dot -- NOT U+F111, the Nerd Font
 # fa-circle it replaced. F111 is drawn at icon scale, which in this font is a
@@ -192,7 +226,12 @@ MODES = {
     "tmux-bar": {
         "begin": "# >>> tmux-bar-managed >>>",
         "end": "# <<< tmux-bar-managed <<<",
-        "what": "top status bar",
+        # The bar's FRAME, not its contents. Row 1 (the rule, the HUD and the
+        # mode cheatsheets) plus the chrome the bar publishes for everything
+        # else -- popups, menus, the float, the copy mark, @ui-*. The inactive
+        # labels, the rail and status-right moved out to `tmux-color`, which is
+        # the whole reason that name stopped being an alias for this one.
+        "what": "the bar itself (row 1 + chrome)",
         "lines": [
             # Row 1 is TRANSIENT: silent unless something is true. Branches, in
             # priority order -- resize table, prefix pending, copy mode, zoomed,
@@ -256,6 +295,14 @@ MODES = {
             f'#[fg={B}]#[bg=default]#[nobold]{RCAP}  '
             f'#[fg={B}]#{{pane_current_command}}#[fg={D}] · #{{b:pane_current_path}}'
             f'  #[fg={D}]prefix z restores,'
+            # Height-zoom (@dimzoom): same slab, different icon and different
+            # restore key. Kept as its own branch below the real zoom so the
+            # two states can never both claim the row.
+            f'#{{?@dimzoom,'
+            f'#[fg={B}]#[bg=default]{LCAP}#[fg={I}]#[bg={B}]#[bold] {TALL} TALL '
+            f'#[fg={B}]#[bg=default]#[nobold]{RCAP}  '
+            f'#[fg={B}]#{{pane_current_command}}#[fg={D}] · #{{b:pane_current_path}}'
+            f'  #[fg={D}]prefix Z restores,'
             # The else-branch rule. BRIGHT, like the dividers: it is the bar's
             # baseline, and at dim it vanished into the terminal background.
             # (A truecolor gradient version was tried 2026-07-22 and rejected
@@ -269,7 +316,38 @@ MODES = {
             f'#[fg={B}]#[bg=default]#{{R:═,#{{client_width}}}}'
             f'#[align=right]#[fg={D}]  #{{window_panes}} pane#{{?#{{>:#{{window_panes}},1}},s,}}'
             f'  ·  #{{session_windows}} win  ·  #{{client_width}}×#{{client_height}}  '
-            f'}}}}}}}}}}"',
+            f'}}}}}}}}}}}}"',
+            # --- chrome that used to drift ---------------------------------
+            # Popup and menu frames, the floax float, and the copy-mode mark
+            # were all hand-set. They survived two palette migrations by being
+            # invisible at rest -- you only see them once a popup is open -- and
+            # were still holding a cyan that had been retired twice over. They
+            # are generated now, so they cannot be left behind again.
+            f'set -g popup-border-style "fg={D}"',
+            f'set -g menu-border-style  "fg={D}"',
+            # @floax-border-color USED to be written here, taking {D} -- which
+            # made the float's frame byte-identical to an unlit pane border, so
+            # the scratch float read as just another pane. It is its own surface
+            # with its own command now: see the tmux-float block.
+            f'set -g copy-mode-mark-style "bg={B},fg={I}"',
+            # Published for anything that cannot take a generated line: the sesh
+            # picker builds its fzf --color from these at popup time, so it
+            # follows the palette without needing its own block.
+            f'set -g @ui-bright "{B}"',
+            f'set -g @ui-dim "{D}"',
+            f'set -g @ui-sunk "{S}"',
+        ],
+    },
+    "tmux-color": {
+        "begin": "# >>> tmux-color-managed >>>",
+        "end": "# <<< tmux-color-managed <<<",
+        # What is WRITTEN on the bar: the inactive window labels and the rail
+        # between them, and status-right -- git/language context, the date, and
+        # the clock chip. Everything here is either dim-by-definition (the
+        # things you are not looking at) or a reading (the things that tick),
+        # which is why they share one command and the frame does not.
+        "what": "inactive windows + date/clock",
+        "lines": [
             # Right: kube context ╱ git branch ╱ clock. Labels dim, values
             # bright, dividers bright.
             # The kube context is rendered by a helper, not inlined, because it
@@ -287,6 +365,11 @@ MODES = {
             # prompt). It self-styles, prints nothing for a plain directory, and
             # emits its own trailing space before the clock chip below.
             f"#(~/.config/nvim/dotfiles/tmux/status-context '#{{pane_current_path}}')"
+            # Weekday + numeric date, DIM and OUTSIDE the pill. It changes once a
+            # day, so it is context, not a reading -- the bright chip stays
+            # reserved for the thing that actually ticks. NO YEAR on purpose.
+            # %-m/%-d (not %m/%d) drop the leading zeros: "7/5", not "07/05".
+            f'#[fg={D}]#[bg=default]%a %-m/%-d '
             # Single space before the clock chip (the helper emits one trailing
             # space, which is enough) and a 12-hour AM/PM clock, not 24h.
             # %-l (not %l) = no-pad hour, so no phantom space inside the pill.
@@ -303,6 +386,9 @@ MODES = {
             # @pane_lines_bright/@pane_lines_dim. Nothing reads these today; a
             # tab style that repaints the inactive labels would, and having the
             # pair on an option is what lets it do that without baking a hex.
+            # Still named @bar_* though they are written by `tmux-color` now:
+            # they are the WINDOW RAIL's pair and always were, and renaming an
+            # option nothing reads only breaks the one thing that might.
             f'set -g @bar_bright "{B}"',
             f'set -g @bar_dim "{D}"',
             # DIM, not bright. The active chip already ends in a solid shear, so
@@ -397,22 +483,6 @@ MODES = {
             f'#{{?window_bell_flag,#[fg={B}] {BELL},'
             f'#{{?window_activity_flag,#[fg={B}] {ACT},  }}}}'
             f' #[default]"',
-            # --- chrome that used to drift ---------------------------------
-            # Popup and menu frames, the floax float, and the copy-mode mark
-            # were all hand-set. They survived two palette migrations by being
-            # invisible at rest -- you only see them once a popup is open -- and
-            # were still holding a cyan that had been retired twice over. They
-            # are generated now, so they cannot be left behind again.
-            f'set -g popup-border-style "fg={D}"',
-            f'set -g menu-border-style  "fg={D}"',
-            f"set -g @floax-border-color '{D}'",
-            f'set -g copy-mode-mark-style "bg={B},fg={I}"',
-            # Published for anything that cannot take a generated line: the sesh
-            # picker builds its fzf --color from these at popup time, so it
-            # follows the palette without needing its own block.
-            f'set -g @ui-bright "{B}"',
-            f'set -g @ui-dim "{D}"',
-            f'set -g @ui-sunk "{S}"',
         ],
     },
     "tmux-chip": {
@@ -655,6 +725,27 @@ MODES = {
             # and now lives in the tmux-copy block below.
         ],
     },
+    "tmux-float": {
+        "begin": "# >>> tmux-float-managed >>>",
+        "end": "# <<< tmux-float-managed <<<",
+        "what": "scratch float frame",
+        "lines": [
+            # The float's frame, and the ONE surface that is deliberately not
+            # downstream of `tmux-bar`. It used to be written from the bar's DIM,
+            # which made it byte-identical to an unlit pane border -- the float
+            # then read as just another pane, which is the whole thing it is not.
+            # Give this an OFF-HUE accent, not a shade of the panes: separation
+            # here is hue, not brightness (the opposite of the lit/unlit rule the
+            # pane dividers obey, because there is no neighbour to compare to --
+            # the float is alone on top of whatever it covers).
+            f"set -g @floax-border-color '{B}'",
+            # floax reads its options into env at plugin load and again per open,
+            # so a plain `set` is enough -- no reopen needed beyond the next
+            # prefix-o. popup-border-style / menu-border-style are NOT touched:
+            # those are the weather / msg / keys / sesh popups, which belong to
+            # the bar's palette and should keep following it.
+        ],
+    },
     "tmux-copy": {
         "begin": "# >>> tmux-copy-managed >>>",
         "end": "# <<< tmux-copy-managed <<<",
@@ -677,6 +768,22 @@ MODES = {
             # palette uses for its own troughs -- a lit thumb in a dark bed of
             # its own hue, which is how a scrollbar is meant to read.
             f'set -g pane-scrollbars-style "bg={S},fg={B},width=1,pad=0"',
+            # The SELECTION and the SEARCH MATCHES, folded in 2026-07-26. They
+            # are copy mode's two other painted surfaces and were the last
+            # baked hexes on it -- a pale cyan selection and an amber current
+            # match, both left over from palettes retired twice since, sitting
+            # inside a copy mode whose border, pill and chip had long moved on.
+            # Same reason the scrollbar is here: they are STYLES, so they will
+            # not expand #{@copy_mode_color} and have to be generated to stay
+            # in sync.
+            #
+            # Three levels, one hue: the selection you are building and the
+            # match you are ON are fully lit slabs (ink on the accent), and the
+            # other matches sit in the same sunk bed the scrollbar track uses,
+            # lettered in the accent -- present, countable, not shouting.
+            f'setw -g mode-style "bg={B},fg={I}"',
+            f'set -g copy-mode-match-style         "bg={S},fg={B},bold"',
+            f'set -g copy-mode-current-match-style "bg={B},fg={I},bold"',
         ],
     },
 }
@@ -688,16 +795,20 @@ MODES = {
 # its colours and its shapes.
 #
 # A style emits the ACTIVE chip and nothing else. The inactive labels and the
-# separator belong to `tmux-bar` -- they are its DIM and BRIGHT, generated in
-# its own block, and the split is deliberate (bar = everything but the two
-# chips). A style that wanted to repaint them would have to override those two
+# separator belong to `tmux-color` -- they are its DIM and BRIGHT, generated in
+# its own block, and the split is deliberate (chips = the two lit things, color
+# = the unlit ones and the readings, bar = the frame around all of it). A style
+# that wanted to repaint them would have to override those two
 # lines and should read @bar_dim / @bar_bright rather than bake a hex, so the
-# rail keeps tracking tmux-bar.
+# rail keeps tracking tmux-color.
 #
-# INACT/FLAG below are for the PREVIEW only: a picker row cannot resolve a tmux
-# option, so it draws today's values of that pair.
+# INACT is the inactive-label colour the tmux-chip preview draws around its
+# chips. It used to be a baked hex "today's value of that pair" -- and it went
+# stale the first time the rail was recoloured, so the picker sold a bar with a
+# steel-blue rail that had not existed for weeks. It is read from the live
+# tmux-color block now (see inactive_hex); this value is only the fallback for a
+# config that has no such block yet.
 INACT = "#415c63"
-FLAG = "#88c0d0"
 
 TAB_STYLES = {
     # The design as it stands: active is a lit slab, sheared both ends, with a
@@ -727,6 +838,11 @@ MODE_ALIASES = {"tmux-copymode-color": "tmux-copy"}
 MODE = os.path.basename(sys.argv[0])
 MODE = MODE_ALIASES.get(MODE, MODE)
 if MODE not in MODES:
+    # A name nobody defined still has to do something, and the bar is the
+    # least surprising thing for it to paint. This fallback is ALSO what made
+    # `tmux-color` a silent duplicate of `tmux-bar` for weeks -- the name had
+    # no MODES entry, fell through here, and painted the bar's block. Anything
+    # that ought to be its own surface needs an entry above, not this.
     MODE = "tmux-bar"
 M = MODES[MODE]
 STATE = f"{STATE_DIR}/{MODE}-previous"
@@ -768,6 +884,15 @@ def palette():
     """Every color these commands offer, read live from starship.toml:
 
         pill_*   shared with the prompt. `pill` owns this table.
+        text_*   body foregrounds, owned by cc-fg/cc-fg-dim/cc-em. Included
+                 here because tmux-pane, tmux-pane-lines and tmux-copy set
+                 FOREGROUNDS and borders, where a quiet colour is a real
+                 choice. On tmux-bar/tmux-chip they are slab FILLS carrying
+                 ink text, and a dark one there is unreadable -- the preview
+                 row shows exactly that, so judge it there before committing.
+                 They stay out of `pill` entirely: the pill_* invariant is
+                 black text >=4.5:1 plus brand logos >=2.0:1 after the CRT
+                 dim, and every text_* colour fails it by design.
         tmux_*   tmux only -- too saturated to carry brand logos, so `pill`
                  must not see them. See the note by the table itself.
 
@@ -777,7 +902,7 @@ def palette():
         die(f"no starship config at {STARSHIP}")
     src = open(STARSHIP, encoding="utf-8").read()
     out = []
-    for m in re.finditer(r"^(pill|tmux)_([a-z_]+)\s*=\s*'(#[0-9a-fA-F]{6})'",
+    for m in re.finditer(r"^(pill|tmux|text)_([a-z0-9_]+)\s*=\s*'(#[0-9a-fA-F]{6})'",
                          src, re.M):
         out.append((re.sub(r"_lifted$|_white$", "", m.group(2)), m.group(3)))
     if not out:
@@ -795,6 +920,32 @@ def current(src):
     m = re.search(rf"^{re.escape(M['begin'])}.*?^# bright = (#[0-9a-fA-F]{{6}})",
                   src, re.M | re.S)
     return m.group(1) if m else None
+
+
+def block_bright(mode):
+    """The `bright =` recorded in ANOTHER mode's managed block, or None.
+
+    Every block carries its colour in its header comment, which makes the file
+    the one place a preview can ask "what is that other surface set to right
+    now" without shelling out to a running tmux (there may not be one). Used so
+    a picker row never draws a neighbouring surface from a baked hex.
+    """
+    m = MODES.get(mode)
+    if not m:
+        return None
+    try:
+        src = open(TMUX_CONF, encoding="utf-8").read()
+    except OSError:
+        return None
+    hit = re.search(rf"^{re.escape(m['begin'])}.*?^# bright = (#[0-9a-fA-F]{{6}})",
+                    src, re.M | re.S)
+    return hit.group(1) if hit else None
+
+
+def inactive_hex():
+    """What an inactive window label is actually drawn in: tmux-color's DIM."""
+    b = block_bright("tmux-color")
+    return scale(b, DIM_SCALE) if b else INACT
 
 
 def resolve(want, names):
@@ -818,7 +969,7 @@ def preview(bright):
         sess = swatch(bright, " DEV ") + fg(bright) + SLANT_R + "  "
         return (sess + fg(bright) + SLANT_L + swatch(bright, " > 1:nvim ") +
                 fg(bright) + SLANT_R + "  " +
-                fg(INACT) + " 2:logs" + "\033[0m")
+                fg(inactive_hex()) + " 2:logs" + "\033[0m")
     if MODE == "tmux-pane-lines":
         # The split divider: lit half nearest the active pane, unlit rest.
         return (fg(bright) + "─────────" + fg(dim) + "──────────" + "\033[0m")
@@ -834,25 +985,39 @@ def preview(bright):
                 fg(bright) + "──" + " " +
                 slab(sunk, sunk, "──") + slab(bright, bright, "────") +
                 slab(sunk, sunk, "────") + "\033[0m")
+    if MODE == "tmux-float":
+        # The float's rounded frame against a pane divider, so the picker shows
+        # the only comparison that matters: does it read as NOT a pane.
+        return (fg(inactive_hex()) + "──────" +
+                fg(bright) + "╭─ scratch ──╮" +
+                fg(inactive_hex()) + "──────" + "\033[0m")
     if MODE == "tmux-pane":
         return (fg(dim) + "──" + fg(bright) + SLANT_L +
                 swatch(bright, " 1 ") + fg(bright) +
                 slab(ION_BODY, bright, SLANT_R + " zsh · repo ") +
                 fg(ION_BODY) + SLANT_R +
                 fg(dim) + "────" + "\033[0m")
-    # The preview MUST wear the same shapes the templates emit, or the picker
-    # sells a bar you will not get. Chips shear, the window rail is the hairline
-    # slant, and status-right now carries git + language versions (rendered by
-    # the status-context helper, brand-coloured so they do NOT track this
-    # colour) ahead of the filled clock chip. kubectl stayed in the prompt.
-    return (swatch(bright, " DEV ") + fg(bright) + SLANT_R + " " +
-            fg(bright) + SLANT_L + swatch(bright, " > 1:nvim ") +
-            fg(bright) + SLANT_R +
-            fg(bright) + " " + SLANT_THIN + " " + fg(dim) + "2:logs" +
-            fg(bright) + "  " + fg("#f1502f") + " " + fg(dim) + "main" +
-            fg("#00add8") + "  1.22" +
-            fg(bright) + "  " + fg(bright) + LCAP +
-            swatch(bright, "09:41") + fg(bright) + RCAP + "\033[0m")
+    if MODE == "tmux-color":
+        # The preview MUST wear the same shapes the templates emit, or the
+        # picker sells a bar you will not get. The rail is the hairline slant,
+        # the labels are dim, and status-right carries git + language versions
+        # (rendered by the status-context helper, brand-coloured so they do NOT
+        # track this colour) then the dim date and the filled clock chip. No
+        # session or active chip here -- those are tmux-chip's, and drawing
+        # them would sell a colour this command cannot set.
+        return (fg(dim) + " 2:logs" +
+                fg(bright) + " " + SLANT_THIN + " " + fg(dim) + "3:logs" +
+                fg(bright) + "  " + fg("#f1502f") + " " + fg(dim) + "main" +
+                fg("#00add8") + "  1.22" +
+                fg(dim) + "  Sun 7/26 " + fg(bright) + LCAP +
+                swatch(bright, "09:41") + fg(bright) + RCAP + "\033[0m")
+    # tmux-bar: the frame. Row 1's rule with the HUD sitting right-aligned on
+    # it, and a mode chip at the left -- the row's own shapes, none of the
+    # window strip's. Whatever `tmux-color` and `tmux-chip` are set to is not
+    # this command's business and is deliberately absent from the sample.
+    return (fg(bright) + LCAP + swatch(bright, " ZOOMED ") + fg(bright) + RCAP +
+            fg(bright) + " " + "═" * 8 +
+            fg(dim) + " 2 panes · 4 win " + "\033[0m")
 
 
 def current_style(src):
@@ -935,6 +1100,21 @@ def write(bright, label, style=None, style_switch=False):
         r = subprocess.run(["tmux", "source-file", TMUX_CONF],
                            capture_output=True, text=True)
         live = "  -> live" if r.returncode == 0 else f"  -> reload failed: {r.stderr.strip()}"
+        # A colour change (not a style-only switch) on tmux-chip has to win
+        # over session-hue's auto-assignment, which re-runs on every session-
+        # created event and every config reload and otherwise silently
+        # overwrites the SESSION-scoped @session_hue the line above just wrote
+        # globally -- tmux resolves the session-scoped option first, so the
+        # global write above is invisible to any session session-hue has
+        # already touched (which by the time you're running this, is all of
+        # them). Pinning THIS session's option directly is what makes the
+        # change actually visible; see PINNING in the module docstring.
+        if MODE == "tmux-chip" and not style_switch:
+            subprocess.run(["tmux", "set-option", "@session_hue", bright],
+                           capture_output=True, text=True)
+            subprocess.run(["tmux", "set-option", "@session_hue_pin", "1"],
+                           capture_output=True, text=True)
+            live += " (this session pinned)"
     else:
         live = "  -> next tmux start"
     print(f"  {M['what']}: {label}  {preview(bright)}{live}")
@@ -961,9 +1141,17 @@ def main(arg):
             print(f"  tab style:  {marked}")
             print(f"              {TAB_WHAT[cur]}")
             print(f"  a style keeps the colour, a colour keeps the style.")
+            print(f"  a colour pins THIS session; `{MODE} auto` un-pins it.")
         if MODE == "tmux-copy":
             print(f"  one hex -> copy border + pill + COPY chip, scrollbar thumb,")
             print(f"  and scrollbar track at {int(SUNK_SCALE * 100)}% of it.")
+        elif MODE == "tmux-color":
+            # The one surface where the rail is DIM -- see the note by the
+            # window-status-separator line. Saying so here stops the generic
+            # "dividers take bright" from being read as a promise this command
+            # does not keep.
+            print(f"  bright = clock chip + news marks, dim = 48% of it:")
+            print(f"  inactive labels, the rail, the date.")
         else:
             print(f"  bright = the color, dim = 48% of it; dividers take bright.")
         print()
@@ -978,11 +1166,29 @@ def main(arg):
         print(f"{active}  {name}" if name else active)
         return
 
+    if arg == "auto" and MODE == "tmux-chip":
+        # Release THIS session's pin and hand it back to session-hue. See
+        # PINNING in the module docstring for why a pin exists at all.
+        if not os.environ.get("TMUX"):
+            die("not inside tmux -- nothing to unpin")
+        subprocess.run(["tmux", "set-option", "-u", "@session_hue_pin"],
+                       capture_output=True, text=True)
+        subprocess.run(["tmux", "set-option", "-u", "@session_hue"],
+                       capture_output=True, text=True)
+        session_hue = f"{HOME}/.config/nvim/dotfiles/tmux/session-hue"
+        subprocess.run([session_hue], capture_output=True, text=True)
+        got = subprocess.run(["tmux", "show-options", "-qv", "@session_hue"],
+                             capture_output=True, text=True).stdout.strip()
+        print(f"  session chip: back to automatic  {preview(got)}" if got
+              else "  session chip: back to automatic")
+        return
+
     if arg == "__complete":
         # Candidate first-args, one per line, for shell completion. Reads names
         # live from starship.toml so a new pill_*/tmux_* line needs no extra step.
         styles = list(TAB_STYLES) if MODE == "tmux-chip" else []
-        print("\n".join(["-", "current"] + styles + [c[0] for c in colors]))
+        extra = ["auto"] if MODE == "tmux-chip" else []
+        print("\n".join(["-", "current"] + extra + styles + [c[0] for c in colors]))
         return
 
     # A tab style, not a colour: keep the hue, change the drawing. Checked

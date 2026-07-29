@@ -1,0 +1,90 @@
+#!/usr/bin/env bash
+# Single-axis "zoom": grow the current pane along one axis only, leaving the
+# other axis alone. Toggles back to the exact layout that was in effect before.
+#
+#   dim-zoom <pane_id> v   -> full height, current width   (prefix Z)
+#   dim-zoom <pane_id> h   -> full width,  current height
+#   dim-zoom <pane_id> z   -> tmux's own zoom (prefix z), but cancelling any
+#                             tall mode FIRST so unzooming lands back on the
+#                             real layout instead of the tall one
+#   dim-zoom <pane_id> reset -> leave whichever of the two is active (prefix
+#                             Escape). Deliberately a NO-OP when neither is:
+#                             prefix Escape is also how you abort a mistyped
+#                             C-a, and that must stay harmless.
+#
+# tall mode and tmux zoom are mutually exclusive by construction: whichever you
+# ask for clears the other, so there is never a stacked state to unwind.
+#
+# State lives in three pane options:
+#   @dimzoom_prev  layout to restore on the second press
+#   @dimzoom_post  layout we produced, so a manual resize invalidates the toggle
+#   @dimzoom       1 while active -- this is what the status bar's TALL chip and
+#                  the solid pane-border cap key off, the way tmux's own
+#                  cosmetics key off #{window_zoomed_flag}
+
+set -u
+
+pane=$1
+axis=$2
+
+fmt() { tmux display -p -t "$pane" "$1"; }
+
+# Drop tall mode and put the layout back. No-op if it was never on.
+clear_tall() {
+	local prev post cur
+	prev=$(tmux show -p -v -t "$pane" @dimzoom_prev 2>/dev/null)
+	post=$(tmux show -p -v -t "$pane" @dimzoom_post 2>/dev/null)
+	cur=$(fmt '#{window_layout}')
+	# Only restore if the layout is still the one we produced -- if the user
+	# has resized by hand since, their geometry wins over our snapshot.
+	[ -n "$prev" ] && [ "$cur" = "$post" ] && tmux select-layout -t "$pane" "$prev"
+	tmux set -up -t "$pane" @dimzoom_prev 2>/dev/null
+	tmux set -up -t "$pane" @dimzoom_post 2>/dev/null
+	tmux set -up -t "$pane" @dimzoom 2>/dev/null
+}
+
+if [ "$axis" = reset ]; then
+	if [ -n "$(tmux show -p -v -t "$pane" @dimzoom 2>/dev/null)" ]; then
+		clear_tall
+	elif [ "$(fmt '#{window_zoomed_flag}')" = 1 ]; then
+		tmux resize-pane -t "$pane" -Z
+	else
+		exit 0
+	fi
+	tmux refresh-client -S
+	exit 0
+fi
+
+if [ "$axis" = z ]; then
+	# prefix z: cancel tall first, then hand off to tmux's real zoom.
+	[ -n "$(tmux show -p -v -t "$pane" @dimzoom 2>/dev/null)" ] && clear_tall
+	tmux resize-pane -t "$pane" -Z
+	tmux refresh-client -S
+	exit 0
+fi
+
+# Nothing to do in a single-pane window.
+[ "$(fmt '#{window_panes}')" -lt 2 ] && exit 0
+
+# Toggling off: only when our snapshot is still valid, otherwise fall through
+# and re-zoom against the layout the user has since made.
+if [ -n "$(tmux show -p -v -t "$pane" @dimzoom 2>/dev/null)" ] &&
+	[ "$(fmt '#{window_layout}')" = "$(tmux show -p -v -t "$pane" @dimzoom_post 2>/dev/null)" ]; then
+	clear_tall
+	tmux refresh-client -S
+	exit 0
+fi
+
+clear_tall
+[ "$(fmt '#{window_zoomed_flag}')" = 1 ] && tmux resize-pane -t "$pane" -Z
+
+tmux set -p -t "$pane" @dimzoom_prev "$(fmt '#{window_layout}')"
+
+case $axis in
+h) tmux resize-pane -t "$pane" -x 100% ;;
+*) tmux resize-pane -t "$pane" -y 100% ;;
+esac
+
+tmux set -p -t "$pane" @dimzoom_post "$(fmt '#{window_layout}')"
+tmux set -p -t "$pane" @dimzoom 1
+tmux refresh-client -S

@@ -1,0 +1,84 @@
+#!/bin/sh
+# Kill the dotted ghost region in tmux. TWO independent causes, both handled.
+#
+# The dots are tmux painting the pane-border pattern over any part of the client
+# area that no pane covers. Two different mismatches produce it:
+#
+#   A. layout != window size  -- after a tmux-resurrect restore. Resurrect
+#      replays the SAVED layout string while `window-size latest` sets the
+#      window to the current client size, so you get e.g. a 265x66 window still
+#      holding a 190x51 layout. Never self-corrects: tmux only rescales a layout
+#      when the window size CHANGES, and post-restore it never changes again.
+#
+#   B. window size != client size -- after the client resizes (resolution
+#      change, dock/undock). `window-size latest` only updates the window the
+#      client is CURRENTLY on; every other window in the session keeps the old
+#      size. Measured 2026-07-28: client went 265x68 -> 282x71 and only the
+#      active window followed.
+#
+# Case A needs a real size CHANGE to force a recompute -- shrink one, then -A.
+# Case B is what `resize-window -A` is actually for.
+# Verified no-ops for case A, do not retry: refresh-client (only redraws),
+# resize-window -A (window is already the target size), select-layout (re-reads
+# the same stale string).
+#
+# SAFETY -- read before editing:
+#   * NEVER hook this to `client-resized`. `resize-window` below EMITS that
+#     event, so it would re-trigger itself forever. That mistake pinned the GPU
+#     at 76% and cooked the machine once already. Valid triggers are ones this
+#     script cannot cause: resurrect post-restore, client-attached,
+#     after-select-window.
+#   * Both `continue` guards are load-bearing. A window already correct is
+#     skipped, so a healthy state is a total no-op and any stray re-fire does
+#     zero work. Keep this idempotent no matter what else changes.
+#   * Detached sessions are skipped on purpose: `-A` with no client attached can
+#     snap a window to an unrelated size. They correct themselves on attach.
+
+# Client size, minus the status lines, is the target for every window.
+CW=$(tmux display -p '#{client_width}' 2>/dev/null)
+CH=$(tmux display -p '#{client_height}' 2>/dev/null)
+
+tmux list-windows -a -F '#{window_id} #{window_width} #{window_height} #{session_attached} #{window_layout}' |
+while read -r id w h attached layout; do
+  # Heal a stray `manual` flag FIRST, on every window, every pass. A window whose
+  # window-size option is `manual` is one tmux will never auto-resize again: the
+  # next client resize (Cmd +/- font change, dock/undock) leaves it stale and the
+  # uncovered rows get the border pattern -- the dots. The flag is sticky and
+  # invisible, `resize-window -x/-y` sets it and nothing clears it on its own, so
+  # once set the window is permanently broken. Cheap: `show -w -v` per window.
+  # Do NOT fold this into the case A branch below -- that branch is skipped for a
+  # window whose layout already matches, which is exactly how a manual window
+  # sits: right layout, wrong size, never corrected.
+  [ "$(tmux show -w -t "$id" -v window-size 2>/dev/null)" = manual ] &&
+    tmux set-window-option -t "$id" -u window-size 2>/dev/null
+
+  # Case B ONLY runs on attached sessions -- `-A` with no client can snap a
+  # window to an unrelated size. Case A below deliberately runs everywhere:
+  # after a restore every session except the one you attach to is DETACHED, and
+  # gating case A on attachment would skip the exact bug this exists to fix.
+  if [ -n "$CW" ] && [ "$attached" -gt 0 ] 2>/dev/null && [ "$w" != "$CW" ]; then
+    tmux resize-window -t "$id" -A 2>/dev/null
+    # `-A` ON ITS OWN sets window-size=manual (measured 2026-07-28: fresh [] ->
+    # -A -> [manual]). Not just -x/-y. So case B poisoned every window it
+    # touched, and a poisoned window is one tmux never auto-resizes again --
+    # which is the dots. Hand it straight back to automatic.
+    tmux set-window-option -t "$id" -u window-size 2>/dev/null
+    w=$(tmux display -p -t "$id" '#{window_width}' 2>/dev/null)
+    h=$(tmux display -p -t "$id" '#{window_height}' 2>/dev/null)
+    layout=$(tmux display -p -t "$id" '#{window_layout}' 2>/dev/null)
+  fi
+
+  # Case A: layout still disagrees with the window -> force a recompute.
+  # layout looks like "caa5,265x66,0,0,8"; field 2 is the layout's own WxH.
+  [ "$(printf '%s' "$layout" | cut -d, -f2)" = "${w}x${h}" ] && continue
+  tmux resize-window -t "$id" -x "$((w - 1))" -y "$((h - 1))" 2>/dev/null
+  tmux resize-window -t "$id" -A 2>/dev/null
+  # CRITICAL -- never delete. `resize-window -x/-y` sets the window's window-size
+  # option to `manual`, and `-A` does NOT clear it (measured 2026-07-28: fresh
+  # [] -> -x/-y -> [manual] -> -A -> still [manual]). A manual window is one tmux
+  # will never auto-resize again, so every later client resize -- every Cmd +/-
+  # font change -- leaves it stale and paints the uncovered rows with the border
+  # pattern. That is the dots. Without this line the script permanently CAUSES
+  # the bug it exists to fix; four devops windows were stuck 4 rows short.
+  tmux set-window-option -t "$id" -u window-size 2>/dev/null
+done

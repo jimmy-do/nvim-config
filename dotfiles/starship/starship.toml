@@ -1,0 +1,683 @@
+"$schema" = 'https://starship.rs/config-schema.json'
+
+command_timeout = 2000
+add_newline = false
+
+format = "$os$username$directory$c$cpp$rust$golang$nodejs$bun$php$java$kotlin$haskell$python$docker_context$conda$pixi$kubernetes$terraform$helm$jobs$status$line_break$character"
+
+# The prompt is TWO LINES: pill on the first, caret alone on the second. This is
+# a different problem from the width tiers -- tiers stop the PILL wrapping, the
+# line break stops a long COMMAND wrapping back into the pill. Both are needed.
+# $line_break sits after $status so an error code still lands on the pill's line.
+
+# NO right_format. DO NOT ADD ONE -- and this is measured, not taste:
+# a non-empty RPROMPT makes zsh re-place the right margin on EVERY SIGWINCH, and
+# that repaint stacks the prompt. tmux fires WINCH continuously while you drag a
+# pane divider, so dragging leaves a wall of duplicate pills.
+# Measured 2026-07-15, ~/tui-curriculum, drag 200->30 cols:
+#     nano WITH right_format    -> 7 stacked pills
+#     nano WITHOUT right_format -> 1  (clean)
+# It is not the fork (a cached, non-forking RPROMPT stacks just the same) and not
+# the width (the nano pill FITS at 30). It is RPROMPT existing at all. Putting the
+# clock on the right costs you a prompt that survives a resize; keep it in the pill.
+
+palette = 'crt_high_contrast'
+
+# =============================================================================
+#  ONE LONG PILL - two colorings of the same shape
+#
+#    pill  <color>   every field one color, cap to cap  + BRAND logos
+#    pill2 <theme>   each field its own theme color     + INK logos
+#
+#  Both are the same prompt: rounded caps, black text, black solid wedges (U+E0B0)
+#  as separators, drawn in ink on the incoming color.
+#  Only the palette differs, so there is one prompt definition, not two.
+#
+#  HOW IT WORKS  -- the chevron FOLLOWS the wedge
+#    Between any two fields sit TWO wedges of the same shape, one cell apart:
+#
+#      [ field A ][A-colour wedge on ink][ink wedge on B-colour][ field B ]
+#                  \_ trailing of A  _/  \_ leading of B    _/
+#
+#    A tapers to a point, then black tapers into B. The black left between the
+#    two diagonals is a CONSTANT-WIDTH BAND running parallel to the wedge --
+#    that band IS the black chevron line, and it follows the wedge exactly.
+#
+#    THIS IS WHY IT IS TWO CELLS, NOT ONE. A terminal cell has exactly one fg
+#    and one bg, so a single cell can never be A-on-the-left / black-line /
+#    B-on-the-right -- that is three colours. Do not "simplify" this back to a
+#    single separator cell; you lose the line or you lose the taper.
+#
+#    It also means NO MODULE EVER NAMES ITS NEIGHBOUR'S COLOUR. Each emits only
+#    its own leading + trailing wedge. That is what lets node/docker/git come
+#    and go: an absent module takes BOTH its wedges with it and the pair either
+#    side still meets correctly. A two-tone wedge (fg:prev bg:next) cannot work
+#    here -- what precedes $nodejs is git inside a repo and directory outside
+#    one, and starship cannot know which.
+#
+#    [os] owns the left cap and has no leading wedge (always first).
+#    [time] owns the right cap and has no trailing wedge (always last).
+#
+#  WHY pill2 USES INK LOGOS (it is not an oversight)
+#    Brand logos need a far lighter field than a theme's own accent color is.
+#    Git orange #f1502f on Dracula red #ff5555 is ~1.1:1 - invisible. Forcing
+#    brand logos made all 12 themes lift to the SAME pale pastel and stop being
+#    themes. So: pill = brand logos on one safe color; pill2 = real theme colors
+#    with ink logos. You cannot have both at once; the shape still names the tool.
+#
+#  WHY THEME COLORS ARE BARELY LIFTED
+#    Threshold is 3.0:1, not 4.5:1 - WCAG's bar for LARGE/BOLD text, which this
+#    20px bold prompt is. At 4.5 (the normal-text bar) 58/84 fields washed out;
+#    at 3.0 only 11/77 move at all. Measured against the CRT shader's ~0.64 dim.
+#
+#  GLYPH SAFETY
+#    All 14 E-range dev icons were once silently blanked to " " in this file
+#    (2026-07-15). If logos vanish, that is the cause: restore from a backup.
+#    Prefer "\uXXXX" escapes in double-quoted strings, which cannot be lost.
+#
+#  DO NOT hand-edit the pill-managed block below; `pill` / `pill2` rewrite it.
+# =============================================================================
+
+[palettes.crt_high_contrast]
+ink = '#070808'                # pill text = terminal background
+
+# ---- pocketed single colors (the catalog `pill` offers) ----
+# Each is "lifted": lowest lightness of its hue where brand logos clear 2.0:1 and
+# black text clears 4.5:1 AFTER the ~0.64 CRT shader dim (measured, see notes).
+pill_green_lifted = '#9de08a'
+pill_ice_cyan     = '#d6fdff'
+pill_mint_white   = '#ddfbd6'
+pill_turquoise    = '#47f5bb'
+pill_periwinkle   = '#cacafc'
+
+pill_lime            = '#baff59'
+pill_jade            = '#59ff91'
+pill_aqua            = '#4dffd2'
+pill_cyan            = '#59f1ff'
+pill_spring          = '#61ffb0'
+pill_azure           = '#73d0ff'
+pill_chartreuse      = '#96ff61'
+pill_neon_pink       = '#ff80d5'
+pill_coral           = '#ff9f8c'
+pill_amber           = '#ffbf80'
+pill_sage            = '#a9b665'
+pill_forest          = '#a7c080'
+pill_frost           = '#88c0d0'
+pill_pistachio       = '#a6e3a1'
+pill_mauve           = '#d3869b'
+pill_blush           = '#ebbcba'
+pill_peach           = '#fab387'
+pill_sky             = '#89dceb'
+pill_lilac           = '#cba6f7'
+pill_fern            = '#7f9f7f'
+
+# ---- bright/electric retro pops. Same invariant as above: black text >=4.5:1
+# and every brand logo >=2.0:1, both AFTER the ~0.64 CRT dim (measured, worst
+# logo is always git #f1502f). Pink/violet are LIFTED (lighter than full sat) --
+# at full saturation they'd fall to ~1.9:1 on the git logo. Do not "deepen" them.
+pill_electric        = '#84fc03'   # electric yellow-green
+pill_laser_green     = '#6ffc03'   # pure electric green
+pill_electric_spring = '#03fc45'   # electric spring green
+pill_hot_yellow      = '#f2ff00'   # acid CRT yellow
+pill_amber_glow      = '#ffc21e'   # bright CRT amber
+pill_laser_cyan      = '#2ff5ff'   # electric cyan
+pill_synthwave       = '#ffb3ec'   # hot synthwave pink (lifted)
+pill_neon_violet     = '#e6b0ff'   # electric violet (lifted)
+# ---- the bright end of the ultraviolet family (the deep end is the tmux_uv_*
+# set below). Saturation traded DOWN for luminance, which is the only direction
+# violet has left once it passes #c98bff. Both clear the pill invariant outright
+# -- unlike their deep siblings they carry brand logos, so all four commands get
+# them and no `pill logos ink` is needed.
+pill_uv_bloom        = '#d8bdff'   # soft bright UV.    ink 12.06 git 2.13
+pill_uv_flare        = '#ecdcff'   # UV blown to near-white. ink 15.50 git 2.74
+
+# ---- more bright/vibrant pops, same invariant, measured the same way. Each
+# clears black text >=4.5:1 and git #f1502f (always the worst logo) >=2.0:1
+# after the ~0.64 CRT dim, so `pill` can wear them with brand logos on.
+pill_acid_teal       = '#00ffc8'   # acid teal
+pill_hyper_turquoise = '#00ffe1'   # hyper turquoise
+pill_laser_mint      = '#5effcb'   # laser mint
+pill_volt            = '#aaff00'   # volt yellow-green
+pill_cyber_lime      = '#c8ff00'   # cyber lime
+pill_test_lime       = '#d9ff00'   # acid lime -- zero blue, yellow-leaning
+pill_grass           = '#96f05e'   # grass green -- greenest of the lime family
+pill_neon_gold       = '#ffe14d'   # neon gold
+pill_ice_blue        = '#9fefff'   # ice blue
+
+# ---- the cool neutrals + blues. Silver is the only one that clears the FULL
+# invariant above; the rest are here at their real values and break it on the
+# git logo. That is deliberate -- read the note under silver before "fixing"
+# any of them, because lifting them is exactly what erased the blues before.
+pill_silver          = '#dde2e8'   # bright silver, ink 6.40 git 2.30 -- clears both
+#
+# The rest of the cool neutrals + blues clear black ink but NOT the 2.0 git bar,
+# because #f1502f is orange and near-complementary to blue: a blue has to go
+# almost white before an orange logo separates from it. Lifting them until it
+# does is what produced pill_periwinkle -- true blue, azure and indigo all
+# converge on ~#c0d0ff at that bar, which is why this palette had six cyans and
+# no blue. Kept at their real values instead, with brand logos washing out.
+# Run `pill logos ink` with these; the shape still names the tool.
+pill_gunmetal        = '#8794a6'   # deep cool gray, ink 3.14 git 1.13
+pill_slate           = '#acbbd0'   # slate gray, blue-leaning, ink 4.53 git 1.63
+pill_fog             = '#c2c8d0'   # neutral light gray, ink 5.13 git 1.84
+pill_cobalt          = '#8ebbff'   # cobalt -- an actual blue, ink 4.51 git 1.62
+pill_cornflower      = '#b3cdff'   # cornflower, one step lifted, ink 5.34 git 1.92
+pill_glacier         = '#3fd0ff'   # glacier, cyan lean, ink 4.83 git 1.73
+pill_bluebell        = '#99b4ff'   # bluebell, between cobalt and cornflower, ink 9.85 git 1.74
+pill_apricot         = '#ff9b69'   # apricot, one step warmer than coral, ink 9.67 git 1.71
+
+# ---- the greens. Same invariant, all measured. Kept apart from the greens
+# above them (lime/jade/spring/chartreuse) because these are the CRT ones:
+# zero-blue or blue-only hues that read as emitted light, not pigment.
+pill_matrix          = '#00ff41'   # matrix rain green
+pill_tron_green      = '#00ff9f'   # tron grid green -- green with a cyan lean
+pill_phosphor        = '#33ff33'   # P1 phosphor, the green-screen CRT green
+pill_holo_green      = '#5cff5c'   # hologram green, one step lighter
+pill_radioactive     = '#7dff00'   # radioactive yellow-green
+
+# ---- the GLOW tier. Same hues as the near-white entries above, re-cut to the
+# gamut edge. Glow is high luminance AND high chroma at once; a near-white has
+# the luminance and none of the chroma, so it reads bright but flat. Contrast
+# is computed from luminance ALONE, so the first three hold their original Y
+# exactly -- identical ink/logo ratios to the colours they replace, pure chroma
+# gained for free. Only mint trades luminance (0.89 -> 0.74), and it can afford
+# it. Measured ink / git #f1502f:
+pill_pistachio_glow  = '#13f500'   # was #a6e3a1, Y held 0.65. sat .29->1.00. 13.45 / 2.38
+pill_green_glow      = '#35ef00'   # was #9de08a, Y held 0.62. sat .38->1.00. 12.89 / 2.28
+pill_sky_glow        = '#40e2ff'   # was #89dceb, Y held 0.63. sat .42->0.75. 12.93 / 2.28
+pill_mint_glow       = '#5aff33'   # was #ddfbd6, Y 0.89->0.74. sat .15->0.80. 15.07 / 2.66
+
+# ---- NEAR-WHITE GLOW: the top of the arc, sorted by luminance. Every one of
+# these is a near-white that kept its chroma, which is only possible between
+# hue 40 and 190 -- outside that band sRGB makes you choose. pill_lumen at
+# Y 0.93 is the brightest colour in this file that is still a colour; nothing
+# in sRGB is both brighter and chromatic. Chosen by CIELab distance from the
+# existing 144 so none of them is a near-duplicate. Measured ink / git:
+pill_lumen           = '#ffff4d'   # Y 0.93  the ceiling. near-white yellow. 18.78 / 3.32
+pill_daybreak        = '#f2ff66'   # Y 0.91  green-lean white-yellow.        18.40 / 3.25
+pill_citron          = '#e1ff4d'   # Y 0.88  citron, yellow-green.           17.77 / 3.14
+pill_solar_white     = '#fff266'   # Y 0.86  warm near-white.                17.33 / 3.06
+pill_aurora          = '#66fff2'   # Y 0.81  near-white CYAN, still glowing.  16.38 / 2.89
+pill_sungold         = '#ffea00'   # Y 0.80  full chroma, sat 1.00.          16.25 / 2.87
+pill_viridian        = '#19ff79'   # Y 0.73  deep green, sat 0.90.           14.92 / 2.63
+pill_honey           = '#ffd919'   # Y 0.71  amber_glow with more lift.      14.51 / 2.56
+pill_sandglow        = '#ffcc66'   # Y 0.65  softest, warmest of the set.    13.45 / 2.38
+
+# ---- tmux-only colors: `tmux-bar` / `tmux-pane` / `tmux-pane-lines` read
+# these ALONGSIDE the pill_* table, and `pill` now offers them too (wear them
+# with `pill logos ink` -- see below). `pill2` still never sees them.
+#
+# They live apart because they FAIL the pill invariant above -- these are the
+# deep-saturation hues, and at full saturation a brand logo lands ~1.1-1.4:1 on
+# them (git on synth orange is 1.18:1, i.e. invisible). tmux chrome carries no
+# brand logos: the only ink on these is #080808 text on the session cap and the
+# pane title, which every one of them clears. So they are safe there and only
+# there. Lifting them until logos passed is exactly what would kill them --
+# #ff6a00 lifted to legibility is #ffa733, which is amber, not neon orange.
+#
+# Anything added here must keep ink >=3.0:1 (the tmux bar of entry). Anything
+# that ALSO clears 4.5 ink / 2.0 git belongs in pill_* above instead, so all
+# four commands get it.
+tmux_synth_orange    = '#ff6a00'   # THE neon synth orange. Peak-chroma, zero lift.
+tmux_ember           = '#ff8c1a'   # same hue, one step up -- orange with headroom
+tmux_hot_magenta     = '#ff5ec4'   # hot magenta
+tmux_plasma          = '#ff5e7a'   # plasma red-pink
+tmux_ultraviolet     = '#c98bff'   # ultraviolet
+# ---- the ultraviolet family. #c98bff is the LIFTED member of its own hue --
+# 8.22 on ink, which is why it is the one that never burns. These three walk the
+# same hue back down toward peak chroma, where the glow lives. All three fail
+# the pill invariant on git (1.10-1.53), same as their parent, so they stay here.
+tmux_uv_laser        = '#b14dff'   # electric violet at peak chroma.  ink 5.13
+tmux_blacklight      = '#8a2bff'   # deepest blue-violet that clears. ink 3.69
+tmux_neon_orchid     = '#e05cff'   # violet pushed to the magenta edge. ink 6.81
+# These two are HUE-LOCKED to 272 deg -- ultraviolet's exact hue, V=100, so the
+# only thing that changes is saturation. Nothing here can read pink: pink starts
+# where the hue drifts past ~275 (neon_orchid is 288, neon_violet 281). Violet
+# has no brightness lever left at V=100, so "more glow" at a fixed hue means
+# MORE chroma, which costs luminance -- both still clear the 3.0 tmux floor.
+tmux_uv_glow         = '#be73ff'   # ultraviolet, one step hotter. 55% sat, ink 6.76
+tmux_uv_pure         = '#8800ff'   # the UV primary, full chroma. 100% sat, ink 3.33
+tmux_electric_blue   = '#00d5ff'   # electric blue
+tmux_tangerine       = '#ffb347'   # tangerine
+tmux_circuit         = '#00e676'   # circuit green -- deeper than the pill greens
+#
+# ---- the pure primaries. The palette above leans neon-bright and cyan/green;
+# these are the dark, high-chroma RED and BLUE archetypes it never had. Blue is
+# the hard one: #0000ff is 2.33:1 on ink and fails the 3.0 bar outright, so a
+# true blue only clears it by taking on green, NOT by lifting toward white
+# (lifting is what turned every earlier blue into periwinkle -- see above).
+# Each one below is the deepest version of its hue that still measures >=3.0.
+tmux_pure_red        = '#ff0026'   # true red, hair of crimson.  ink 4.85
+tmux_crimson         = '#e10f2c'   # deep crimson, one step down. ink 4.15
+tmux_blood           = '#c00018'   # darkest red that still clears. ink 3.12
+tmux_scarlet         = '#ff3b3b'   # lifted signal red, softest of the reds. ink 5.66,
+                                   # but git 1.00 -- the git logo is the SAME luminance,
+                                   # so it can never carry a logo. tmux-only, like the rest.
+tmux_pure_blue       = '#0048ff'   # true blue at the floor.      ink 3.21
+tmux_cobalt_deep     = '#0a5cff'   # deep cobalt, more headroom.  ink 4.04
+tmux_indigo          = '#3a3aff'   # indigo, violet lean.         ink 3.18
+tmux_ultramarine     = '#4768ff'   # ultramarine, blue with a hair
+                                   # of cyan.  ink 4.47, git 1.26 -- too deep for a logo.
+
+# ---- GLOW tier, blue/pink half. These are the glowing cuts of pill_silver and
+# pill_synthwave, and they live HERE rather than in pill_* for the usual reason:
+# both clear ink easily (6.3) but land at git 1.11, under the 2.0 logo floor.
+# Blue and magenta simply cannot be bright and saturated at once in sRGB -- the
+# blue channel carries 7% of luminance -- so reaching the gamut edge costs them
+# Y 0.76 -> 0.28. Fine on a border or a chip, which carries no logo.
+tmux_silver_glow     = '#3390ff'   # was pill_silver #dde2e8.    ink 6.28
+tmux_synth_pink      = '#ff33cc'   # was pill_synthwave #ffb3ec. ink 6.30
+
+# ---- text_* : BODY-TEXT colours, for cc-fg / cc-fg-dim / cc-em ---------------
+# NOT pill colours, and deliberately not named pill_*. The pill_* invariant is
+# "black text >=4.5:1 and every brand logo >=2.0:1 AFTER the CRT dim" -- these
+# break it on purpose: they are foregrounds meant to be READ as a page of text
+# on the near-black ground, not slab fills meant to carry ink. Putting them in
+# pill_* would hand `pill` a catalog of chips whose labels are unreadable.
+#
+# The lit set sits in a narrow luminance band around 31% -- where Ghostty's own
+# #00b012 already is -- so switching between any two changes the COLOUR and not
+# how hard you are reading. The famous theme foregrounds are listed at that
+# level rather than their poster values (gruvbox #ebdbb2 is 72% and glares).
+# Add a line here and it appears in all three cc-* pickers with no other step.
+text_phosphor    = '#00b012'   # ghostty's own foreground, the CRT green
+text_p1          = '#23af23'   # P1 CRT green   (#33ff33 at 31%)
+text_matrix      = '#00b02c'   # blue-shifted   (#00ff41 at 31%)
+text_amber_p3    = '#c98b00'   # P3 amber       (#ffb000 at 31%)
+text_amber_soft  = '#c78c34'   # same hue, softer edge
+text_vt220       = '#b79300'   # yellower DEC amber (#ffcc00)
+text_sepia       = '#b49358'   # amber gone paper, warmest / lowest strain
+text_solarized   = '#839496'   # base0, in band at its real value
+text_gruvbox     = '#a2977a'   # warm cream     (#ebdbb2 at 31%)
+text_nord        = '#93979f'   # cool off-white (#d8dee9)
+text_tokyo       = '#8e96b6'   # tokyo-night fg (#c0caf5)
+text_onedark     = '#9297a3'   # muted blue-grey (#abb2bf)
+text_cyanterm    = '#609ec3'   # the cold-CRT option (#7dcfff)
+text_slate       = '#9aa0b0'
+text_periblue    = '#717fab'
+text_steel       = '#6c7d9c'
+text_ash         = '#8a8f9e'
+text_graphite    = '#6f7486'
+text_shadow      = '#565b6e'
+text_ink         = '#3d4560'
+# habamax's violet/pink end -- the emphasis colours, brighter than the body set
+# on purpose: cc-em paints ANSI bright-blue, which is an ACCENT on a handful of
+# words, so it wants to stand off the page rather than blend into it.
+text_habamax_violet = '#af87d7'
+text_habamax_pink   = '#d7afd7'
+text_habamax_rose   = '#ffafd7'
+text_habamax_mauve  = '#d787af'
+
+# ---- the hot_magenta ladder. ONE hue (H=322, tmux_hot_magenta's own) at HIGH
+# saturation throughout -- the axis here is DEPTH, not softness. An earlier
+# pass desaturated this family into pastels; that was wrong, the point of this
+# colour is that it is vivid. Nothing below drops under S=58%.
+# Ordered bright -> deep. #ff5ec4 and #da4fa7 are the two anchors.
+text_magenta_blaze = '#ff7ace'   # S 100%, lum 40% -- brightest, still full sat
+text_magenta_hot   = '#ff5cc3'   # S 100%, lum 33% -- ff5ec4 itself, to 1 digit
+text_magenta_vivid = '#f84fba'   # S  92%, lum 29%
+text_magenta_rich  = '#ed45af'   # S  82%, lum 25%
+text_magenta_deep  = '#da4fa7'   # S  65%, lum 23% -- the second anchor
+text_magenta_wine  = '#cf3095'   # S  62%, lum 18%
+text_magenta_port  = '#ad2e7f'   # S  58%, lum 12% -- deepest before it goes muddy
+
+# ---- the tmux chrome's own hues, brought down to body level. Every colour
+# here is already on screen in the bar or the pane borders; each is scaled to
+# ~27% luminance -- phosphor's own reading effort -- so the transcript belongs
+# to the frame around it instead of contrasting with it. Source accent in the
+# comment; `cc-fg <that hex>` still gets the raw one if the poster value is
+# what you want.
+text_acidteal    = '#00a17f'   # @pane_lines_bright / @ui-bright (#00ffc8)
+text_tron        = '#00a265'   # tron green, greener lean       (#00ff9f)
+text_turquoise   = '#2ea07a'   # pill_turquoise                 (#47f5bb)
+text_lasercyan   = '#1e9da3'   # @bar_bright, the window list   (#2ff5ff)
+text_session     = '#009cba'   # @session_hue, the active tab   (#00d5ff)
+text_iceblue     = '#6396a0'   # pill_ice_blue, desaturated end (#9fefff)
+text_copyviolet  = '#b46df2'   # @copy_mode_color, the non-teal (#be73ff)
+
+# ---- reading colours: e-paper and the famous editor foregrounds, all at 31%.
+# WHY SO FEW. Brightness-matching is what makes these comparable, and it also
+# collapses them: dracula #f8f8f2, monokai #f8f8f2, vscode #d4d4d4, base16
+# #d8d8d8 and e-ink's own white ALL land within three units of #979797 once
+# scaled to 31%. They are the same colour at different brightnesses, and the
+# brightness is the part that glares. So one entry, `chalk`, stands for the
+# whole neutral family, and everything else listed below is here because it
+# has a HUE that survives the match.
+text_chalk       = '#979797'   # dracula / monokai / vscode / base16, all of them
+text_eink        = '#989892'   # E Ink Carta grey -- the reference paper
+text_paper       = '#9a978f'   # newsprint, a touch warm
+text_parchment   = '#9d9687'   # the warm end, aged paper
+text_catppuccin  = '#9097ac'   # mocha fg  (#cdd6f4) -- blue lean
+text_everforest  = '#a09681'   # everforest fg (#d3c6aa) -- warm green-grey
+text_rosepine    = '#9795a4'   # rose-pine text (#e0def4) -- violet grey
+text_kanagawa    = '#9b9783'   # kanagawa fujiWhite (#dcd7ba) -- paper yellow
+text_material    = '#8f9999'   # material fg (#eeffff) -- coldest, cyan grey
+
+# ---- GLOW TINTS: near-whitepoint colours that still clear the shader's gate.
+# These are the only entries here that deliberately sit ABOVE the reading band,
+# because glow is bought with brightness and nothing else. The live shader
+# (macbook-m4max-2056-theme-friendly-sharp.glsl) computes halo weight as
+#
+#     w = smoothstep(0.22, 0.55, tsat) * peak_channel * (1 + 0.9 * blueBias)
+#
+# tsat = (max-min)/max. So "near white" and "glows" pull against each other by
+# construction: whiter means min climbs toward max, tsat falls, and the gate
+# closes. There is no colour that is both whiter AND glowier than #b46df2
+# (tsat 0.55, w 1.16) -- that hex is already at the top of the ramp.
+#
+# What IS available: hold tsat just under the gate's ceiling and spend the
+# brightness instead. Every glow_* below is HSV S=0.45, V=1.00 -- peak channel
+# pinned at 255, min at 140. Measured w in the comments; all land at 67-84% of
+# copyviolet's weight while being far paler and much brighter, so the halo sits
+# over a brighter glyph and reads at least as lit.
+#
+# NO GREEN. The shader kills bloom within ~36 deg of the foreground hue
+# (#00b012, hue 0.352 turns), so a white-green glows exactly zero. It is not a
+# tuning problem, it is fgHueExclude. Blue is the opposite case -- blueBias
+# gives blue-dominant emitters up to 1.9x, which is why glow_blue tops the set.
+text_glow_violet = '#d98cff'   # w 0.89 -- copyviolet's hue, pulled toward white
+text_glow_blue   = '#8cbcff'   # w 0.97 -- the strongest, blue compensation
+text_glow_cyan   = '#8cecff'   # w 0.84
+text_glow_amber  = '#ffdd8c'   # w 0.78 -- white amber
+text_glow_rose   = '#ff8c9f'   # w 0.78 -- white red
+# The whiter tier: S=0.32. Closer to the whitepoint, and the gate ramp costs
+# almost exactly what you would expect -- w ~0.25, a quarter of the above.
+# Listed so the tradeoff is pickable rather than argued about.
+text_pale_violet = '#e4adff'   # w 0.25
+text_pale_blue   = '#adcfff'   # w 0.26
+text_pale_cyan   = '#adf1ff'   # w 0.24
+text_pale_amber  = '#ffe7ad'   # w 0.23
+text_pale_rose   = '#ffadbb'   # w 0.23
+
+# ---- lit_* : GLOW AT READING BRIGHTNESS -- the tier glow_*/pale_* couldn't be.
+# glow_* buys its halo with brightness (V pinned at 1.00), which is exactly why
+# it sits above the band and glares as a page of body text: glow_amber is 75%
+# luminance. This set inverts the trade. It spends SATURATION instead, sitting
+# at HSV S=0.60 -- past satGateHi (0.55), so the gate is FULLY open and the
+# smoothstep costs nothing -- and then drops V until WCAG luminance lands on
+# 28-30%, phosphor's own reading level. Same halo budget, none of the glare.
+#
+# S=0.60 is deliberate and is the ceiling here: it is one notch past the gate
+# so the ramp is saturated with margin, while still reading as a tinted grey-
+# ish foreground rather than a highlighter. Higher S buys nothing (the gate is
+# already at 1.0) and only costs readability.
+#
+# The blue half is the real prize. blueBias (w *= 1 + 0.9 * blueBias) pays out
+# on blue-DOMINANT emitters, and at these luminances the blue channel is free
+# -- blue carries 7% of luminance, so `blue`/`indigo`/`iris` can pin the blue
+# channel at 255 and STILL only be 20-28% bright. Measured w 1.25-1.52, above
+# copyviolet's 1.16, which was called the top of the ramp. It is, at V=1.00.
+#
+# WHAT IS NOT HERE, and why. amber (w 0.67), gold (0.61), jade (0.64) and teal
+# (0.66) all fall under the glow_* floor once dimmed to 30%: their hues have no
+# blue channel to lean on, so peak_channel IS the brightness, and dimming them
+# dims the halo one-for-one. They are already covered at full brightness by
+# glow_amber and the tmux-chrome entries above. No green, same as glow_* --
+# fgHueExclude, not a tuning problem.
+text_lit_rose    = '#ee5f83'   # w 0.93, lum 28%
+text_lit_coral   = '#d87d56'   # w 0.85, lum 30% -- the warm end that survives
+text_lit_orange  = '#c08a4d'   # w 0.75, lum 30% -- weakest here, still > pale_*
+text_lit_aqua    = '#4aa0b8'   # w 0.78, lum 30%
+text_lit_cyan    = '#519ccb'   # w 0.93, lum 30%
+text_lit_azure   = '#5893db'   # w 1.08, lum 28% -- past copyviolet from here on
+text_lit_blue    = '#6689fe'   # w 1.41, lum 28% -- blue channel pinned, still dim
+text_lit_indigo  = '#6b66ff'   # w 1.52, lum 20% -- the strongest halo on the box
+text_lit_iris    = '#9466ff'   # w 1.38, lum 23%
+text_lit_violet  = '#b866ff'   # w 1.25, lum 27% -- copyviolet's hue, brighter halo
+text_lit_purple  = '#d15fee'   # w 1.03, lum 28%
+text_lit_orchid  = '#e059d9'   # w 0.88, lum 28%
+text_lit_magenta = '#e65cbc'   # w 0.90, lum 28%
+
+
+
+# seg_* now drive TEXT color directly (no more bg fill) -- distinct neon per
+# field instead of one uniform pill color, so `pill`/`pill2` no longer apply.
+seg_os      = '#aaff00'
+seg_user    = '#00ffe1'
+seg_dir     = '#2ff5ff'
+seg_git     = '#ff5ec4'
+seg_lang    = '#00ff41'
+seg_devops  = '#00d5ff'
+seg_time    = '#ffc21e'
+logo_apple       = '#5a9345'
+logo_git         = '#f1502f'
+logo_node        = '#5e941e'
+logo_bun         = '#8d867d'
+logo_c           = '#798593'
+logo_cpp         = '#00599c'
+logo_rust        = '#ce422b'
+logo_go          = '#0091b5'
+logo_php         = '#777bb4'
+logo_java        = '#5382a1'
+logo_kotlin      = '#7f52ff'
+logo_haskell     = '#5e5086'
+logo_python      = '#3776ab'
+logo_docker      = '#218ada'
+logo_conda       = '#3b9b25'
+logo_pixi        = '#9a7f4b'
+logo_kubernetes  = '#326ce5'
+logo_terraform   = '#7b42bc'
+logo_helm        = '#0f1689'
+logo_clock       = '#37474f'
+# <<< pill-managed <<<
+
+# ---- off-pill accents -------------------------------------------------------
+color_red   = '#ff3355'
+color_green = '#33ff66'
+color_cyan  = '#2ff5ff'
+color_yellow = '#ffdd00'
+
+# =============================================================================
+#  LEFT CAP — os is always present, so it owns the cap and takes no chevron
+# =============================================================================
+[os]
+disabled = false
+style = "fg:logo_apple bold"
+format = "[ $symbol ]($style)"
+
+[os.symbols]
+Macos = "\U000f01c4"
+Windows = "\U000f0372"
+Ubuntu = "\U000f0548"
+Debian = "\U000f08da"
+Arch = "\U000f08c7"
+Fedora = "\U000f08db"
+Alpine = ""
+Linux = "\U000f033d"
+Raspbian = "\U000f043f"
+Mint = "\U000f08ed"
+Manjaro = ""
+Redhat = "\U000f111b"
+RedHatEnterprise = "\U000f111b"
+Amazon = ""
+Android = ""
+CentOS = ""
+Gentoo = "\U000f08e8"
+Pop = ""
+SUSE = ""
+Artix = "\U000f08c7"
+EndeavourOS = ""
+AOSC = ""
+
+# =============================================================================
+#  MIDDLE — every module owns its leading wedge " " (ink on incoming color)
+# =============================================================================
+[username]
+show_always = true
+style_user = "fg:seg_user bold"
+style_root = "fg:logo_git bold"
+format = "[$user ]($style)"
+
+[directory]
+style = "fg:seg_dir bold"
+format = "[ $path$read_only ]($style)"
+truncation_length = 3
+truncation_symbol = "…/"
+
+[directory.substitutions]
+"~" = "\U000f02dc "
+"Documents" = "\U000f0219 "
+"Downloads" = " "
+"Music" = "\U000f075a "
+"Pictures" = " "
+"Developer" = "\U000f0c8b "
+
+
+# --- languages & runtimes ---
+[c]
+symbol = " "
+style = "fg:seg_lang bold"
+format = "[ $symbol](fg:logo_c bold)[$version ]($style)"
+
+[cpp]
+symbol = " "
+style = "fg:seg_lang bold"
+format = "[ $symbol](fg:logo_cpp bold)[$version ]($style)"
+
+[rust]
+symbol = " "
+style = "fg:seg_lang bold"
+format = "[ $symbol](fg:logo_rust bold)[$version ]($style)"
+
+[golang]
+symbol = " "
+style = "fg:seg_lang bold"
+format = "[ $symbol](fg:logo_go bold)[$version ]($style)"
+
+[nodejs]
+symbol = " "
+style = "fg:seg_lang bold"
+format = "[ $symbol](fg:logo_node bold)[$version ]($style)"
+
+[bun]
+symbol = " "
+style = "fg:seg_lang bold"
+format = "[ $symbol](fg:logo_bun bold)[$version ]($style)"
+
+[php]
+symbol = " "
+style = "fg:seg_lang bold"
+format = "[ $symbol](fg:logo_php bold)[$version ]($style)"
+
+[java]
+symbol = " "
+style = "fg:seg_lang bold"
+format = "[ $symbol](fg:logo_java bold)[$version ]($style)"
+
+[kotlin]
+symbol = " "
+style = "fg:seg_lang bold"
+format = "[ $symbol](fg:logo_kotlin bold)[$version ]($style)"
+
+[haskell]
+symbol = " "
+style = "fg:seg_lang bold"
+format = "[ $symbol](fg:logo_haskell bold)[$version ]($style)"
+
+[python]
+symbol = " "
+style = "fg:seg_lang bold"
+format = "[ $symbol](fg:logo_python bold)[$version ]($style)"
+
+# --- containers, envs & devops ---
+[docker_context]
+symbol = " "
+style = "fg:seg_devops bold"
+format = "[ $symbol](fg:logo_docker bold)[$context ]($style)"
+
+[conda]
+symbol = " "
+style = "fg:seg_devops bold"
+format = "[ $symbol](fg:logo_conda bold)[$environment ]($style)"
+
+[pixi]
+symbol = "\U000f03d7 "
+style = "fg:seg_devops bold"
+format = "[ $symbol](fg:logo_pixi bold)[$version($environment) ]($style)"
+
+[kubernetes]
+disabled = false
+symbol = "⎈ "
+style = "fg:seg_devops bold"
+format = "[ $symbol](fg:logo_kubernetes bold)[$context( \\($namespace\\)) ]($style)"
+
+[terraform]
+disabled = false
+symbol = "\U000f1062 "
+style = "fg:seg_devops bold"
+format = "[ $symbol](fg:logo_terraform bold)[$workspace ]($style)"
+
+[helm]
+disabled = false
+symbol = "\U000f0833 "
+style = "fg:seg_devops bold"
+format = "[ $symbol](fg:logo_helm bold)[$version ]($style)"
+
+# =============================================================================
+#  TAIL — these ride seg_time, the pill's tail colour.
+#
+#  They reuse seg_time rather than introducing seg_* vars of their own ON PURPOSE:
+#  starship-pill-themes.txt gives each theme exactly 7 colours (os|user|dir|git|
+#  lang|devops|time), so an 8th field would invalidate every theme in that file.
+#  Both are conditional and both sit before [time], so [time] still owns the cap.
+# =============================================================================
+[cmd_duration]
+disabled = true
+min_time = 500
+show_milliseconds = false
+style = "fg:seg_time bold"
+format = "[ \U000f051b $duration ]($style)"
+
+[jobs]
+symbol = "✦ "
+number_threshold = 1
+symbol_threshold = 1
+style = "fg:seg_time bold"
+format = "[ $symbol$number ]($style)"
+
+# =============================================================================
+#  RIGHT CAP — time is always present, so it owns the cap
+# =============================================================================
+[time]
+disabled = true
+time_format = "%H:%M:%S"
+style = "fg:seg_time bold"
+format = "[ \U000f0954  ]($style)"
+
+# =============================================================================
+#  OFF-PILL
+# =============================================================================
+[status]
+disabled = false
+symbol = "✘"
+style = "fg:color_red bold"
+format = "[ $symbol$status]($style)"
+
+[character]
+disabled = false
+success_symbol = "[ ❯](bold seg_time)"
+error_symbol = "[ \\(╯°□°\\)╯ ❯](bold color_red)"
+vimcmd_symbol = "[ ▓](bold color_green)"
+vimcmd_replace_one_symbol = "[ ▓](bold color_yellow)"
+vimcmd_replace_symbol = "[ ▓](bold color_yellow)"
+vimcmd_visual_symbol = "[ ▓](bold color_cyan)"
+
+# =============================================================================
+#  PROFILES — MUST STAY LAST IN THIS FILE
+#
+#  Transient prompt: once you hit Enter, the finished prompt is repainted as this
+#  profile, so scrollback keeps the command and drops the ~89-cell pill. Only the
+#  live prompt stays full. starship 1.26 wires transience for fish/PowerShell/cmd
+#  but NOT zsh (25 hits in the fish init, 0 in zsh), so zsh/starship-transient.zsh
+#  drives it by hand off an accept-line widget. `--profile` is a first-class CLI
+#  flag on every shell, so the mechanism is supported -- only the wiring is ours.
+#
+#  WHY LAST: [profiles] is a TOML table, so it swallows EVERY top-level key that
+#  follows it. Put it above `palette` and `palette` silently becomes
+#  profiles.palette -- the palette then never resolves, every seg_* colour dies,
+#  and the whole prompt renders with no colour at all. That is not hypothetical;
+#  it is exactly what happened when this block first landed at the top of the
+#  file. Any new top-level key belongs ABOVE this block.
+# =============================================================================
+[profiles]
+transient = "$character"

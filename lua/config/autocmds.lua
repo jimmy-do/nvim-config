@@ -11,9 +11,15 @@ vim.api.nvim_create_autocmd("FileType", {
   end,
 })
 
--- `nvim .` leaves an empty [No Name] buffer behind: LazyVim's neo-tree netrw
--- hijack bwipeouts the directory buffer, and wiping the last buffer makes Vim
--- spawn a fresh empty one. Drop it once a real file gets loaded.
+-- The `nvim <dir>` handling that used to live here moved to
+-- lua/plugins/startup-session.lua, which restores that project's session first
+-- and only falls back to the file picker when there is no session. It had to
+-- move: the decision is shared with the bare-`nvim` path and with the spec-time
+-- dashboard toggle, and all three have to agree.
+
+-- Wiping the startup directory buffer above leaves an empty [No Name] behind:
+-- wiping the last buffer makes Vim spawn a fresh empty one. Drop it once a real
+-- file gets loaded.
 vim.api.nvim_create_autocmd("BufReadPost", {
   group = vim.api.nvim_create_augroup("jimmy_kill_startup_scratch", { clear = true }),
   callback = function()

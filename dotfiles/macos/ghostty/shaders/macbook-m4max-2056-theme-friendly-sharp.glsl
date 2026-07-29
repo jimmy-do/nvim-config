@@ -17,20 +17,24 @@
 
 float warp = 0.0; // curvature OFF
 float scan = 0.0; // Scanlines OFF (was 1.56), matching the 321urx preset's clean-text look
-float paperLift = 0.0; // neutral foreground lift; saturated syntax is gated out
-float paperGrain = 0.0; // stable foreground-only paper tooth; background stays clean
+float paperLift = 0.10; // 0.0 -> 0.10 on 2026-07-28: RESTORED. The 07-27 "drop sepia + grain" commit
+                        // removed this without being asked; Jimmy wants the warm paper lift on
+                        // neutral foreground. Do not zero it again as a side effect of bloom work.
+float paperGrain = 0.0; // stays 0: Jimmy's rule is no grain; only the lift comes back.
 
 // Motion ports from amber-phosphor-321urx.glsl, kept color-neutral.
 float barDir = 1.0;
 float barGap = 6.0;
 float barSpeed = 0.09;
 float barHeight = 0.10;
-float barDark = 0.055;
+float barDark = 0.0;    // 0.055 -> 0.0 on 2026-07-28: bar was VISIBLY rolling — animation=false
+                        // does NOT freeze iTime, it advances on every redraw (cursor blink,
+                        // clock). Jimmy's rule: no grain, no scanlines, no rolling artifacts.
 float retraceN = 21.0;
-float retraceBright = 0.045;
+float retraceBright = 0.0; // 0.045 -> 0.0 on 2026-07-28, same reason as barDark.
 float retraceW = 0.0009;
 float retraceSplit = 0.10;
-float flagAmount = 0.0005;
+float flagAmount = 0.0;    // 0.0005 -> 0.0 on 2026-07-28: horizontal flagging trails the bar; dead with it.
 float flagTau = 0.030;
 float syncTwitchXPx = 0.0;
 float syncTwitchYPx = 0.0;
@@ -49,7 +53,22 @@ float softAmount = 0.0; // 0.18 -> 0.0 on 2026-07-25. This was the ONLY thing ma
 // foreground fails the saturation gate and stays razor sharp, exactly the
 // same neutral-vs-saturated split the paper-lift below already relies on.
 // Set neonBloom to 0.0 to switch the whole effect off.
-float neonBloom = 0.60;        // 0.22 -> 0.60 on 2026-07-27, MEASURED on-screen at 1920x1200 non-HiDPI:
+float neonBloom = 0.60;        // 0.40 -> 0.60 on 2026-07-28 (REVERT, same day): Jimmy vetoed the bloom cut
+                               // in ALL CAPS -- the bloom itself is wanted; "nvim blurry" must be solved some
+                               // other way or not at all. Do NOT lower this knob for sharpness complaints.
+                               // 0.90 -> 0.60 on 2026-07-28 (REVERT): the 0.60 -> 0.90 bump below was justified
+                               // by an NSScreen probe reading 1920x1200 @ scale 1.0. That probe was WRONG -- a
+                               // compiled probe the same day read backing 3456. The glow looked weak because the
+                               // MacBook was on HiDPI (mode detune), NOT because the LCD black floor swallowed it.
+                               // 0.60 is the last value confirmed BY EYE at a real 1:1 1920x1200 backing.
+                               // 0.60 -> 0.90 on 2026-07-28: MacBook-only complaint, backing MEASURED still
+                               // 1920x1200 @ scale 1.0 (NSScreen) = NOT a mode detune, so radius 13 and the
+                               // 7.0 fill knee stay correct and are deliberately untouched. This is the PANEL:
+                               // the halo is additive and the LCD's lifted black floor swallows it where the
+                               // 321URX OLED's true black does not. 1.20 was measured blown out on 07-27, so
+                               // 0.90 is the last step below that. Shaders are global -- if the 321URX ever
+                               // looks too hot, this line is why.
+                               // 0.22 -> 0.60 on 2026-07-27, MEASURED on-screen at 1920x1200 non-HiDPI:
                                // 0.22 rendered a halo of a few /255 = invisible, 1.20 blew out. 0.60 bracketed
                                // between them and confirmed by eye. NOTE: 0.22 was never a known-good value for
                                // THIS mode -- it was tuned 07-23 for 2336x1510 and carried here by the partial
@@ -71,7 +90,10 @@ float neonBloom = 0.60;        // 0.22 -> 0.60 on 2026-07-27, MEASURED on-screen
                                // true black and therefore reads much glowier. That
                                // divergence is intentional and wanted -- do not "fix" it
                                // by splitting the presets again.
-float neonBloomRadiusPx = 13.0; // halo reach in backing px. 22 -> 13 on 2026-07-27: back on 1920x1200 backing,
+float neonBloomRadiusPx = 13.0; // 17 -> 13 on 2026-07-28: the 17 experiment made yaml-key halos
+                               // spill onto neighbouring text ("white blooming"). 13 is the
+                               // confirmed value for this backing; bigger reach = key-glow spill.
+                               // halo reach in backing px. 22 -> 13 on 2026-07-27: back on 1920x1200 backing,
                                // so this returns to the 07-25 value tuned for exactly that mode. At 22 the six
                                // ring taps reach ~2 glyph widths out and mostly sample background.
                                // 13 -> 22 on 2026-07-26: 1900x1200 -> 3200x1800 backing (x1.68), same scaling model as the 07-23/07-25 changes below.
@@ -342,7 +364,10 @@ void mainImage(out vec4 fragColor, in vec2 fragCoord)
         // Noise goes as 1/sqrt(N), so 48 sits halfway between the old 24 and 96:
         // ~1.4x cleaner than the speckle that prompted the bump, at half the cost.
         // tapNorm keeps neonBloom / the 7.0 knee / the /6.0 divisor calibrated.
-        const int TAPS = 24;
+        const int TAPS = 48; // 96 -> 48 on 2026-07-28: Jimmy traded tap density for halo REACH
+                             // (radius 13 -> 17 above) at similar cost. 96 was approved by eye
+                             // but redundant once the halo got bigger; 48 stays speckle-clean
+                             // thanks to gate-in-alpha + the probe early-exit.
         float tapNorm = 24.0 / float(TAPS);
         if (!skipBloom) for (int i = 0; i < TAPS; i++) {
             float fi = float(i) + 0.5;
