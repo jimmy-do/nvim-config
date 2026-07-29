@@ -294,6 +294,38 @@ void mainImage(out vec4 fragColor, in vec2 fragCoord)
         float wsum = 0.0;
         float spin = hash(fragCoord.xy) * 6.2831853;
         float fgHue = hue01(fgHueRef); // loop-invariant, hoisted out of the tap loop
+        // ---- 2026-07-28 THERMALS: gate-in-alpha + early-exit probe ----
+        // neon_gate.glsl (must run FIRST in the chain) precomputes the full
+        // emission gate ONCE per pixel and stores it as alpha = w * 0.5
+        // (max ~0.95). Taps below read that instead of re-running HSV + hue
+        // math 24x per pixel. alpha > 0.99 means the gate pass is MISSING
+        // (raw terminal alpha is 1.0 with background-opacity = 1) -- e.g. it
+        // failed to compile -- and the tap falls back to the old inline gate,
+        // so the worst failure mode is exactly the pre-07-28 behaviour.
+        //
+        // PROBE: 9 fixed alpha reads across the disk. If none carry any
+        // emission, no halo can land here and the 24-tap loop is skipped --
+        // which is most of the screen (dark background far from any neon).
+        // Taps are deterministic (no spin) so the skip boundary is stable,
+        // not flickery. A probe this sparse CAN miss a thin emitter near the
+        // disk's outer edge and clip the faintest fringe of its halo; if a
+        // border halo ever looks truncated, set probeEnable = 0.0 (full
+        // gather everywhere, still keeps the gate-in-alpha ALU win).
+        float probeEnable = 1.0;
+        bool skipBloom = false;
+        if (probeEnable > 0.0) {
+            float pr = neonBloomRadiusPx;
+            float pa = texture(iChannel0, sampleUv).a;
+            pa = max(pa, texture(iChannel0, sampleUv + vec2( 0.55, 0.0) * pr * px).a);
+            pa = max(pa, texture(iChannel0, sampleUv + vec2(-0.55, 0.0) * pr * px).a);
+            pa = max(pa, texture(iChannel0, sampleUv + vec2(0.0,  0.55) * pr * px).a);
+            pa = max(pa, texture(iChannel0, sampleUv + vec2(0.0, -0.55) * pr * px).a);
+            pa = max(pa, texture(iChannel0, sampleUv + vec2( 0.65,  0.65) * pr * px).a);
+            pa = max(pa, texture(iChannel0, sampleUv + vec2(-0.65,  0.65) * pr * px).a);
+            pa = max(pa, texture(iChannel0, sampleUv + vec2( 0.65, -0.65) * pr * px).a);
+            pa = max(pa, texture(iChannel0, sampleUv + vec2(-0.65, -0.65) * pr * px).a);
+            skipBloom = pa < 0.002; // below the smallest storable weight (0.5/255)
+        }
         // 24 -> 96 taps on 2026-07-27 to kill halo speckle. The per-pixel random
         // `spin` above means neighbouring pixels sample disjoint point sets; with
         // only 24 samples over a ~530px^2 disk they disagreed badly and that
@@ -312,40 +344,50 @@ void mainImage(out vec4 fragColor, in vec2 fragCoord)
         // tapNorm keeps neonBloom / the 7.0 knee / the /6.0 divisor calibrated.
         const int TAPS = 24;
         float tapNorm = 24.0 / float(TAPS);
-        for (int i = 0; i < TAPS; i++) {
+        if (!skipBloom) for (int i = 0; i < TAPS; i++) {
             float fi = float(i) + 0.5;
             float rr = sqrt(fi / float(TAPS));
             float a = fi * 2.39996323 + spin;
             vec2 off = vec2(cos(a), sin(a)) * rr * neonBloomRadiusPx * px;
             float g = exp(-3.0 * rr * rr);
-            vec3 tapc = texture(iChannel0, sampleUv + off).rgb;
-            // Emission strength = PEAK CHANNEL, not luma. Luma weights
-            // (R .30 / G .59 / B .11) rate a pure blue emitter ~9x weaker
-            // than an equally driven yellow -- right for text legibility,
-            // wrong for "how hard is this neon tube driven". Peak channel
-            // treats every hue as an equal citizen; blue halos still read
-            // dimmer to the eye, but that is physics, not a gate.
-            float tmax = max(tapc.r, max(tapc.g, tapc.b));
-            float tmin = min(tapc.r, min(tapc.g, tapc.b));
-            float tsat = (tmax - tmin) / max(tmax, 0.0001);
-            float lift = neonDimBoost * (1.0 - tmax) * smoothstep(0.60, 0.90, tsat);
-            float w = smoothstep(neonBloomSatGateLo, neonBloomSatGateHi, tsat)
-                    * min(tmax + lift, 1.0);
-            // Foreground hue exclusion. The saturation gate above can no longer
-            // exclude the foreground (#00b012 is fully saturated), so kill glow
-            // for taps sitting at the foreground's hue instead. Applied AFTER
-            // the saturation gate so it only ever subtracts.
-            if (fgHueExclude > 0.0) {
-                float hd = hueDist(hue01(tapc), fgHue);
-                w *= smoothstep(fgHueBand, fgHueBand + fgHueSoft, hd);
+            vec4 tap4 = texture(iChannel0, sampleUv + off);
+            vec3 tapc = tap4.rgb;
+            float w;
+            if (tap4.a <= 0.99) {
+                // Gate precomputed by neon_gate.glsl: decode alpha = w * 0.5.
+                w = tap4.a * 2.0;
+            } else {
+                // Gate pass missing (alpha is raw 1.0): inline fallback, the
+                // exact pre-07-28 per-tap gate. Kept verbatim -- if this path
+                // is hot, neon_gate.glsl is broken; fix THAT, don't tune here.
+                // Emission strength = PEAK CHANNEL, not luma. Luma weights
+                // (R .30 / G .59 / B .11) rate a pure blue emitter ~9x weaker
+                // than an equally driven yellow -- right for text legibility,
+                // wrong for "how hard is this neon tube driven". Peak channel
+                // treats every hue as an equal citizen; blue halos still read
+                // dimmer to the eye, but that is physics, not a gate.
+                float tmax = max(tapc.r, max(tapc.g, tapc.b));
+                float tmin = min(tapc.r, min(tapc.g, tapc.b));
+                float tsat = (tmax - tmin) / max(tmax, 0.0001);
+                float lift = neonDimBoost * (1.0 - tmax) * smoothstep(0.60, 0.90, tsat);
+                w = smoothstep(neonBloomSatGateLo, neonBloomSatGateHi, tsat)
+                        * min(tmax + lift, 1.0);
+                // Foreground hue exclusion. The saturation gate above can no longer
+                // exclude the foreground (#00b012 is fully saturated), so kill glow
+                // for taps sitting at the foreground's hue instead. Applied AFTER
+                // the saturation gate so it only ever subtracts.
+                if (fgHueExclude > 0.0) {
+                    float hd = hueDist(hue01(tapc), fgHue);
+                    w *= smoothstep(fgHueBand, fgHueBand + fgHueSoft, hd);
+                }
+                // Blue compensation: the eye sees blue light at a fraction of
+                // the brightness of equally driven warm hues, so blue halos
+                // vanished ("no glow" on the k8s-blue session chip) while gold
+                // and turquoise radiated. Boost blue-DOMINANT emitters toward
+                // perceptual parity; warm and balanced hues are untouched.
+                float blueBias = clamp(tapc.b - max(tapc.r, tapc.g), 0.0, 1.0);
+                w *= 1.0 + 0.9 * blueBias;
             }
-            // Blue compensation: the eye sees blue light at a fraction of
-            // the brightness of equally driven warm hues, so blue halos
-            // vanished ("no glow" on the k8s-blue session chip) while gold
-            // and turquoise radiated. Boost blue-DOMINANT emitters toward
-            // perceptual parity; warm and balanced hues are untouched.
-            float blueBias = clamp(tapc.b - max(tapc.r, tapc.g), 0.0, 1.0);
-            w *= 1.0 + 0.9 * blueBias;
             neon += tapc * w * g;
             wsum += w * g;
         }
