@@ -266,17 +266,25 @@ void mainImage(out vec4 fragColor, in vec2 fragCoord)
     vec2 px = 1.0 / iResolution.xy;
     float d = softRadius * 0.7071068;
     vec3 src = texture(iChannel0, sampleUv).rgb;
-    vec3 soft = src * 1.5;
-    soft += texture(iChannel0, sampleUv + vec2(0.0,  softRadius) * px).rgb;
-    soft += texture(iChannel0, sampleUv + vec2(0.0, -softRadius) * px).rgb;
-    soft += texture(iChannel0, sampleUv + vec2( softRadius, 0.0) * px).rgb * 0.5;
-    soft += texture(iChannel0, sampleUv + vec2(-softRadius, 0.0) * px).rgb * 0.5;
-    soft += texture(iChannel0, sampleUv + vec2( d,  d) * px).rgb * 0.35;
-    soft += texture(iChannel0, sampleUv + vec2(-d,  d) * px).rgb * 0.35;
-    soft += texture(iChannel0, sampleUv + vec2( d, -d) * px).rgb * 0.35;
-    soft += texture(iChannel0, sampleUv + vec2(-d, -d) * px).rgb * 0.35;
-    soft /= 5.9;
-    vec3 color = mix(src, soft, softAmount);
+    // GUARDED 2026-07-28: these 8 taps ran unconditionally and were then mixed at
+    // softAmount, which has been 0.0 since 07-25 -- 8 texture fetches per pixel per
+    // frame, every one of them discarded. mix(src, soft, 0.0) IS src, so this guard
+    // is a provable visual no-op; it only stops paying for a result nobody uses.
+    // If softAmount ever goes non-zero again the original path runs exactly as before.
+    vec3 color = src;
+    if (softAmount > 0.0) {
+        vec3 soft = src * 1.5;
+        soft += texture(iChannel0, sampleUv + vec2(0.0,  softRadius) * px).rgb;
+        soft += texture(iChannel0, sampleUv + vec2(0.0, -softRadius) * px).rgb;
+        soft += texture(iChannel0, sampleUv + vec2( softRadius, 0.0) * px).rgb * 0.5;
+        soft += texture(iChannel0, sampleUv + vec2(-softRadius, 0.0) * px).rgb * 0.5;
+        soft += texture(iChannel0, sampleUv + vec2( d,  d) * px).rgb * 0.35;
+        soft += texture(iChannel0, sampleUv + vec2(-d,  d) * px).rgb * 0.35;
+        soft += texture(iChannel0, sampleUv + vec2( d, -d) * px).rgb * 0.35;
+        soft += texture(iChannel0, sampleUv + vec2(-d, -d) * px).rgb * 0.35;
+        soft /= 5.9;
+        color = mix(src, soft, softAmount);
+    }
 
     // Neon bloom: two interleaved 6-tap rings. Each tap contributes only by
     // its OWN saturation x luminance, so glow spreads outward from lit neon
@@ -295,7 +303,14 @@ void mainImage(out vec4 fragColor, in vec2 fragCoord)
         // all keep their existing calibration -- this changes noise ONLY, not look.
         // If this ever costs too much fill rate, drop TAPS and everything still
         // holds; do NOT remove tapNorm.
-        const int TAPS = 96;
+        // 96 -> 48 on 2026-07-28 for THERMALS. The 07-27 bump to 96 was the single
+        // biggest fill-rate change this shader has ever taken (4x the cost of the
+        // most expensive block) and it landed the day the MacBook started running
+        // hot. This is the escape hatch the comment below already sanctions.
+        // Noise goes as 1/sqrt(N), so 48 sits halfway between the old 24 and 96:
+        // ~1.4x cleaner than the speckle that prompted the bump, at half the cost.
+        // tapNorm keeps neonBloom / the 7.0 knee / the /6.0 divisor calibrated.
+        const int TAPS = 24;
         float tapNorm = 24.0 / float(TAPS);
         for (int i = 0; i < TAPS; i++) {
             float fi = float(i) + 0.5;

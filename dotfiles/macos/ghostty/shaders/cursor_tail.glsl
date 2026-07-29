@@ -14,7 +14,7 @@ vec3 sRGBToLinear(vec3 c) {
 vec4 TRAIL_COLOR = vec4(iCurrentCursorColor.rgb, iCurrentCursorColor.a); // for custom color: vec4(0.2, 0.6, 1.0, 0.5); (wrap in sRGBToLinear for correct brightness)
 const float DURATION = 0.30; // in seconds. VENDORED+TUNED: was 0.09 ("way too goddamn fast").
 const float MAX_TRAIL_LENGTH = 0.2;
-const float THRESHOLD_MIN_DISTANCE = 1.5; // min distance to show trail (units of cursor width)
+const float THRESHOLD_MIN_DISTANCE = 3.0; // KNOB 1 2026-07-27 (was 1.5): scroll steps are 1-2 cells and spawned a trail per frame; pane jumps are far bigger and keep theirs. Revert: 1.5
 const float BLUR = 2.0; // blur size in pixels (for antialiasing)
 
 // COMET FADE, take two (2026-07-22). Take one had three separate alpha
@@ -256,6 +256,20 @@ void mainImage(out vec4 fragColor, in vec2 fragCoord){
         float comet = mix(TAIL_FADE, 1.0, smoothstep(0.0, 1.0, along));
 
         float trailAlpha = clamp(antialising(sdfTrail), 0.0, 1.0) * comet;
+
+        // KNOB 2 2026-07-27: purely vertical moves never trail. Page scrolls
+        // (u/d) are pure-vertical cursor jumps and re-fired the trail on every
+        // press; horizontal and diagonal jumps (pane moves, word motions) keep
+        // theirs. CAVEAT: vertical tmux pane jumps (C-j/C-k) also lose their
+        // trail. Revert: delete this line.
+        // ...and "purely vertical" was too strict: a page shift usually lands
+        // the cursor on a different COLUMN (indent, first non-blank), so the
+        // move is slightly diagonal and isVertical (0.001 tolerance) never
+        // fired. Vertical-DOMINANT: suppress when the move is >4x taller than
+        // it is wide. Real pane hops sideways and word motions are nowhere
+        // near that ratio.
+        float vertDominant = step(delta_abs.x * 4.0, delta_abs.y);
+        trailAlpha *= 1.0 - max(isVertical, vertDominant);
 
         // Once the trail collapses onto the current cursor, its antialiased
         // fringe extends just beyond the cursor punch-hole below. Without an
