@@ -1161,14 +1161,28 @@ end
 --
 --   depth 1 (toplevel)  120%   + bold
 --   depth 2 (level2)    115%
---   depth 3+            110%
+--   depth 3             110%
+--   depth 4             105%
+--   depth 5             100%
+--   depth 6             95%
+--   depth 7             90%
+--   depth 8+            85%
 --
--- All three are above 100%, so nesting deeper never makes a key darker than the
--- theme's own key colour -- it only makes it slightly less bright than the rung
--- above. The old ramp went the other way (down to -12 lightness at depth 3+) and
--- there is no headroom below a muted key hue on a dark background: depth 3 met
--- Comment and disappeared. Depth 3 is where the actual content of a manifest
--- lives, so it is the last thing that should be fading out.
+-- 2026-07-29: the ladder used to STOP at depth 3 -- the query only captures
+-- depth 1 and 2, so everything from depth 3 down rendered as one flat
+-- @property.yaml and nesting carried no colour past the second rung. That is
+-- what made :YamlKeyColor look like it stamped one static hex on every key: it
+-- was correctly ramping three rungs into a file that is mostly depth 4+.
+-- Depths 3-8 are now painted per-level by yaml-key-depth.lua.
+--
+-- Depth 1-3 are unchanged (120/115/110), so nothing about the current look
+-- moves; the step-down only starts at depth 4, which is new ground. The old ramp
+-- went the other way (down to -12 lightness at depth 3+) and there is no
+-- headroom below a muted key hue on a dark background: depth 3 met Comment and
+-- disappeared. Depth 3 is where the actual content of a manifest lives, so it is
+-- the last thing that should be fading out -- hence the floor below, which stops
+-- any rung landing within 8 points of Comment's lightness no matter how deep the
+-- file goes. Without it this is just the old regression with more steps.
 --
 -- The 5% step is a hint, not the hierarchy signal -- bold on the toplevel rung
 -- is what actually separates the manifest skeleton from everything under it.
@@ -1206,6 +1220,42 @@ local function apply_yaml_key_ramp()
     { group = "@property.yaml.level2", pct = 115 },
     { group = "@property.yaml", pct = 110 },
   }
+
+  -- Depth 3..8 as their own groups. d3 is 110 -- the same value bare
+  -- @property.yaml already carries -- so depth 3 renders identically whether or
+  -- not the painter is running, and the visible change starts at depth 4.
+  --
+  -- Steps are ABSOLUTE lightness points, not percentages of the base. A 5%
+  -- relative step is ~3 points off a dim base and ~4 off a bright one, and the
+  -- first attempt at this ladder clamped rungs against Comment's lightness --
+  -- which collapsed d4..d8 to a single hex for any bright base (:YamlKeyColor
+  -- #40ffff put all five on #53ffff, i.e. the exact flat-key bug this is meant
+  -- to fix). Comparing raw L across hues is the error: a saturated cyan at L 62
+  -- is legible where grey at L 62 is not, so Comment is not the reference.
+  --
+  -- The background is. min_l keeps the deepest rung clear of it, and the step
+  -- only compresses when there genuinely is not room for six rungs -- so the
+  -- ladder is always monotonic and always six distinct colours.
+  local _, _, base_l = rgb_to_hsl(hex_to_rgb(base))
+  local top_l = base_l * 1.10 -- d3 == bare @property.yaml's 110%, unchanged
+  local min_l = 30
+  local bg = normal_bg()
+  if bg then
+    local _, _, bg_l = rgb_to_hsl(hex_to_rgb(bg))
+    min_l = math.max(bg_l + 18, 30)
+  end
+  local step = 5
+  if top_l - (step * 5) < min_l then
+    step = math.max((top_l - min_l) / 5, 0)
+  end
+  for depth = 3, 8 do
+    local target_l = top_l - (depth - 3) * step
+    -- Back to percent so every rung goes through the same scale_l the first
+    -- three use; no second code path for lightness.
+    local pct = base_l > 0 and (target_l / base_l) * 100 or 100
+    table.insert(rungs, { group = "@property.yaml.d" .. depth, pct = pct })
+  end
+
   for _, rung in ipairs(rungs) do
     local ok_g, cur = pcall(vim.api.nvim_get_hl, 0, { name = rung.group, link = false })
     local adj = (ok_g and type(cur) == "table") and vim.deepcopy(cur) or {}

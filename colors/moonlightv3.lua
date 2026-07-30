@@ -59,6 +59,14 @@
 -- turning into hot magenta -- that is a different colour, not a brighter one,
 -- so it stays stock too.
 --
+-- base0F is also nearly base07's hue (295 vs 296), so "moonlightv3 shows two
+-- pinks" sounds like it is about this slot. It is NOT: base0F is a sparse base16
+-- slot and barely paints anything in a manifest. The two pinks you actually SEE
+-- in yaml are locators, and they are set in lua/config/theme_baseline.lua's
+-- moonlightv3 table (@string.yaml.url / @string.yaml.path), not here. base0F was
+-- swapped to cyan on 2026-07-29 for exactly that misreading and reverted the same
+-- day -- the change was invisible, because this slot is not what paints the pink.
+--
 -- base00/base01/base02 are the background, cursorline and selection. Untouched.
 
 vim.cmd("highlight clear")

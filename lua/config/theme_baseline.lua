@@ -213,8 +213,9 @@ return {
   --
   -- 2026-07-29 revision (three separate requests, all applied here):
   --   1. The green key ramp is reverted to v3's Moonlight blues.
-  --   2. `-` and `:` are the SAME colour, base08 red -- there is no receding
-  --      slate punctuation family any more.
+  --   2. `-` and `:` are copied from v3 verbatim: dash base08 red #ff5370, colon
+  --      aqua #29cccc. They are NOT the same colour (a later request corrected an
+  --      "all punctuation is one red" pass). The slate colon is still gone.
   --   3. EVERY value family must clear the shader's HSV-sat 0.55 gate. gold
   --      (0.533), purple (0.384), pink (0.259) and null (0.46) all failed it and
   --      were re-cut: hue held to the decimal, black point pulled down to raise
@@ -241,9 +242,10 @@ return {
   --                 file", which is the one thing those three share.
   --   brackets      were #40ffff aqua while dashes were red, splitting structure
   --                 across two families. All structure is red now.
-  --   colons        were #29cccc aqua in v3; v4 briefly dropped them to slate and
-  --                 they are now base08 red, the same as every other punctuation
-  --                 mark (2026-07-29 request). Glow volume is back.
+  --   colons        v4 briefly dropped them to slate, then briefly to base08 red;
+  --                 both were rejected. They are v3's #29cccc aqua again -- the
+  --                 only punctuation mark NOT in the red structure family, and the
+  --                 one exception v3's own split earned (2026-07-29 request).
   --
   -- The key ramp is v3's ramp, copied verbatim. v4 changes value logic, not keys.
   ["moonlightv4"] = {
@@ -273,13 +275,14 @@ return {
     ["@label.yaml"] = "#ff5370", -- &anchor / *alias
     ["@label"] = "#ff5370",
 
-    -- --- Colons join STRUCTURE ---------------------------------------------
-    -- 2026-07-29, per request: ALL punctuation is one colour. A colon is not a
-    -- different kind of thing from a list dash, so `-` and `:` are both base08
-    -- red #ff5370 (sat 0.675, hue 350 -- past the gate, so both glow). This
-    -- reverses the "colons recede to slate" call in the v4 header note; that note
-    -- is kept there as the record of the trade, not as current behaviour.
-    ["@punctuation.delimiter.yaml"] = "#ff5370", -- was #566490 slate
+    -- --- Colons: v3's colon colour, copied verbatim -------------------------
+    -- 2026-07-29, per request: take v3's `-` and `:` marks exactly as v3 sets
+    -- them, and v3 does NOT put both on one colour. The dash keeps base08 red
+    -- #ff5370 (above), the colon takes v3's aqua two steps down in value --
+    -- #29cccc, hue 180, sat 0.80, still past the gate so it still glows, but the
+    -- dash wins when both are on a line. This replaces the brief "all punctuation
+    -- is one red" call; that note is kept above as the record of the trade.
+    ["@punctuation.delimiter.yaml"] = "#29cccc", -- (180) v3's colon, verbatim
 
     -- --- DATA: mint, base0B scaled to ceiling -----------------------------
     ["@string.yaml"] = "#2fffc9",
