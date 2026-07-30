@@ -548,7 +548,6 @@ return {
   ["solarized-osaka-day"] = { "bright", 0.452 },
   ["sonokai"] = { "bright", 0.389 },
   ["sorbet"] = { "bright", 0.393 },
-  ["stormv2"] = { "bright", 0.489 },
   ["synthweave"] = { "neon", 0.598 },
   ["synthweave-transparent"] = { "neon", 0.598 },
   ["terafox"] = { "neon", 0.538 },

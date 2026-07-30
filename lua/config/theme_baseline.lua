@@ -15,78 +15,8 @@ return {
   -- base16-tokyo-night-terminal-storm deliberately has NO entry here.
   -- 2026-07-28: its hand-tuned yaml key/value ramp, orange delimiters and yellow
   -- brackets were removed at Jimmy's request -- it renders as the stock upstream
-  -- base16 scheme now. The full table lives on unchanged as stormv2 below; copy
-  -- it back under the base16 name (and re-add that name to is_storm_family() in
-  -- theme.lua) to restore the old look.
-
-  -- =========================================================================
-  -- stormv2 — the storm copy. Colorscheme: colors/stormv2.lua
-  -- =========================================================================
-  -- Byte-identical to the table above on purpose: a copy has to OPEN looking
-  -- exactly like what it was copied from. Retune here freely; the original
-  -- above is untouched. (theme.lua's is_storm_family() gives this name the
-  -- same punctuation overlay, cyan indent scope and yaml startup pass.)
-  ["stormv2"] = {
-    ["@property.yaml"] = "#364b8b", -- fields (keys)
-    ["@punctuation.delimiter.yaml"] = "#ff8c1a", -- colons, commas
-    ["@punctuation.special.yaml"] = "#ff8c1a", -- list dashes, anchors
-    ["@punctuation.bracket"] = "#f7ff00", -- [] {}
-    ["@string.yaml"] = "#00ffff", -- values
-    ["@comment"] = "#243745",
-    ["Comment"] = "#243745",
-
-    -- YAML value shapes (captures live in after/queries/yaml/highlights.scm).
-    -- Plain values stay #00ffff above; these are the subsets worth telling
-    -- apart in a manifest. Hexes are tokyo-night storm's own palette so they
-    -- read as part of the theme rather than bolted on.
-    --
-    -- Delete any line here and that shape falls back to the cyan above -- the
-    -- captures are built to degrade, so this table is the whole opt-in surface.
-    ["@type.yaml.enum"] = "#e0af68", -- Deployment, RollingUpdate, ClusterIP
-    ["@constant.yaml.env"] = "#f7768e", -- LOG_LEVEL, POSTGRES_HOST
-    ["@string.yaml.image"] = "#bb9af7", -- registry.io/api:1.2.3, actions/checkout@v4
-    ["@string.yaml.version"] = "#9ece6a", -- apps/v1, 1.2.3
-    ["@string.yaml.url"] = "#73daca", -- https://, oci://
-    -- Shares the env-constant pink above. They are the only two that reuse a
-    -- hex, and they do not co-occur: env NAMES are a k8s manifest thing,
-    -- conditions are a workflow thing.
-    ["@string.yaml.condition"] = "#f7768e", -- inputs.action == 'plan'
-    -- Path was #a9b1d6 "deliberately quiet" — but that IS tokyonight's fg, so
-    -- paths read as unstyled text / key-grey (user: "same color as keys").
-    -- 2026-07-27: quiet now means DIM URL-TEAL — still recessive, but hued, so
-    -- it stays in the locator family instead of impersonating plain text.
-    ["@string.yaml.path"] = "#73daca", -- exact url teal: one locator family, ONE colour — no shade pairs
-    -- Bare selector words (plan, write, main). Without this entry the class
-    -- derived to #c09efe — a near-clone of the image purple above.
-    ["@string.yaml.word"] = "#ff9e64", -- tokyonight's own orange
-    -- @number.yaml.quantity (512Mi, 30s) is intentionally absent: it inherits
-    -- @number, so quantities match plain numbers instead of adding a colour.
-
-    -- Document-root keys only. Nested keys keep @property.yaml above.
-    -- Same hue family as the #364b8b nested key, just lifted enough to separate
-    -- the manifest skeleton from everything hanging off it. Deliberately NOT a
-    -- bright accent -- top-level keys are structure, not something to look at.
-    ["@property.yaml.toplevel"] = "#4a67ad",
-
-    -- Middle rung of the key ramp, sitting between the toplevel above and the
-    -- #364b8b nested key. Explicit because the derived fallback (see
-    -- derive_yaml_baseline in theme.lua) fills this rung from @property, which
-    -- in storm is a desaturated grey -- that made the ramp non-monotonic
-    -- (bright > grey > dark) instead of a clean three-step fade.
-    ["@property.yaml.level2"] = "#40589e",
-
-    -- Shell flags inside `run:` blocks -- -no-color, -out=tfplan, -auto-approve.
-    -- These come from the bash parser injected into run: scalars, and defaulted
-    -- to the same muted #8b8fab as operators, which is most of the grey in a
-    -- workflow file. Scoped to .bash so other languages' parameters are
-    -- untouched. Not a yaml group, but it is yaml files where it shows up.
-    ["@variable.parameter.bash"] = "#e0af68",
-
-    -- NOTE: {{ }} / [[ ]] braces are NOT set here. They are painted by the
-    -- GlobalPunctBracket matchadd overlay in theme.lua, which outranks any
-    -- treesitter capture -- setting @punctuation.bracket.helm here looks correct
-    -- and does nothing. The knob for those is STORM_BRACKET in theme.lua.
-  },
+  -- base16 scheme now. That tuning lived on in a copy called stormv2, which was
+  -- itself deleted 2026-07-29; nothing in the storm family remains.
 
   -- =========================================================================
   -- moonlightv2 — the base16-moonlight copy. Colorscheme: colors/moonlightv2.lua
@@ -118,6 +48,10 @@ return {
   -- pass -- toned down on request. Ratchet a single line up or down by editing
   -- its hex; the sat figure in each comment is the current one.
   ["moonlightv2"] = {
+    -- No key ramp here on purpose: v2's keys come from derive_yaml_baseline in
+    -- theme.lua, i.e. moonlight's own fg ramp. (A light-blue ramp was added here
+    -- 2026-07-29 and removed the same day -- v2 was never meant to change.)
+
     -- --- Values: catch-all and quoted -------------------------------------
     ["@string.yaml"] = "#17ffc9", -- (166) base0B #2df4c0 .82 -> sat .91
     ["@string.yaml.value"] = "#17ffc9", -- (166)
@@ -172,12 +106,17 @@ return {
   -- "everything glows" collapses into one bright smear without it.
   ["moonlightv3"] = {
     -- --- Key ramp ----------------------------------------------------------
-    -- Set EXPLICITLY. Leaving these out (as moonlightv2 does) lets toplevel
-    -- keys fall through to base16's own near-white #d9ddf3 at sat 0.11, which
-    -- puts a white key next to a pale value on the very first line of every
-    -- manifest. Three rungs descending by depth, all built from Moonlight's own
-    -- blues (base03 #748cd6 / base02 #596399), all kept BELOW the gate on
-    -- purpose -- the keys are the dull anchor the glow reads against.
+    -- Set EXPLICITLY. Leaving these out lets toplevel keys fall through to
+    -- base16's own near-white #d9ddf3 at sat 0.11, which puts a white key next
+    -- to a pale value on the very first line of every manifest. Three rungs
+    -- descending by depth on one hue.
+    --
+    -- All built from Moonlight's own blues (base03 #748cd6 / base02 #596399),
+    -- all kept BELOW the gate on purpose -- the keys are the dull anchor the
+    -- glow reads against.
+    --
+    -- 2026-07-29: a full-saturation green ramp (#00ff00 base) was tried here and
+    -- reverted the same day. Do not retry it.
     ["@property.yaml.toplevel"] = "#8b9fe0", -- apiVersion, kind, spec
     ["@property.yaml.level2"] = "#6b7cb8", -- mid rung
     ["@property.yaml"] = "#566490", -- depth 3+, deliberately receding
@@ -211,10 +150,21 @@ return {
     -- palette. Do not re-mix these by eye -- take the slot and scale it.
     ["@type.yaml.enum"] = "#ffc777", -- stock base0A, already at ceiling  Deployment
      ["@string.yaml.word"] = "#ffc777", -- stock base0A shared with enums — bare selectors
-    ["@string.yaml.version"] = "#ff8486", -- stock base09 #f67f81 (ORANGE) -> ceiling  apps/v1, 1.9.x
+    -- 2026-07-29: version/condition were #ff8486 -- base09 #f67f81 scaled to the
+    -- ceiling, which turned an orange into a PINK at hue 359, nine degrees off
+    -- the base08 #ff5370 on dashes and anchors. Two pinks that close read as one
+    -- colour rendered twice, not as two classes. They now take base0E, the purple
+    -- slot images vacated the same day. One-line revert: #ff8486.
+    ["@string.yaml.version"] = "#c49dff", -- (265) stock base0E #b994f1 -> ceiling  apps/v1, 1.9.x
     ["@constant.yaml.env"] = "#2fffc9", -- stock base0B #2df4c0 -> ceiling  LOG_LEVEL
-    ["@string.yaml.condition"] = "#ff8486", -- stock base09 -> ceiling
-    ["@string.yaml.image"] = "#c49dff", -- stock base0E #b994f1 -> ceiling
+    ["@string.yaml.condition"] = "#c49dff", -- (265) shares version, as elsewhere
+    -- Image was #c49dff (stock base0E #b994f1 scaled up). That is a lavender,
+    -- not a pink, and next to the #fbbdff url it read as the dim half of a
+    -- shade pair -- the exact objection the path line below already records.
+    -- 2026-07-29: images now take the bright pink outright, so the locator
+    -- family is ONE pink (url + image) and ONE cyan (path). One-line revert to
+    -- the lavender: #c49dff.
+    ["@string.yaml.image"] = "#fbbdff", -- stock base0F, shared with url
     ["@boolean.yaml.kdragon"] = "#04d6ff", -- stock base0C #04d1f9 -> ceiling  true/false
     ["@number.yaml.kdragon"] = "#40ffff", -- stock base0D, already at ceiling  3, 1.5
     ["@number.yaml.quantity"] = "#40ffff", -- stock base0D, already at ceiling  512Mi
@@ -223,8 +173,13 @@ return {
 
     -- --- Locators ----------------------------------------------------------
     ["@string.yaml.url"] = "#fbbdff", -- stock base0F #ecb2f0 -> ceiling  https://
-    -- Path keeps the URL slot and stays dimmer: same kind of thing, less weight.
-    ["@string.yaml.path"] = "#f9a5ff", -- stock #d990de -> ceiling  values.yaml
+    -- Path was #f9a5ff: the URL pink one step down in weight. On screen that read
+    -- as two pinks a hair apart, not as a hierarchy -- a repoURL and the helm path
+    -- three lines below it looked like the same colour twice (2026-07-29). Paths
+    -- are now cyan, so the locator family is ONE pink and ONE cyan instead of a
+    -- shade pair. Same objection moonlightv2 already records: shade pairs read as
+    -- lazy. Old value, one-line revert: #f9a5ff.
+    ["@string.yaml.path"] = "#00ffff", -- values.yaml, /healthz
 
     -- --- The dull anchor: absence, prose, and the key ramp ----------------
     -- These are deliberately left below the gate. Glow only reads as glow if
@@ -234,6 +189,143 @@ return {
     ["@comment"] = "#415281",
     ["Comment"] = "#415281",
   },
+  -- =========================================================================
+  -- moonlightv4 — v3's palette, assigned by ROLE instead of by SHAPE.
+  -- Colorscheme: colors/moonlightv4.lua (read its header for the full rationale)
+  -- =========================================================================
+  -- Built 2026-07-29 from a measured comparison against gruvbox. gruvbox gives
+  -- one colour per ROLE and reuses it everywhere -- its yaml image/url/path are
+  -- all #d3869b, its quoted and unquoted strings are the same green. v3 gave one
+  -- colour per SHAPE, which produced 9 value colours, several pairs the eye
+  -- cannot separate, and literals sharing hexes with punctuation.
+  --
+  -- SIX value families here, one structure family, and every hex is a Moonlight
+  -- slot. The families are 32+ degrees apart, so nothing reads as a shade pair:
+  --
+  --   mint   164  #2fffc9   DATA        strings, quoted or not          sat 0.82
+  --   gold    42  #ffce5e   TYPE        enums, bare selectors           sat 0.63
+  --   purple 264  #9e5eff   SCALAR      numbers, booleans, quantities   sat 0.63
+  --   pink   296  #f45eff   LOCATOR     urls, paths, images             sat 0.63
+  --   cyan   180  #40ffff   EXTERNAL    versions, env vars, conditions  sat 0.75
+  --   blue   224  #5e89ff   ABSENCE     null / ~                        sat 0.63
+  --   red    350  #ff5370   STRUCTURE   ALL punctuation: dashes, colons,
+  --                                     brackets, anchors, aliases, merges
+  --
+  -- 2026-07-29 revision (three separate requests, all applied here):
+  --   1. The green key ramp is reverted to v3's Moonlight blues.
+  --   2. `-` and `:` are the SAME colour, base08 red -- there is no receding
+  --      slate punctuation family any more.
+  --   3. EVERY value family must clear the shader's HSV-sat 0.55 gate. gold
+  --      (0.533), purple (0.384), pink (0.259) and null (0.46) all failed it and
+  --      were re-cut: hue held to the decimal, black point pulled down to raise
+  --      saturation. Same colours, actually blooming.
+  --
+  -- WHAT MOVED FROM V3, AND WHY EACH ONE MOVED:
+  --
+  --   quoted        #0dffc0 -> mint. Quoting is not a semantic difference, so it
+  --                 is not a colour difference. gruvbox: quoted == unquoted.
+  --   scalars       number/quantity were #40ffff -- the SAME hex as brackets and
+  --                 `---`, i.e. a literal painted as structure -- and boolean was
+  --                 #04d6ff, ten degrees off the numbers it is not the same thing
+  --                 as. All three now share purple, the Constant role gruvbox
+  --                 puts numbers, booleans and constants in together.
+  --   locators      path was #00ffff, which put it in a four-way cyan pileup with
+  --                 numbers, colons and booleans. url/image/path are one family
+  --                 now, exactly as gruvbox has them.
+  --   version       was #ff8486, a red. Red is the keyword/structure colour, so a
+  --                 version string read as structure. Moved to cyan, which is
+  --                 free now that scalars are purple.
+  --   env           was #2fffc9, byte-identical to strings, so LOG_LEVEL was
+  --                 indistinguishable from any other value. Joined version and
+  --                 conditions: the family is "values that come from outside this
+  --                 file", which is the one thing those three share.
+  --   brackets      were #40ffff aqua while dashes were red, splitting structure
+  --                 across two families. All structure is red now.
+  --   colons        were #29cccc aqua in v3; v4 briefly dropped them to slate and
+  --                 they are now base08 red, the same as every other punctuation
+  --                 mark (2026-07-29 request). Glow volume is back.
+  --
+  -- The key ramp is v3's ramp, copied verbatim. v4 changes value logic, not keys.
+  ["moonlightv4"] = {
+    -- --- Key ramp: v3's ramp, copied verbatim ------------------------------
+    -- 2026-07-29: the green ramp (#00ff00 base) is REVERTED. Back to v3's own
+    -- Moonlight blues (base03 #748cd6 / base02 #596399), all below the glow gate
+    -- on purpose -- keys are the dull anchor the glowing values read against.
+    -- Green also sat inside the shader's hue 90-162 dead band, so it could never
+    -- bloom; that was not the objection, but it is why green is not a candidate.
+    --
+    -- Only level2 is load-bearing: apply_yaml_key_ramp recomputes the other two
+    -- rungs from it (120% / 115% / 110% HSL lightness, bold on toplevel), so the
+    -- toplevel and bare hexes are overwritten on every reload. Written out anyway
+    -- so this table shows what lands on screen. Retune level2, rescale the rest.
+    ["@property.yaml.toplevel"] = "#8b9fe0", -- apiVersion, kind, spec
+    ["@property.yaml.level2"] = "#6b7cb8", -- THE BASE (same as v3)
+    ["@property.yaml"] = "#566490", -- depth 3+, deliberately receding
+
+    -- --- STRUCTURE: one family, base08 red --------------------------------
+    -- Dashes, anchors, aliases, merge keys and brackets are all "this is the
+    -- shape of the document, not its content". gruvbox puts every one of them on
+    -- one colour (its orange #fe8019); Moonlight's equivalent is base08.
+    ["@punctuation.special.yaml"] = "#ff5370", -- list dashes
+    ["@punctuation.special.doc"] = "#ff5370", -- --- / ...
+    ["@punctuation.special.merge"] = "#ff5370", -- `<<`
+    ["@punctuation.bracket"] = "#ff5370", -- [] {}  (was aqua in v3)
+    ["@label.yaml"] = "#ff5370", -- &anchor / *alias
+    ["@label"] = "#ff5370",
+
+    -- --- Colons join STRUCTURE ---------------------------------------------
+    -- 2026-07-29, per request: ALL punctuation is one colour. A colon is not a
+    -- different kind of thing from a list dash, so `-` and `:` are both base08
+    -- red #ff5370 (sat 0.675, hue 350 -- past the gate, so both glow). This
+    -- reverses the "colons recede to slate" call in the v4 header note; that note
+    -- is kept there as the record of the trade, not as current behaviour.
+    ["@punctuation.delimiter.yaml"] = "#ff5370", -- was #566490 slate
+
+    -- --- DATA: mint, base0B scaled to ceiling -----------------------------
+    ["@string.yaml"] = "#2fffc9",
+    ["@string.yaml.value"] = "#2fffc9",
+    ["@string.yaml.quoted"] = "#2fffc9", -- exact share: quoting is not a role
+
+    -- --- TYPE: gold, base0A pushed past the gate --------------------------
+    -- 2026-07-29: base0A #ffc777 measures HSV sat 0.533 -- under the shader's
+    -- 0.55 floor, so it never bloomed. Hue 41.6 is held exactly and the black
+    -- point is pulled down instead (min channel 0x77 -> 0x5e), which buys
+    -- saturation without touching the colour. One-line revert: #ffc777.
+    ["@type.yaml.enum"] = "#ffce5e", -- (41.6) sat 0.63  Deployment, ClusterIP
+    ["@string.yaml.word"] = "#ffce5e", -- (41.6) bare selectors: plan, write, main
+
+    -- --- SCALAR: purple, base0E pushed past the gate ----------------------
+    -- #c49dff measured sat 0.384, badly under the gate -- the whole scalar family
+    -- was dead on screen. Hue 264 held exactly, black point pulled to 0x5e.
+    -- One-line revert: #c49dff.
+    ["@boolean.yaml.kdragon"] = "#9e5eff", -- (264) sat 0.63  true/false/yes/no
+    ["@number.yaml.kdragon"] = "#9e5eff", -- (264) 3, 1.5
+    ["@number.yaml.quantity"] = "#9e5eff", -- (264) 512Mi, 30s
+
+    -- --- LOCATOR: pink, base0F pushed past the gate -----------------------
+    -- #fbbdff measured sat 0.259, the worst offender in v4 -- a pastel, not a
+    -- neon. Hue 296 held exactly, black point pulled to 0x5e. Still 32 degrees
+    -- off purple, so the two families stay separable. One-line revert: #fbbdff.
+    ["@string.yaml.url"] = "#f45eff", -- (296) sat 0.63  https://, oci://
+    ["@string.yaml.path"] = "#f45eff", -- (296) values.yaml, /healthz
+    ["@string.yaml.image"] = "#f45eff", -- (296) registry.io/api:1.2.3
+
+    -- --- EXTERNAL: cyan, base0D (already at ceiling) ----------------------
+    ["@string.yaml.version"] = "#40ffff", -- apps/v1, 1.9.x
+    ["@constant.yaml.env"] = "#40ffff", -- LOG_LEVEL, POSTGRES_HOST
+    ["@string.yaml.condition"] = "#40ffff", -- ${{ }} conditions
+
+    -- --- Absence ----------------------------------------------------------
+    -- null / ~ is a VALUE, so per the 2026-07-29 "all values glow" request it is
+    -- no longer parked on the dull side with the comments. It keeps the periwinkle
+    -- hue (224) it had as stock base03 #748cd6 -- so absence still tracks the key
+    -- ramp's family rather than joining a data family -- with the black point
+    -- pulled to 0x5e to clear the 0.55 gate. One-line revert: #748cd6.
+    ["@constant.builtin.yaml.kdragon"] = "#5e89ff", -- (224) sat 0.63  null / ~
+    ["@comment"] = "#415281",
+    ["Comment"] = "#415281",
+  },
+
   -- =========================================================================
   -- icyv2 — the base16-icy copy. Colorscheme: colors/icyv2.lua
   -- =========================================================================

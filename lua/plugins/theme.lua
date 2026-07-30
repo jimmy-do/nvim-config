@@ -628,22 +628,22 @@ local STORM_PERIOD = "#ff8c1a"
 -- same colour across every language. Change this one constant to re-tune.
 local STORM_BRACKET = "#f7ff00"
 
--- Storm and its copies. stormv2 (colors/stormv2.lua) is a byte-identical
--- palette copy, and every storm-specific branch below is keyed to the theme
--- NAME -- so without this the copy would silently lose the punctuation
--- overlay, the cyan indent scope, the dim indent guides and the yaml startup
--- pass, and would render nothing like the theme it was copied from. Add
--- further copies here; do NOT scatter more name equality checks.
+-- Storm and its copies. Every storm-specific branch below is keyed to the theme
+-- NAME, so this one gate turns the whole package on: the punctuation overlay,
+-- the cyan indent scope, the dim indent guides and the yaml startup pass. Add
+-- any future storm copy here; do NOT scatter more name equality checks.
 --
 -- 2026-07-28: base16-tokyo-night-terminal-storm was REMOVED from this list at
--- Jimmy's request -- the upstream base16 scheme now renders stock (no orange
--- periods, no yellow {{ }}, no cyan indent scope, no dim guides, no yaml
--- key/value ramp). Its theme_baseline.lua entry was deleted in the same pass.
--- All of that tuning still lives on in stormv2, which is what this gate is now
--- for; re-adding the base16 name here plus its baseline table brings it back.
+-- Jimmy's request -- the upstream base16 scheme now renders stock.
+-- 2026-07-29: stormv2 was deleted at Jimmy's request (colorscheme file, baseline
+-- table, facet and glow-tier rows all gone), so the family is now EMPTY and
+-- every branch below is dormant. Kept intact rather than ripped out: adding a
+-- name here plus a theme_baseline.lua table restores the whole look at once.
+local STORM_FAMILY = {}
+
 local function is_storm_family(theme)
   theme = theme or vim.g.colors_name or ""
-  return theme == "stormv2"
+  return STORM_FAMILY[theme] == true
 end
 
 local function apply_global_punct_highlights()
@@ -1099,7 +1099,15 @@ local function derive_yaml_baseline()
   return out
 end
 
-local function apply_theme_baseline_colors()
+-- derived_only = true stamps ONLY the derived yaml classes and skips the
+-- hand-tuned per-theme table. That is the :ThemeRaw path: the custom captures in
+-- after/queries/yaml/highlights.scm (@property.yaml.toplevel, @string.yaml.url,
+-- @type.yaml.enum, ...) exist in no colorscheme on earth, so without the
+-- derivation they all collapse onto @property/@string and yaml renders flat --
+-- which reads as "syntax highlighting wiped". The derivation takes its colours
+-- from the stock theme's own palette, so running it in raw mode changes no
+-- theme colour; it only spreads them across the yaml token classes.
+local function apply_theme_baseline_colors(derived_only)
   -- Derived set first: gives every colorscheme the full yaml range in its own
   -- colours. Guarded so a failure here can never stop the hand-tuned baseline
   -- below from applying.
@@ -1122,6 +1130,10 @@ local function apply_theme_baseline_colors()
     for group, fg in pairs(derived) do
       stamp_fg(group, fg)
     end
+  end
+
+  if derived_only then
+    return
   end
 
   -- Hand-tuned entries stamped on top, so they always win where they exist.
@@ -1521,6 +1533,28 @@ end
 -- by apply_active_indent_scope_highlights above.
 local STORM_DIM_INDENT_GUIDE = "#282d45"
 
+-- Per-theme dim-guide pins. Any theme NOT listed here leaves SnacksIndent alone,
+-- which is the pre-existing behaviour.
+--
+-- The string "bg" means INVISIBLE: the group is painted in the theme's own
+-- Normal background, so the dim guide is not a faint line, it is not there.
+--
+-- moonlightv3 (2026-07-29): SnacksIndent resolves to an EMPTY table under this
+-- theme -- no fg at all -- so indent-ladder.lua's fade floor
+-- (`group_fg("SnacksIndent") or group_fg("NonText")`, ~line 465) fell through to
+-- NonText #748cd6, moonlight's bright base03 periwinkle. The ladder then faded
+-- #748cd6 -> #00ffff: bright to bright, so the trail read as a lit guide even
+-- though snacks' own guides are off (lua/plugins/indent.lua). At "bg" the floor
+-- IS the background: rows fade up out of nothing and the unlit ladder is fully
+-- invisible, which is the point -- only the enclosing guide should be visible.
+--
+-- This reads the background, it does not set it: normal_bg() is resolved fresh
+-- on every apply, so the bg knobs (:BgBrightness and friends) stay in charge of
+-- what that colour actually is.
+local THEME_DIM_INDENT_GUIDE = {
+  ["moonlightv3"] = "bg",
+}
+
 local dim_indent_guide_groups = {
   "SnacksIndent",
   "IblIndent",
@@ -1531,8 +1565,15 @@ local dim_indent_guide_groups = {
 }
 
 local function apply_dim_indent_guide_highlights()
-  if not is_storm_family() then
+  local guide = THEME_DIM_INDENT_GUIDE[vim.g.colors_name or ""]
+  if not guide and is_storm_family() then
+    guide = STORM_DIM_INDENT_GUIDE
+  end
+  if not guide then
     return
+  end
+  if guide == "bg" then
+    guide = normal_bg()
   end
   for _, group in ipairs(dim_indent_guide_groups) do
     local ok, hl = pcall(vim.api.nvim_get_hl, 0, { name = group, link = false })
@@ -1542,8 +1583,8 @@ local function apply_dim_indent_guide_highlights()
         adj[k] = v
       end
     end
-    adj.fg = STORM_DIM_INDENT_GUIDE
-    adj.sp = STORM_DIM_INDENT_GUIDE
+    adj.fg = guide
+    adj.sp = guide
     pcall(vim.api.nvim_set_hl, 0, group, adj)
   end
 end
@@ -2396,9 +2437,31 @@ return {
     opts = function(_, opts)
       -- Boot on whatever <leader>uC last left you on. Falls back to storm when
       -- nothing has been picked yet, or when the saved scheme is gone.
+      local fallback = "base16-tokyo-night-terminal-storm"
       local ok, state = pcall(require, "config.colorscheme_state")
-      opts.colorscheme = ok and state.startup("base16-tokyo-night-terminal-storm")
-        or "base16-tokyo-night-terminal-storm"
+      local want = ok and state.startup(fallback) or fallback
+      -- A FUNCTION, not a string, on purpose. LazyVim wraps opts.colorscheme in
+      -- LazyVim.try and its on_error does `colorscheme habamax` — so one theme
+      -- that throws on load (astrotheme without setup(), flow without setup())
+      -- did not just fail, it silently threw away the saved pick and booted grey.
+      -- Owning the pcall here means a broken theme degrades to HIS default and
+      -- says which theme broke, instead of looking like the picker forgot.
+      opts.colorscheme = function()
+        if want == fallback then
+          vim.cmd.colorscheme(fallback)
+          return
+        end
+        local loaded, err = pcall(vim.cmd.colorscheme, want)
+        if not loaded then
+          vim.cmd.colorscheme(fallback)
+          vim.schedule(function()
+            vim.notify(
+              ("Saved colorscheme %q failed to load — booted %s instead.\n%s"):format(want, fallback, err),
+              vim.log.levels.WARN
+            )
+          end)
+        end
+      end
       return opts
     end,
     init = function()
@@ -2430,21 +2493,37 @@ return {
         setter(val)
         return true
       end
-      vim.api.nvim_create_user_command("FgLightness", function(opts)
-        if set_fg_knob("FgLightness", function(v)
-          fg_lightness = v
-        end, opts.args) then
-          apply_theme_adjustments()
-        end
-      end, { nargs = 1 })
-      vim.api.nvim_create_user_command("FgSaturation", function(opts)
-        if set_fg_knob("FgSaturation", function(v)
-          fg_saturation = v
-        end, opts.args) then
-          apply_theme_adjustments()
-        end
-      end, { nargs = 1 })
+      -- Every numeric knob below is declared through this: bare `:Knob` reports
+      -- the value it currently holds, `:Knob <n>` sets it. Reporting matters
+      -- because the ColorScheme handler re-stamps knobs from colorscheme_defaults
+      -- on every switch, so what you last typed is not necessarily what is live.
+      local function define_numeric_knob(name, get, set, lo, hi)
+        vim.api.nvim_create_user_command(name, function(opts)
+          if vim.trim(opts.args) == "" then
+            vim.notify(name .. ": " .. tostring(get()))
+            return
+          end
+          if set_fg_knob(name, set, opts.args, lo, hi) then
+            apply_theme_adjustments()
+          end
+        end, { nargs = "?", desc = name .. " (no argument reports the current value)" })
+      end
+
+      define_numeric_knob("FgLightness", function()
+        return fg_lightness
+      end, function(v)
+        fg_lightness = v
+      end)
+      define_numeric_knob("FgSaturation", function()
+        return fg_saturation
+      end, function(v)
+        fg_saturation = v
+      end)
       vim.api.nvim_create_user_command("FgAdjust", function(opts)
+        if #opts.fargs == 0 then
+          vim.notify(("FgAdjust: %s %s"):format(tostring(fg_lightness), tostring(fg_saturation)))
+          return
+        end
         local lv, sv = tonumber(opts.fargs[1]), tonumber(opts.fargs[2])
         if not lv or not sv or lv < 0 or lv > 100 or sv < 0 or sv > 100 then
           vim.notify("FgAdjust: expected two numbers 0–100, e.g. :FgAdjust 65 70", vim.log.levels.ERROR)
@@ -2452,54 +2531,42 @@ return {
         end
         fg_lightness, fg_saturation = lv, sv
         apply_theme_adjustments()
-      end, { nargs = "+" })
+      end, { nargs = "*", desc = "FgAdjust <lightness> <saturation> (no argument reports the current values)" })
 
       -- :DragonBracketLightness <0-100> — kanagawa-dragon only. Lightness of the
       -- bracket color (50 = original #ded3b4, <50 darker, >50 brighter).
-      vim.api.nvim_create_user_command("DragonBracketLightness", function(opts)
-        if
-          set_fg_knob("DragonBracketLightness", function(v)
-            kanagawa_dragon_bracket_lightness = v
-          end, opts.args)
-        then
-          apply_theme_adjustments()
-        end
-      end, { nargs = 1 })
+      define_numeric_knob("DragonBracketLightness", function()
+        return kanagawa_dragon_bracket_lightness
+      end, function(v)
+        kanagawa_dragon_bracket_lightness = v
+      end)
 
       -- :RetroboxStringLightness <0-100> - retrobox only. Lightness for String,
       -- @string*, and @lsp.type.string* captures. 50 = original retrobox String.
-      vim.api.nvim_create_user_command("RetroboxStringLightness", function(opts)
-        if
-          set_fg_knob("RetroboxStringLightness", function(v)
-            retrobox_string_lightness = v
-          end, opts.args)
-        then
-          apply_theme_adjustments()
-        end
-      end, { nargs = 1 })
+      define_numeric_knob("RetroboxStringLightness", function()
+        return retrobox_string_lightness
+      end, function(v)
+        retrobox_string_lightness = v
+      end)
 
       -- :Sepia <-100..100> — bipolar warm/cool. 0 = neutral/off, positive = sepia
       -- (warm), negative = anti-sepia (cool). Negative extrapolates away from the
       -- sepia point via the same sepia_hex math, de-warming toward neutral/cool.
-      vim.api.nvim_create_user_command("Sepia", function(opts)
-        if set_fg_knob("Sepia", function(v)
-          sepia_amount = v
-        end, opts.args, -100, 100) then
-          apply_theme_adjustments()
-        end
-      end, { nargs = 1 })
+      define_numeric_knob("Sepia", function()
+        return sepia_amount
+      end, function(v)
+        sepia_amount = v
+      end, -100, 100)
 
       -- :YamlValueBrightness <0-100> — 50 = pipeline output as-is, <50 dimmer,
       -- >50 brighter. Hue and saturation are pinned; only lightness moves. This
       -- is the VALUE half of the pair -- :YamlKeyBrightness is the field half,
       -- and neither touches the other's groups.
-      vim.api.nvim_create_user_command("YamlValueBrightness", function(opts)
-        if set_fg_knob("YamlValueBrightness", function(v)
-          yaml_value_brightness = v
-        end, opts.args) then
-          apply_theme_adjustments()
-        end
-      end, { nargs = 1 })
+      define_numeric_knob("YamlValueBrightness", function()
+        return yaml_value_brightness
+      end, function(v)
+        yaml_value_brightness = v
+      end)
 
       -- :YamlValueBold [on|off|toggle] — bold every yaml VALUE, never the keys.
       -- No argument reports the current state. Survives theme switches because
@@ -2591,13 +2658,11 @@ return {
       -- :CommentBrightness <0-100> — lightness of comment groups only. Comments
       -- are immune to :FgAdjust/:Sepia by design; this is their dedicated dial.
       -- 50 = colorscheme-native, <50 dimmer, >50 brighter. Hue/saturation locked.
-      vim.api.nvim_create_user_command("CommentBrightness", function(opts)
-        if set_fg_knob("CommentBrightness", function(v)
-          comment_brightness = v
-        end, opts.args) then
-          apply_theme_adjustments()
-        end
-      end, { nargs = 1 })
+      define_numeric_knob("CommentBrightness", function()
+        return comment_brightness
+      end, function(v)
+        comment_brightness = v
+      end)
 
       -- Shared lock machinery, same semantics as :SepiaLock: session-only, one
       -- autocmd per lock re-applying the knob command 900ms after ColorScheme
@@ -2679,13 +2744,11 @@ return {
       -- which runs the ramp again afterwards — same story as :FgAdjust.
 
       -- :YamlKeyBrightness <0-100> — 50 = ramp output as-is, <50 dimmer, >50 brighter.
-      vim.api.nvim_create_user_command("YamlKeyBrightness", function(opts)
-        if set_fg_knob("YamlKeyBrightness", function(v)
-          yaml_key_brightness = v
-        end, opts.args) then
-          apply_theme_adjustments()
-        end
-      end, { nargs = 1 })
+      define_numeric_knob("YamlKeyBrightness", function()
+        return yaml_key_brightness
+      end, function(v)
+        yaml_key_brightness = v
+      end)
 
       -- :YamlKeyColor <#rrggbb | r g b | native> — replace the ramp's BASE colour
       -- (the depth rungs still apply on top). 'native' returns to the theme's own
@@ -2703,6 +2766,10 @@ return {
       end
       vim.api.nvim_create_user_command("YamlKeyColor", function(opts)
         local arg = vim.trim(opts.args):lower()
+        if arg == "" then
+          vim.notify("YamlKeyColor: " .. (yaml_key_color or "native"))
+          return
+        end
         if arg == "native" or arg == "off" then
           yaml_key_color = nil
           apply_theme_adjustments()
@@ -2715,7 +2782,7 @@ return {
         end
         yaml_key_color = hex
         apply_theme_adjustments()
-      end, { nargs = "+" })
+      end, { nargs = "*", desc = "YamlKeyColor <#rrggbb | r g b | native> (no argument reports the current value)" })
 
       -- :YamlKeyBold on|none|default — on = every rung bold, none = no rung bold,
       -- default = the ramp's own weighting (toplevel bold only). Bare reports.
@@ -2785,6 +2852,10 @@ return {
       -- :BgBase <#rrggbb | r g b> - owned editor/UI background base before other bg knobs.
       vim.api.nvim_create_user_command("BgBase", function(opts)
         local next_base
+        if #opts.fargs == 0 then
+          vim.notify("BgBase: " .. tostring(bg_base))
+          return
+        end
         if #opts.fargs == 1 then
           next_base = normalize_hex(opts.fargs[1])
         elseif #opts.fargs == 3 then
@@ -2799,99 +2870,178 @@ return {
         end
         bg_base = next_base
         apply_theme_adjustments()
-      end, { nargs = "+" })
+      end, { nargs = "*", desc = "BgBase <#rrggbb | r g b> (no argument reports the current value)" })
+
+      -- :BgBaseLock <#rrggbb | r g b> | off | (report) — same machinery as the
+      -- other locks: bg_base is re-stamped from colorscheme_defaults on every
+      -- switch, so without a lock a hand-picked base only survives until the
+      -- next theme.
+      --
+      -- The two bg locks are mutually exclusive — both drive bg_base, so holding
+      -- both would leave the winner decided by autocmd order. Setting either one
+      -- releases the other; that release runs from the validate hook below,
+      -- which only fires on a real set (`off` returns before it).
+      local release_bg_base_default_lock -- assigned with the default lock, below
+      make_knob_lock("BgBaseLock", "BgBase", function(arg)
+        local hex = parse_color_fargs(vim.split(arg, "%s+", { trimempty = true }))
+        if hex and release_bg_base_default_lock then
+          release_bg_base_default_lock()
+        end
+        return hex
+      end, {
+        usage = "expected #rrggbb / three RGB numbers, or 'off', e.g. :BgBaseLock #101418",
+        desc = "Lock the background base across theme switches for this session",
+      })
+
+      -- :BgBaseDefaultLock on | off | (report) — hand the background back to
+      -- whatever the colorscheme itself ships, for every theme, all session.
+      --
+      -- Not a fixed colour, so it can't ride make_knob_lock: the value is
+      -- resolved per theme from adjust_base_highlights.Normal, the pristine
+      -- pre-pipeline capture. Reading live Normal instead would just read back
+      -- the pipeline's own bg_base stamp.
+      --
+      -- 900ms for the same reason as :SepiaLock — after the 700ms deferred
+      -- passes and the 800ms yaml startup colours, or the re-apply is overwritten.
+      local bg_base_default_lock = false
+      local bg_base_default_group = vim.api.nvim_create_augroup("ThemeBgBaseDefaultLock", { clear = true })
+      release_bg_base_default_lock = function()
+        if bg_base_default_lock then
+          bg_base_default_lock = false
+          vim.api.nvim_clear_autocmds({ group = bg_base_default_group })
+        end
+      end
+      local function theme_default_bg()
+        local normal = adjust_base_highlights and adjust_base_highlights.Normal
+        return normal and normal.bg and color_to_hex(normal.bg) or nil
+      end
+      local function apply_theme_default_bg()
+        local hex = theme_default_bg()
+        if not hex then
+          return nil
+        end
+        bg_base = hex
+        apply_theme_adjustments()
+        return hex
+      end
+      vim.api.nvim_create_user_command("BgBaseDefaultLock", function(opts)
+        local arg = vim.trim(opts.args):lower()
+
+        if arg == "" then
+          vim.notify("BgBaseDefaultLock: " .. (bg_base_default_lock and "on" or "off"))
+          return
+        end
+        if arg ~= "on" and arg ~= "off" and arg ~= "toggle" then
+          vim.notify("BgBaseDefaultLock: expected on, off or toggle", vim.log.levels.ERROR)
+          return
+        end
+
+        local want = arg == "toggle" and not bg_base_default_lock or arg == "on"
+        vim.api.nvim_clear_autocmds({ group = bg_base_default_group })
+        bg_base_default_lock = want
+        if want then
+          -- Mutually exclusive with the fixed-colour lock; see :BgBaseLock above.
+          pcall(vim.cmd, "BgBaseLock off")
+        end
+
+        if not want then
+          vim.notify("BgBaseDefaultLock: off (bg_base resets with the theme again)")
+          return
+        end
+
+        vim.api.nvim_create_autocmd("ColorScheme", {
+          group = bg_base_default_group,
+          pattern = "*",
+          nested = true,
+          callback = function()
+            vim.defer_fn(function()
+              if bg_base_default_lock and not vim.g.theme_raw then
+                apply_theme_default_bg()
+              end
+            end, 900)
+          end,
+        })
+
+        -- Apply to the CURRENT theme too, not just the next one switched to.
+        local hex = apply_theme_default_bg()
+        vim.notify(
+          hex and ("BgBaseDefaultLock: on (" .. hex .. " this theme, re-resolved on every switch)")
+            or "BgBaseDefaultLock: on (this theme has no Normal bg captured yet; it applies from the next switch)"
+        )
+      end, {
+        nargs = "?",
+        complete = function()
+          return { "on", "off", "toggle" }
+        end,
+        desc = "Lock the background to each colorscheme's own default for this session",
+      })
 
       -- :BgTransparency <0-100> — live transparency tuning
-      vim.api.nvim_create_user_command("BgTransparency", function(opts)
-        if set_fg_knob("BgTransparency", function(v)
-          bg_transparency = v
-        end, opts.args) then
-          apply_theme_adjustments()
-        end
-      end, { nargs = 1 })
+      define_numeric_knob("BgTransparency", function()
+        return bg_transparency
+      end, function(v)
+        bg_transparency = v
+      end)
 
       -- :BgBrightness <0-100> — live sepia-aware bg brightness tuning.
       -- 0 = fully dark, 50 = original sepia-adjusted bg, 100 = brighter ceiling.
-      local function set_bg_brightness(opts, command_name)
-        if set_fg_knob(command_name, function(v)
-          bg_brightness = v
-        end, opts.args) then
-          apply_theme_adjustments()
-        end
+      local function bg_brightness_get()
+        return bg_brightness
       end
-      vim.api.nvim_create_user_command("BgBrightness", function(opts)
-        set_bg_brightness(opts, "BgBrightness")
-      end, { nargs = 1 })
+      local function bg_brightness_set(v)
+        bg_brightness = v
+      end
+      define_numeric_knob("BgBrightness", bg_brightness_get, bg_brightness_set)
       -- Backward-compatible alias for the old command name.
-      vim.api.nvim_create_user_command("DarkenBackground", function(opts)
-        set_bg_brightness(opts, "DarkenBackground")
-      end, { nargs = 1 })
+      define_numeric_knob("DarkenBackground", bg_brightness_get, bg_brightness_set)
 
       -- :BgContrast <0-100> - Dark Reader-style background contrast. 50 = unchanged.
-      vim.api.nvim_create_user_command("BgContrast", function(opts)
-        if set_fg_knob("BgContrast", function(v)
-          bg_contrast = v
-        end, opts.args) then
-          apply_theme_adjustments()
-        end
-      end, { nargs = 1 })
+      define_numeric_knob("BgContrast", function()
+        return bg_contrast
+      end, function(v)
+        bg_contrast = v
+      end)
 
       -- :ChromeDarken <0-100> — 0 = black, 50 = theme default, 100 = transparent
-      vim.api.nvim_create_user_command("ChromeDarken", function(opts)
-        if set_fg_knob("ChromeDarken", function(v)
-          chrome_darken = v
-        end, opts.args) then
-          apply_theme_adjustments()
-        end
-      end, { nargs = 1 })
+      define_numeric_knob("ChromeDarken", function()
+        return chrome_darken
+      end, function(v)
+        chrome_darken = v
+      end)
 
       -- :NormalizeBackground <0-100> — live bg hue neutralization toward gray
-      vim.api.nvim_create_user_command("NormalizeBackground", function(opts)
-        if
-          set_fg_knob("NormalizeBackground", function(v)
-            normalize_background = v
-          end, opts.args)
-        then
-          apply_theme_adjustments()
-        end
-      end, { nargs = 1 })
+      define_numeric_knob("NormalizeBackground", function()
+        return normalize_background
+      end, function(v)
+        normalize_background = v
+      end)
 
       -- :GruvboxRed / :GruvboxOrange <0-100> — gruvbox only, mute the vivid red/orange accents
-      vim.api.nvim_create_user_command("GruvboxRed", function(opts)
-        if set_fg_knob("GruvboxRed", function(v)
-          gruvbox_red_saturation = v
-        end, opts.args) then
-          apply_theme_adjustments()
-        end
-      end, { nargs = 1 })
-      vim.api.nvim_create_user_command("GruvboxOrange", function(opts)
-        if set_fg_knob("GruvboxOrange", function(v)
-          gruvbox_orange_saturation = v
-        end, opts.args) then
-          apply_theme_adjustments()
-        end
-      end, { nargs = 1 })
-      vim.api.nvim_create_user_command("GruvboxYellow", function(opts)
-        if set_fg_knob("GruvboxYellow", function(v)
-          gruvbox_yellow_saturation = v
-        end, opts.args) then
-          apply_theme_adjustments()
-        end
-      end, { nargs = 1 })
-      vim.api.nvim_create_user_command("GruvboxGreen", function(opts)
-        if set_fg_knob("GruvboxGreen", function(v)
-          gruvbox_green_saturation = v
-        end, opts.args) then
-          apply_theme_adjustments()
-        end
-      end, { nargs = 1 })
-      vim.api.nvim_create_user_command("GruvboxFg1", function(opts)
-        if set_fg_knob("GruvboxFg1", function(v)
-          gruvbox_fg1_lightness = v
-        end, opts.args) then
-          apply_theme_adjustments()
-        end
-      end, { nargs = 1 })
+      define_numeric_knob("GruvboxRed", function()
+        return gruvbox_red_saturation
+      end, function(v)
+        gruvbox_red_saturation = v
+      end)
+      define_numeric_knob("GruvboxOrange", function()
+        return gruvbox_orange_saturation
+      end, function(v)
+        gruvbox_orange_saturation = v
+      end)
+      define_numeric_knob("GruvboxYellow", function()
+        return gruvbox_yellow_saturation
+      end, function(v)
+        gruvbox_yellow_saturation = v
+      end)
+      define_numeric_knob("GruvboxGreen", function()
+        return gruvbox_green_saturation
+      end, function(v)
+        gruvbox_green_saturation = v
+      end)
+      define_numeric_knob("GruvboxFg1", function()
+        return gruvbox_fg1_lightness
+      end, function(v)
+        gruvbox_fg1_lightness = v
+      end)
 
       -- Per-colorscheme knob defaults applied automatically on ColorScheme event.
       -- These OVERWRITE any manual :BgTransparency / :BgBrightness values on theme switch.
@@ -2949,19 +3099,6 @@ return {
       -- To preserve manual values across theme switches, remove the relevant entry below.
       local colorscheme_defaults = {
         ["base16-tokyo-night-terminal-storm"] = {
-          bg_base = "#0f0f0f",
-          bg_transparency = 100,
-          bg_brightness = 50,
-          bg_contrast = 50,
-          chrome_darken = 50,
-          sepia_amount = 0,
-          fg_lightness = 50,
-          fg_saturation = 50,
-          normalize_background = 0,
-        },
-        -- stormv2 is the copy in colors/stormv2.lua. Same knobs as its source,
-        -- so the two open looking identical; retune here, not above.
-        ["stormv2"] = {
           bg_base = "#0f0f0f",
           bg_transparency = 100,
           bg_brightness = 50,
@@ -3069,7 +3206,17 @@ return {
         if name and name ~= "" then
           pcall(vim.cmd.colorscheme, name)
         end
-        vim.notify("ThemeRaw: " .. (want and "ON — themes render stock for this session" or "off — pipeline restored"))
+        -- Turning raw off while a :ThemeRawLock is held also clears the lock —
+        -- otherwise the next restart silently comes back up raw.
+        local unlocked = ""
+        do
+          local ok, state = pcall(require, "config.colorscheme_state")
+          if ok and not want and state.raw_locked() then
+            state.write_raw_lock(false)
+            unlocked = ", lock cleared"
+          end
+        end
+        vim.notify("ThemeRaw: " .. (want and "ON — themes render stock for this session" or "off — pipeline restored" .. unlocked))
       end, {
         nargs = "?",
         complete = function()
@@ -3078,13 +3225,58 @@ return {
         desc = "Bypass the theme pipeline for the session: every theme renders stock",
       })
 
+      -- :ThemeRawLock — :ThemeRaw that survives restarts. Same raw semantics
+      -- (the ColorScheme handler's raw branch still re-applies the custom yaml
+      -- capture wiring LAST, after any raw render or bg overlay), plus a marker
+      -- file in stdpath("state") that options.lua reads at boot. For theme
+      -- testing sessions: lock once, restart nvim as often as you like.
+      vim.api.nvim_create_user_command("ThemeRawLock", function(opts)
+        local ok, state = pcall(require, "config.colorscheme_state")
+        if not ok then
+          vim.notify("ThemeRawLock: config.colorscheme_state failed to load", vim.log.levels.ERROR)
+          return
+        end
+        local arg = vim.trim(opts.args)
+        local want
+        if arg == "on" then
+          want = true
+        elseif arg == "off" then
+          want = false
+        elseif arg == "" or arg == "toggle" then
+          want = not state.raw_locked()
+        else
+          vim.notify("ThemeRawLock: expected on, off or toggle", vim.log.levels.ERROR)
+          return
+        end
+        state.write_raw_lock(want)
+        if (vim.g.theme_raw and true or false) ~= want then
+          vim.cmd("ThemeRaw " .. (want and "on" or "off"))
+        end
+        vim.notify("ThemeRawLock: " .. (want and "LOCKED — raw persists across restarts" or "unlocked"))
+      end, {
+        nargs = "?",
+        complete = function()
+          return { "on", "off", "toggle" }
+        end,
+        desc = "Persistent :ThemeRaw — raw mode survives nvim restarts until unlocked",
+      })
+
       -- Grouped with clear=true so re-sourcing this file can't stack handlers.
       vim.api.nvim_create_autocmd("ColorScheme", {
         group = vim.api.nvim_create_augroup("ThemePipelineColorScheme", { clear = true }),
         pattern = "*",
         callback = function()
           if vim.g.theme_raw then
-            return -- :ThemeRaw is on: leave the theme exactly as it loaded
+            -- :ThemeRaw is on: leave the theme's own colours exactly as they
+            -- loaded -- no bg stamp, no knobs, no overlays. The ONE thing that
+            -- still runs is the yaml capture wiring: our custom queries emit
+            -- token classes no colorscheme defines, so skipping the derivation
+            -- flattens yaml instead of showing it stock. Derived-only (no
+            -- hand-tuned table) + the key ramp, both sourced from the stock
+            -- palette, so raw stays raw.
+            pcall(apply_theme_baseline_colors, true)
+            pcall(apply_yaml_key_ramp)
+            return
           end
           local key = vim.g.colors_name or ""
           -- kanagawa.nvim sets colors_name = "kanagawa" for all variants.
@@ -3417,7 +3609,13 @@ return {
   { "thesimonho/kanagawa-paper.nvim", lazy = true },
   { "cdmill/neomodern.nvim", lazy = true },
   { "ficcdaf/ashen.nvim", lazy = true },
-  { "AstroNvim/astrotheme", lazy = true },
+  -- astrotheme is the same trap as flow below: `M.config = {}` until setup() runs,
+  -- so colors/astrodark.lua -> load() -> set_palettes indexes opts.palettes (nil)
+  -- and every astro* scheme throws. opts={} makes lazy call setup at load.
+  -- 2026-07-29: this is what was killing theme PERSISTENCE — boot on a saved
+  -- astro* scheme threw, LazyVim caught it and fell back to habamax, so the pick
+  -- looked like it had been forgotten.
+  { "AstroNvim/astrotheme", lazy = true, opts = {} },
   -- flow crashes on `:colorscheme flow*` unless setup() ran first (config.options
   -- stays {} and palette.get indexes config.theme = nil). opts={} makes lazy call it.
   { "0xstepit/flow.nvim", lazy = true, opts = {} },
