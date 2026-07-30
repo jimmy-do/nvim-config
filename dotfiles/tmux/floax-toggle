@@ -1,0 +1,48 @@
+#!/usr/bin/env bash
+# Guarded wrapper around tmux-floax's toggle (prefix o / prefix C-o).
+#
+# floax.sh decides what to do from ONE test: is the current session `floax`?
+# If yes it runs `tmux detach-client`. That is correct only when the client
+# pressing the key is the popup client floax itself attached -- the float is a
+# second client attached to the `floax` session, not an overlay.
+#
+# When your REAL client is the one sitting on the `floax` session (which is what
+# a "fullscreen float" is -- no popup involved, just your client attached to
+# that session at full terminal size), the same test fires and detach-client
+# detaches YOU: dropped out of tmux to a bare shell. The float guard's own
+# banner ("prefix o to exit, then switch") walks you straight into it.
+#
+# So: only hand off to floax.sh when a popup actually exists. Popup open means
+# at least two clients (yours + the popup's). One client on `floax` means there
+# is no popup to close, so switch back to where you came from instead.
+#
+# ORIGIN_SESSION is floax.sh's own global env var, set on every press -- which
+# means once you are stuck on the floax session it may itself read `floax`.
+# Hence the fallback: most-recently-attached session that is not floax.
+set -u
+
+FLOAX_SH=~/.tmux/plugins/tmux-floax/scripts/floax.sh
+BANNER=~/.config/nvim/dotfiles/tmux/banner
+float_session=$(tmux show-option -gqv @floax-session-name)
+: "${float_session:=scratch}"
+
+current=$(tmux display-message -p '#{session_name}')
+clients=$(tmux list-clients -F '#{client_name}' | wc -l | tr -d ' ')
+
+if [ "$current" != "$float_session" ] || [ "$clients" -gt 1 ]; then
+    exec "$FLOAX_SH"
+fi
+
+# Sole client, parked on the float session: no popup to detach.
+origin=$(tmux show-environment -g ORIGIN_SESSION 2>/dev/null | cut -d= -f2-)
+if [ -z "$origin" ] || [ "$origin" = "$float_session" ] \
+   || ! tmux has-session -t "=$origin" 2>/dev/null; then
+    origin=$(tmux list-sessions -F '#{session_last_attached} #{session_name}' \
+             | sort -rn | awk -v f="$float_session" '$2 != f { print $2; exit }')
+fi
+
+if [ -n "$origin" ]; then
+    tmux switch-client -t "=$origin"
+else
+    "$BANNER" red 2500 "NO SESSION TO RETURN TO  ·  float is the only session"
+fi

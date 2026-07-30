@@ -1,0 +1,14 @@
+#!/bin/sh
+# sesh picker body, lifted out of `bind g` in tmux.conf.
+#
+# It lives in a file only so the bind can be wrapped in the float guard without
+# re-quoting this whole command inside an if-shell (the nested single quotes in
+# the --color list make that a minefield). Behaviour is unchanged.
+#
+# The [ -n ] guard keeps a cancelled fzf from calling `sesh connect ""`.
+
+sel=$(sesh list --icons | fzf --ansi --no-sort --reverse \
+  --prompt="  " --pointer="▸" --border=none \
+  --color="bg+:$(tmux show -gv @ui-sunk),fg+:$(tmux show -gv @ui-bright),pointer:#FF2E97,prompt:$(tmux show -gv @ui-bright),border:$(tmux show -gv @ui-dim)")
+
+[ -n "$sel" ] && sesh connect "$sel"
