@@ -16,6 +16,11 @@ vim.opt.timeoutlen = 150
 -- Bump to 999 if you decide you want the cursor permanently pinned mid-screen.
 vim.opt.scrolloff = 8
 
+-- Same idea horizontally: with wrap off, keep 8 columns visible past the
+-- cursor when a long terraform/yaml line scrolls sideways, instead of pinning
+-- the cursor to the screen edge.
+vim.opt.sidescrolloff = 8
+
 -- The BLOCK cursor never blinks. A thick block is already unmissable, and blinking
 -- it just reads as flicker -- especially against Ghostty's cursor trail shader.
 -- The thin/underline shapes (insert, replace) still blink, since a 25%-wide bar is
@@ -30,6 +35,13 @@ vim.opt.guicursor = {
   "r-cr-o:hor20-blinkwait500-blinkon500-blinkoff500",
   "t:block-TermCursor", -- terminal: solid block too
 }
+
+-- :ThemeRawLock — if the lock file exists, come up in raw mode before the
+-- first colorscheme loads, so the pipeline never stamps anything to undo.
+-- Options load before lazy startup, which is what makes this the right spot.
+if require("config.colorscheme_state").raw_locked() then
+  vim.g.theme_raw = true
+end
 
 -- Picker menus hide the terminal cursor entirely, so Ghostty's trail/boom
 -- shaders have nothing to smear while j/k walks a list. Lives here rather than

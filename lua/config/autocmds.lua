@@ -36,3 +36,31 @@ vim.api.nvim_create_autocmd("BufReadPost", {
     end
   end,
 })
+
+-- Copy-on-select: leaving visual mode yanks the selection to the system
+-- clipboard, so highlighting is enough and `y` becomes optional.
+--
+-- ModeChanged with pattern "[vV\22]*:*" fires on every transition OUT of
+-- visual/visual-line/visual-block (\22 is CTRL-V, the blockwise mode char).
+-- The mode check inside is belt-and-braces for v -> V style switches, which
+-- also match the pattern but are not really an exit.
+--
+-- `gv"+y` re-selects the range that was just abandoned -- by the time this
+-- callback runs the selection is gone, so a bare "+y would yank nothing. The
+-- `gv` restores it from the '< '> marks. The final `` `> `` parks the cursor at
+-- the end of the selection, matching where vim leaves it after a normal yank.
+--
+-- Deliberately NOT guarded against operator use: `d`/`c` leave visual mode too,
+-- but they exit through the operator, not through this transition, so a cut is
+-- unaffected. What this DOES do is clobber the clipboard on throwaway
+-- selections -- that is the trade being made here, not a bug.
+vim.api.nvim_create_autocmd("ModeChanged", {
+  group = vim.api.nvim_create_augroup("jimmy_copy_on_select", { clear = true }),
+  pattern = "[vV\22]*:*",
+  callback = function()
+    if vim.fn.mode():match("^[vV\22]") then
+      return
+    end
+    pcall(vim.cmd, 'normal! gv"+y`>')
+  end,
+})

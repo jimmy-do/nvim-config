@@ -13,8 +13,27 @@ keymap("n", "<leader>w", "<cmd>w<cr>", { desc = "Save file" })
 pcall(vim.keymap.del, "n", "<leader>wd")
 pcall(vim.keymap.del, "n", "<leader>wm")
 
--- Clear search highlight
-keymap("n", "<Esc>", "<cmd>nohlsearch<cr>", { desc = "Clear search highlight" })
+-- Bare q kept starting accidental macro recordings ("recording @w" in the
+-- statusline). Recording moves to Q (whose default, replay-last-macro, is
+-- covered by @@). Buffer-local q maps (close help/quickfix/etc.) are unaffected
+-- — local always beats global. q: (command-line window) also still works via
+-- the explicit map below.
+keymap("n", "q", "<nop>", { desc = "Disabled (macro record is on Q)" })
+keymap("n", "q:", "q:", { desc = "Command-line window" })
+keymap("n", "Q", "q", { desc = "Record macro" })
+
+-- Clear search highlight — AND flash.nvim's f/t char-mode state. Flash
+-- normally dismisses itself when it sees a raw <Esc> via vim.on_key, but this
+-- mapping swallows the raw key (only the <cmd> output is processed), so
+-- without the explicit hide below, pressing f locks you into flash's search
+-- until the cursor moves.
+keymap("n", "<Esc>", function()
+  vim.cmd("nohlsearch")
+  local ok, char = pcall(require, "flash.plugins.char")
+  if ok and char.state then
+    char.state:hide()
+  end
+end, { desc = "Clear search highlight / flash state" })
 
 -- Better window navigation
 -- NOTE: <C-h/j/k/l> are now handled by vim-tmux-navigator
@@ -182,6 +201,27 @@ vim.keymap.set("c", "<C-n>", "<Down>", { desc = "Next history (prefix match)" })
 -- tmux.conf no longer claims them (its `bind -n M-h/M-l previous/next-window`
 -- fallback was removed -- window switching lives on User0/User1 instead).
 -- Opt+b / Opt+f are kept as the readline-shaped synonyms.
+-- Copy/paste IN the prompt. The cmdline has no visual selection and no normal
+-- mode, so there is nothing for Cmd+V's bracketed paste or a `y` motion to hook
+-- into -- which is why editing a pasted-in command has always been a dead end.
+-- Register insertion is the mechanism that does work there (:h c_CTRL-R), so
+-- these two wrap it:
+--   <C-v>  pastes the system clipboard  (was: literal-insert, which still lives
+--          on <C-q> -- see :h c_CTRL-Q -- so nothing is actually lost here)
+--   <M-y>  copies the WHOLE prompt to the clipboard; there is no selection to
+--          copy a part of, and <C-y> is taken by blink (select_and_accept)
+vim.keymap.set("c", "<C-v>", "<C-r>+", { desc = "Paste system clipboard" })
+vim.keymap.set("c", "<M-v>", "<C-r>+", { desc = "Paste system clipboard" })
+vim.keymap.set("c", "<M-y>", function()
+  local line = vim.fn.getcmdline()
+  vim.fn.setreg("+", line)
+  -- Deferred: notifying mid-expr-mapping redraws over the prompt you are in.
+  vim.schedule(function()
+    vim.notify("Copied cmdline: " .. line)
+  end)
+  return ""
+end, { expr = true, desc = "Copy the whole cmdline to the clipboard" })
+
 vim.keymap.set("c", "<M-h>", "<S-Left>", { desc = "Back a word" })
 vim.keymap.set("c", "<M-l>", "<S-Right>", { desc = "Forward a word" })
 vim.keymap.set("c", "<M-b>", "<S-Left>", { desc = "Back a word" })
