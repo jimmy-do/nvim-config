@@ -22,14 +22,49 @@ function M.read()
   return name ~= "" and name or nil
 end
 
+-- The scheme that was current BEFORE the one in M.path, so :ThemeBack can swap
+-- straight back to it. Written only when the current name actually changes, so
+-- a picker close that kept the same theme never destroys the swap target.
+M.prev_path = vim.fn.stdpath("state") .. "/prev-colorscheme.txt"
+
+function M.previous()
+  local ok, lines = pcall(vim.fn.readfile, M.prev_path)
+  if not ok or type(lines) ~= "table" then
+    return nil
+  end
+  local name = vim.trim(lines[1] or "")
+  return name ~= "" and name or nil
+end
+
 function M.write(name)
   if type(name) ~= "string" or name == "" then
     return
   end
-  if M.read() == name then
+  local current = M.read()
+  if current == name then
     return -- avoid a write on every picker close
   end
+  if current then
+    pcall(vim.fn.writefile, { current }, M.prev_path)
+  end
   pcall(vim.fn.writefile, { name }, M.path)
+end
+
+-- :ThemeRawLock persistence: a marker file whose existence means "boot with
+-- vim.g.theme_raw = true". Same stdpath("state") reasoning as above — session
+-- residue, never a dirty repo file. Content is irrelevant, only existence.
+M.raw_lock_path = vim.fn.stdpath("state") .. "/theme-raw-lock"
+
+function M.raw_locked()
+  return vim.uv.fs_stat(M.raw_lock_path) ~= nil
+end
+
+function M.write_raw_lock(on)
+  if on then
+    pcall(vim.fn.writefile, {}, M.raw_lock_path)
+  else
+    pcall(vim.fn.delete, M.raw_lock_path)
+  end
 end
 
 -- The scheme to boot with. `default` is theme.lua's hardcoded fallback; a saved

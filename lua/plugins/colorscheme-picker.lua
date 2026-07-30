@@ -9,6 +9,10 @@
 -- scrolling through.
 --
 --   j / k / <C-d> / <C-u> / gg / G   scroll, theme previews live as you go
+--   <C-j> / <C-k>                    5 rows at a time. These are window
+--                                    navigation everywhere else, and a stray one
+--                                    used to move focus out of the float, which
+--                                    closed the picker — in here they just scroll.
 --   s                                incremental FUZZY jump. Type "ever li med"
 --                                    and the cursor lands on
 --                                    base16-everforest-light-medium as you type.
@@ -19,15 +23,19 @@
 --                                    so it sticks across restarts. Outside the
 --                                    picker, :ThemeFav / :ThemeUnfav do the same
 --                                    for the theme you are currently in.
---   L                                hide/show light variants. Everything is
---                                    shown by default; nothing is hidden unless
---                                    you press this.
---   m                                the CATEGORIES menu: pick what the list is
---                                    grouped by (yaml-value glow / light vs dark
---                                    / base16 vs not / yaml KEY colour / flat
---                                    A-Z) and flip the filters (light variants,
---                                    base16 only or never, coloured keys only).
---                                    j/k + <CR>, or just press the digit.
+--   m                                the CATEGORIES menu (also advertised in the
+--                                    float's footer). Picks what the list is
+--                                    GROUPED by — yaml-value glow / light vs dark
+--                                    / base16 vs not / yaml KEY colour / flat A-Z
+--                                    — and flips four FILTERS that all stack:
+--                                    light-vs-dark, base16, coloured yaml keys,
+--                                    and yaml-value glow. "dark only + keys with
+--                                    a colour + values that burn" is three of them
+--                                    at once, which is the point.
+--                                    j/k + <CR>, or press the digit / letter shown
+--                                    on the row. None of those letters is j or k.
+--                                    Grouping and filters PERSIST across restarts
+--                                    (lua/config/picker_view_state.lua).
 --   T                                jump straight back and forth between the
 --                                    current grouping and flat A-Z.
 --   <CR> / q / <Esc> / :q            keep the theme under the cursor and close
@@ -43,6 +51,9 @@
 -- `{}`: persist_favorite() below finds this block by matching `local favorites =
 -- {` on its own line and a bare `}`, so collapsing it breaks every toggle.
 local favorites = {
+  "base16-hardhacker",
+  "moonlightv3",
+  "moonlightv4",
 }
 
 -- This file's own path, captured at load time so `f` can rewrite the block above.
@@ -85,8 +96,9 @@ local builtin_junk = {
   zellner = true,
 }
 
--- Light variants are the bulk of base16's ~250 entries, and scrolling past them
--- means a white flash per step. Hidden by default; `L` brings them back.
+-- Name markers, the ONLY thing known about a theme before it is loaded, so
+-- apply_scheme uses them to choose 'background'. For deciding whether a theme is
+-- actually light, is_light_theme() below prefers the measured facets instead.
 local light_markers = { "light", "day", "dawn", "latte", "morning", "lotus", "white" }
 
 local function is_light(name)
@@ -117,6 +129,9 @@ local function fuzzy_score(name, query)
   return score + #name * 0.01
 end
 
+-- Border footer, so the menu is findable without having read this file.
+local footer_hint = " m categories · s jump · f fav "
+
 local favorites_header = "── favorites ──"
 local others_header = "── all colorschemes ──"
 
@@ -145,17 +160,187 @@ local function glow_tier(name)
   return entry and entry[1] or "unknown"
 end
 
+-- MEASURED per-theme facets: real background luminance and the yaml KEY colour
+-- theme.lua derives for each theme. See lua/config/theme_facets.lua and
+-- dotfiles/tools/theme-facets-measure.lua to regenerate.
+--
+-- Deliberately NOT used by apply_scheme: that has to choose 'background' before
+-- the theme is loaded, and the name marker is the only thing known at that point.
+-- Changing which bg a theme loads under would change how it looks, which is not
+-- what a grouping menu is for. Facets group and filter the list, nothing else.
+local facets = (function()
+  local ok, t = pcall(require, "config.theme_facets")
+  return ok and t or {}
+end)()
+
+-- Whether the measured data is there AT ALL. If it is not (file missing, or being
+-- regenerated), every theme's key class is "unknown", and a saved "coloured keys
+-- only" filter would then hide all 538 entries and show an empty picker with no
+-- explanation. A filter with no data behind it does not get to filter: it is
+-- skipped and the title says so. Never silently empty the list.
+local have_facets = next(facets) ~= nil
+
+-- Measured light beats the name marker (some base16 "-light" entries are dark,
+-- and a few light schemes say nothing in their name); fall back to the marker
+-- for anything unmeasured.
+local function is_light_theme(name)
+  local f = facets[name]
+  if f ~= nil then
+    return f.light
+  end
+  return is_light(name)
+end
+
+local function is_base16(name)
+  local n = name:lower()
+  return n:find("^base16%-") ~= nil or n:find("^base24%-") ~= nil or n:find("^tinted%-") ~= nil
+end
+
+-- What the yaml keys read as for this theme: "white" / "grey" / "tinted", or a
+-- hue family. Unmeasured themes land in "unknown" rather than being guessed at.
+local function key_class(name)
+  local f = facets[name]
+  return f and f.class or "unknown"
+end
+
+local colorless_key = { white = true, grey = true, unknown = true }
+
+-- Grouping modes. `groups` is the order the buckets print in; `of` maps a scheme
+-- to a bucket key. A scheme whose bucket is not listed is dropped into the last
+-- entry, so a new hue family from a regenerated facets file can never vanish.
+local group_modes = {
+  {
+    key = "glow",
+    label = "yaml VALUE glow",
+    groups = glow_order,
+    of = glow_tier,
+  },
+  {
+    key = "bg",
+    label = "light / dark",
+    groups = {
+      { key = "dark", label = "── dark ──" },
+      { key = "light", label = "── light ──" },
+    },
+    of = function(name)
+      return is_light_theme(name) and "light" or "dark"
+    end,
+  },
+  {
+    key = "base16",
+    label = "base16 / not base16",
+    groups = {
+      { key = "other", label = "── standalone themes  (not base16) ──" },
+      { key = "base16", label = "── base16 family ──" },
+    },
+    of = function(name)
+      return is_base16(name) and "base16" or "other"
+    end,
+  },
+  {
+    -- The list Jimmy actually opens this for: which themes give yaml keys a
+    -- colour of their own, and which just leave them white. Coloured families
+    -- print first, white/grey last.
+    key = "keys",
+    label = "yaml KEY colour",
+    groups = {
+      { key = "magenta", label = "── keys: magenta ──" },
+      { key = "purple", label = "── keys: purple ──" },
+      { key = "blue", label = "── keys: blue ──" },
+      { key = "cyan", label = "── keys: cyan ──" },
+      { key = "green", label = "── keys: green ──" },
+      { key = "yellow", label = "── keys: yellow ──" },
+      { key = "orange", label = "── keys: orange ──" },
+      { key = "red", label = "── keys: red ──" },
+      { key = "tinted", label = "── keys: barely tinted ──" },
+      { key = "grey", label = "── keys: grey ──" },
+      { key = "white", label = "── keys: WHITE  (no colour of their own) ──" },
+      { key = "unknown", label = "── keys: unmeasured ──" },
+    },
+    of = key_class,
+  },
+  {
+    key = "flat",
+    label = "nothing — one flat A-Z run",
+    groups = nil,
+  },
+}
+
+local function group_mode_by_key(key)
+  for _, mode in ipairs(group_modes) do
+    if mode.key == key then
+      return mode
+    end
+  end
+  return group_modes[1]
+end
+
 -- The cursor row used to borrow each theme's Visual, which the live preview
 -- swaps out 300 different ways — plenty of them white-on-bright and unreadable.
 -- Pin it to fixed colours instead, and re-stamp them after every preview, since
 -- `:colorscheme` runs `hi clear` and wipes the group.
+-- The float's OWN colours, fixed, for the same reason as the cursor row: the theme
+-- under the cursor changes 300 different ways around it. Borrowing `Normal` broke
+-- on every light theme -- theme.lua pins the background dark, the light theme
+-- supplies a near-black fg to go with its own white bg, and the float rendered
+-- dark-on-dark and could not be read at all. Same for the headers, which used to
+-- borrow `Comment`. These are the picker chrome, not theme colours.
 local function define_cursor_highlight()
   vim.api.nvim_set_hl(0, "ColorschemePickerCursor", { fg = "#ffffff", bg = "#005f87", bold = true })
   vim.api.nvim_set_hl(0, "ColorschemePickerMarker", { fg = "#ffffff", bg = "#005f87", bold = true })
+  vim.api.nvim_set_hl(0, "ColorschemePickerNormal", { fg = "#d6d9de", bg = "#0f0f0f" })
+  vim.api.nvim_set_hl(0, "ColorschemePickerBorder", { fg = "#6a7280", bg = "#0f0f0f" })
+  vim.api.nvim_set_hl(0, "ColorschemePickerHeader", { fg = "#8b94a5", bg = "#0f0f0f", bold = true })
 end
+
+-- Both floats wear it.
+local picker_winhighlight = table.concat({
+  "Normal:ColorschemePickerNormal",
+  "NormalFloat:ColorschemePickerNormal",
+  "FloatBorder:ColorschemePickerBorder",
+  "FloatTitle:ColorschemePickerBorder",
+  "FloatFooter:ColorschemePickerBorder",
+  "CursorLine:ColorschemePickerCursor",
+}, ",")
 
 -- Where the cursor was when the picker last closed, so reopening resumes there.
 local last_selected = nil
+
+-- Menu state, module-level so it survives closing and reopening the picker within
+-- a session: having to re-pick the grouping every time defeats the point.
+-- Grouping is one choice; the filters below are independent of it and of each
+-- other, so any combination holds at once ("dark only" + "keys have a colour" +
+-- "values burn" is three filters and one grouping).
+--
+-- All of it PERSISTS: loaded from stdpath("state") here and saved on every change,
+-- so a session starts on whatever you were last browsing with instead of resetting
+-- to grouped-by-glow-and-no-filters.
+local view_state = (function()
+  local ok, m = pcall(require, "config.picker_view_state")
+  return ok and m or nil
+end)()
+
+local saved_view = view_state and view_state.read() or {}
+
+local group_mode_key = saved_view.group_mode or "glow"
+local bg_filter = saved_view.bg_filter or "all" -- all | dark | light
+local base16_filter = saved_view.base16_filter or "all" -- all | only | never
+local colored_keys_only = saved_view.colored_keys_only or false
+local glow_filter = saved_view.glow_filter or "all" -- all | loud (neon+bright) | neon
+
+local function save_view()
+  if view_state then
+    view_state.write({
+      group_mode = group_mode_key,
+      bg_filter = bg_filter,
+      base16_filter = base16_filter,
+      colored_keys_only = colored_keys_only,
+      glow_filter = glow_filter,
+    })
+  end
+end
+
+local loud_glow = { neon = true, bright = true }
 
 -- Every scheme load goes through here so 'background' always matches the theme
 -- being applied. Without this, previewing a light theme left background=light
@@ -253,12 +438,10 @@ local function pick_colorscheme()
 
   local original = current_colorscheme()
   local original_background = vim.o.background
-  -- Everything is shown. Hiding light variants by default made a scheme
-  -- unfindable; `L` hides them only if you ask.
-  local show_light = true
-  -- Grouped by glow tier by default: "which of these makes yaml values burn" is
-  -- the question this list actually gets opened for. `G` flattens it back to A-Z.
-  local group_by_glow = true
+  -- Whatever grouping the menu was last left on, restored from disk; glow tier on
+  -- a first-ever run. Nothing is filtered unless the menu says so.
+  -- `T` flips to flat A-Z and back, `m` opens the full menu.
+  local last_group_mode = group_mode_key ~= "flat" and group_mode_key or "glow"
 
   -- No terminal cursor for the whole life of the picker: every j/k here is a
   -- cursor move, and Ghostty's trail/boom shaders restart on each one, so a held
@@ -290,13 +473,18 @@ local function pick_colorscheme()
     border = "rounded",
     title = " colorscheme ",
     title_pos = "center",
+    -- The discoverability tip, in the border rather than in the list: a hint row
+    -- inside the buffer would either be selectable (and preview a theme) or need
+    -- another special case in every cursor-stepping path.
+    footer = footer_hint,
+    footer_pos = "center",
   })
 
   vim.wo[win].cursorline = true
   vim.wo[win].wrap = false
   -- The float has to stay legible while the scheme under the cursor changes
   -- around it, so pin it to Normal rather than NormalFloat.
-  vim.wo[win].winhighlight = "Normal:Normal,FloatBorder:Comment,CursorLine:ColorschemePickerCursor"
+  vim.wo[win].winhighlight = picker_winhighlight
   define_cursor_highlight()
 
   local ns = vim.api.nvim_create_namespace("jimmy_colorscheme_picker")
@@ -307,6 +495,9 @@ local function pick_colorscheme()
   local timer = vim.uv.new_timer()
   local closing = false
   local last_row = 1
+  -- True only while the `m` categories float has focus, so the WinLeave guard
+  -- below can tell "focus moved to my own menu" from "focus left the picker".
+  local menu_open = false
 
   local function stop_timer()
     if timer and not timer:is_closing() then
@@ -353,7 +544,26 @@ local function pick_colorscheme()
   -- "how far into this list am I" is answerable without a scrollbar. The fuzzy
   -- prompt borrows the same title bar and restores this on exit.
   local function base_title()
-    local suffix = show_light and "" or "  (light hidden)"
+    -- Every active filter has to be visible somewhere permanent: a shortened list
+    -- with nothing saying why is how a theme goes "missing".
+    local flags = {}
+    if bg_filter ~= "all" then
+      table.insert(flags, bg_filter .. " only")
+    end
+    if base16_filter == "only" then
+      table.insert(flags, "base16 only")
+    elseif base16_filter == "never" then
+      table.insert(flags, "no base16")
+    end
+    if colored_keys_only then
+      table.insert(flags, have_facets and "coloured keys" or "coloured keys: NO DATA")
+    end
+    if glow_filter == "neon" then
+      table.insert(flags, "neon glow")
+    elseif glow_filter == "loud" then
+      table.insert(flags, "loud glow")
+    end
+    local suffix = #flags > 0 and ("  [" .. table.concat(flags, ", ") .. "]") or ""
     if not vim.api.nvim_win_is_valid(win) then
       return " colorscheme" .. suffix .. " "
     end
@@ -370,13 +580,34 @@ local function pick_colorscheme()
     -- Tier of the scheme under the cursor, so it stays readable after a fuzzy
     -- jump has thrown you into the middle of a group whose header is offscreen.
     local name = entries[row] and entries[row].name
-    local tier = name and glow_tiers[name] and string.format("  glow:%s", glow_tiers[name][1]) or ""
-    return string.format(" colorscheme  %d/%d%s%s ", index, total, tier, suffix)
+    -- Facet of the scheme under the cursor, matching whatever the list is grouped
+    -- by, so it stays readable after a fuzzy jump has thrown you into the middle
+    -- of a group whose header is offscreen.
+    local facet = ""
+    if name then
+      if group_mode_key == "keys" then
+        facet = string.format("  keys:%s", key_class(name))
+      elseif group_mode_key == "bg" then
+        facet = is_light_theme(name) and "  light" or "  dark"
+      elseif group_mode_key == "base16" then
+        facet = is_base16(name) and "  base16" or ""
+      elseif glow_tiers[name] then
+        facet = string.format("  glow:%s", glow_tiers[name][1])
+      end
+    end
+    return string.format(" colorscheme  %d/%d%s%s ", index, total, facet, suffix)
   end
 
+  -- The footer is re-sent with every title update: a partial win_set_config on a
+  -- float drops the fields it does not mention, which silently ate the hint.
   local function update_title()
     if vim.api.nvim_win_is_valid(win) then
-      pcall(vim.api.nvim_win_set_config, win, { title = base_title(), title_pos = "center" })
+      pcall(vim.api.nvim_win_set_config, win, {
+        title = base_title(),
+        title_pos = "center",
+        footer = footer_hint,
+        footer_pos = "center",
+      })
     end
   end
 
@@ -422,7 +653,16 @@ local function pick_colorscheme()
     local others, hidden = {}, 0
     for _, name in ipairs(all_colors) do
       if not favorite_index(name) then
-        if show_light or not is_light(name) then
+        -- Every filter is a separate AND: they stack in any combination.
+        local shown = (bg_filter == "all" or (bg_filter == "light") == is_light_theme(name))
+          and (base16_filter == "all" or (base16_filter == "only") == is_base16(name))
+          and (not colored_keys_only or not have_facets or not colorless_key[key_class(name)])
+          and (
+            glow_filter == "all"
+            or (glow_filter == "neon" and glow_tier(name) == "neon")
+            or (glow_filter == "loud" and loud_glow[glow_tier(name)])
+          )
+        if shown then
           table.insert(others, name)
         else
           hidden = hidden + 1
@@ -430,21 +670,31 @@ local function pick_colorscheme()
       end
     end
 
-    add(hidden > 0 and string.format("%s  (%d light hidden — L)", others_header, hidden) or others_header, {
+    add(hidden > 0 and string.format("%s  (%d hidden — m)", others_header, hidden) or others_header, {
       header = true,
     })
 
-    if group_by_glow then
-      -- One sub-header per tier, loudest first; each tier stays A-Z inside
-      -- itself because `others` is already sorted. Empty tiers print nothing.
-      local by_tier = {}
-      for _, name in ipairs(others) do
-        local tier = glow_tier(name)
-        by_tier[tier] = by_tier[tier] or {}
-        table.insert(by_tier[tier], name)
+    local mode = group_mode_by_key(group_mode_key)
+    if mode.groups then
+      -- One sub-header per bucket, in the mode's own order; each bucket stays A-Z
+      -- inside itself because `others` is already sorted. Empty buckets print
+      -- nothing, and an unlisted bucket key falls into the mode's last group so a
+      -- regenerated facets file can never make a theme disappear.
+      local by_bucket, fallback = {}, mode.groups[#mode.groups].key
+      local known = {}
+      for _, g in ipairs(mode.groups) do
+        known[g.key] = true
       end
-      for _, group in ipairs(glow_order) do
-        local names = by_tier[group.key]
+      for _, name in ipairs(others) do
+        local bucket = mode.of(name)
+        if not known[bucket] then
+          bucket = fallback
+        end
+        by_bucket[bucket] = by_bucket[bucket] or {}
+        table.insert(by_bucket[bucket], name)
+      end
+      for _, group in ipairs(mode.groups) do
+        local names = by_bucket[group.key]
         if names and #names > 0 then
           add(string.format("%s  (%d)", group.label, #names), { header = true })
           for _, name in ipairs(names) do
@@ -465,18 +715,26 @@ local function pick_colorscheme()
     vim.api.nvim_buf_clear_namespace(buf, ns, 0, -1)
     for i, entry in ipairs(entries) do
       if entry.header then
-        vim.api.nvim_buf_set_extmark(buf, ns, i - 1, 0, { end_col = #lines[i], hl_group = "Comment" })
+        vim.api.nvim_buf_set_extmark(buf, ns, i - 1, 0, { end_col = #lines[i], hl_group = "ColorschemePickerHeader" })
       end
     end
 
-    local row = 2
+    -- Land on `focus` if it survived the filters; otherwise on the first real
+    -- theme rather than on a header. Turning a filter on routinely hides the
+    -- scheme you were sitting on, and leaving the cursor parked on a divider made
+    -- the position readout say 0/403 until something moved it.
+    local row
+    local first_name
     for i, entry in ipairs(entries) do
-      if entry.name == focus then
-        row = i
-        break
+      if entry.name then
+        first_name = first_name or i
+        if entry.name == focus then
+          row = i
+          break
+        end
       end
     end
-    row = math.min(row, #entries)
+    row = math.min(row or first_name or 1, #entries)
     pcall(vim.api.nvim_win_set_cursor, win, { row, 0 })
     last_row = row
 
@@ -577,6 +835,10 @@ local function pick_colorscheme()
     group = group,
     buffer = buf,
     callback = function()
+      -- The categories menu is part of the picker, not somewhere else.
+      if menu_open then
+        return
+      end
       close(true)
     end,
   })
@@ -639,26 +901,262 @@ local function pick_colorscheme()
   end
   map("<C-d>", half_page(1))
   map("<C-u>", half_page(-1))
+
+  -- <C-j>/<C-k> are window navigation everywhere else in this config, so a stray
+  -- one in here moved focus out of the float and WinLeave closed the picker
+  -- mid-browse. Bound to a 5-row step instead: same fingers, nothing lost.
+  local function step_rows(count)
+    return function()
+      if not vim.api.nvim_win_is_valid(win) then
+        return
+      end
+      local row = vim.api.nvim_win_get_cursor(win)[1] + count
+      row = math.max(1, math.min(#entries, row))
+      vim.api.nvim_win_set_cursor(win, { row, 0 })
+    end
+  end
+  map("<C-j>", step_rows(5))
+  map("<C-k>", step_rows(-5))
   -- scroll.lua rebinds bare u/d to page scroll, but it feeds <C-u>/<C-d> with
   -- noremap, so they never reach the buffer-local maps above and did nothing in
   -- here. Same muscle memory, wired directly.
   map("d", half_page(1))
   map("u", half_page(-1))
 
-  map("L", function()
-    show_light = not show_light
-    render(selected())
-  end)
+  -- No `L`: light variants used to be a special case with its own key, which meant
+  -- two ways to filter by background that disagreed about what "on" meant. The
+  -- light/dark filter in the `m` menu is the only one now.
 
   map("T", function()
-    group_by_glow = not group_by_glow
+    if group_mode_key == "flat" then
+      group_mode_key = last_group_mode
+    else
+      last_group_mode = group_mode_key
+      group_mode_key = "flat"
+    end
+    save_view()
     render(selected())
   end)
 
-  -- Incremental fuzzy JUMP. Scores against every installed scheme, including the
-  -- light variants that are hidden by default — landing on one of those unhides
-  -- them, so a hidden theme is never unreachable. The list is never reduced: this
-  -- only moves the cursor, and <CR> leaves you free to keep scrolling from there.
+  -- The categories menu. Its own float rather than a getcharstr() prompt in the
+  -- title bar: there are eight rows of state here and they have to be readable at
+  -- once, including which mode and filters are already on.
+  --
+  -- Opening it moves focus off the picker, which WinLeave would read as "close and
+  -- keep" — hence menu_open, checked by that autocmd.
+  map("m", function()
+    local rows = {}
+    for i, mode in ipairs(group_modes) do
+      table.insert(rows, {
+        digit = tostring(i),
+        text = string.format(
+          " %d %s group by: %s",
+          i,
+          group_mode_key == mode.key and "●" or "○",
+          mode.label
+        ),
+        act = function()
+          if mode.key ~= "flat" then
+            last_group_mode = mode.key
+          end
+          group_mode_key = mode.key
+        end,
+      })
+    end
+    table.insert(rows, { separator = true, text = "" })
+    -- FILTERS. Each is independent of the grouping above and of the others, so
+    -- they stack: leave three of them on and you get the intersection.
+    --
+    -- Shortcut letters here are deliberately NOT j or k -- those are the menu's
+    -- own movement keys, so a filter bound to `k` was unreachable without the
+    -- cursor jumping first.
+    table.insert(rows, { separator = true, text = " filters (stack, any combination)" })
+    table.insert(rows, {
+      digit = "d",
+      text = string.format(
+        " d %s light/dark: %s",
+        bg_filter == "all" and "○" or "●",
+        bg_filter == "all" and "both" or (bg_filter == "dark" and "dark only" or "light only")
+      ),
+      act = function()
+        bg_filter = bg_filter == "all" and "dark" or (bg_filter == "dark" and "light" or "all")
+      end,
+    })
+    table.insert(rows, {
+      digit = "b",
+      text = string.format(
+        " b %s base16: %s",
+        base16_filter == "all" and "○" or "●",
+        base16_filter == "all" and "all themes" or (base16_filter == "only" and "base16 only" or "excluded")
+      ),
+      act = function()
+        base16_filter = base16_filter == "all" and "only" or (base16_filter == "only" and "never" or "all")
+      end,
+    })
+    table.insert(rows, {
+      digit = "c",
+      text = string.format(
+        " c %s yaml keys: %s",
+        colored_keys_only and "●" or "○",
+        not have_facets and "no measured data — filter inert" or (colored_keys_only and "have a colour" or "any")
+      ),
+      act = function()
+        colored_keys_only = not colored_keys_only
+      end,
+    })
+    table.insert(rows, {
+      digit = "g",
+      text = string.format(
+        " g %s yaml value glow: %s",
+        glow_filter == "all" and "○" or "●",
+        glow_filter == "all" and "any" or (glow_filter == "loud" and "neon + bright" or "neon only")
+      ),
+      act = function()
+        glow_filter = glow_filter == "all" and "loud" or (glow_filter == "loud" and "neon" or "all")
+      end,
+    })
+
+    local lines = {}
+    for _, row in ipairs(rows) do
+      table.insert(lines, row.text)
+    end
+
+    local mbuf = vim.api.nvim_create_buf(false, true)
+    vim.bo[mbuf].bufhidden = "wipe"
+    vim.b[mbuf].snacks_scroll = false
+    vim.b[mbuf].snacks_animate = false
+    vim.api.nvim_buf_set_lines(mbuf, 0, -1, false, lines)
+    vim.bo[mbuf].modifiable = false
+
+    -- Set BEFORE opening the float: nvim_open_win with focus fires the picker's
+    -- WinLeave synchronously, and that handler closes the picker unless this flag
+    -- is already up.
+    menu_open = true
+
+    local mwidth = 52
+    local mwin = vim.api.nvim_open_win(mbuf, true, {
+      relative = "editor",
+      width = mwidth,
+      height = #lines,
+      row = math.floor((vim.o.lines - #lines) / 2) - 1,
+      col = math.floor((vim.o.columns - mwidth) / 2),
+      style = "minimal",
+      border = "rounded",
+      title = " categories ",
+      title_pos = "center",
+    })
+    vim.wo[mwin].cursorline = true
+    vim.wo[mwin].winhighlight = picker_winhighlight
+
+    local mclosing = false
+
+    -- Every exit path runs this, so menu_open can never be left true — that would
+    -- strand the picker as unclosable-on-focus-loss.
+    local function mclose(row)
+      if mclosing then
+        return
+      end
+      mclosing = true
+      menu_open = false
+      if vim.api.nvim_win_is_valid(mwin) then
+        vim.api.nvim_win_close(mwin, true)
+      end
+      if row and row.act then
+        row.act()
+        -- Persist on every change, not on close: the picker can also disappear via
+        -- WinLeave or a buffer wipe, and a setting that survives only a tidy exit
+        -- is the same annoyance as not persisting at all.
+        save_view()
+      end
+      if vim.api.nvim_win_is_valid(win) then
+        vim.api.nvim_set_current_win(win)
+        -- Re-render either way: the picker's own title carries the filter flags.
+        render(selected())
+        preview()
+      end
+    end
+
+    local function mmap(lhs, fn)
+      vim.keymap.set("n", lhs, fn, { buffer = mbuf, nowait = true, silent = true })
+    end
+
+    -- Skip separators in whichever direction you were heading — a run of them, not
+    -- just one: the blank line and the "filters" caption sit next to each other.
+    local function mstep(direction)
+      return function()
+        local cur = vim.api.nvim_win_get_cursor(mwin)[1]
+        local target = cur + direction
+        while rows[target] and rows[target].separator do
+          target = target + direction
+        end
+        if rows[target] then
+          vim.api.nvim_win_set_cursor(mwin, { target, 0 })
+        end
+      end
+    end
+    mmap("j", mstep(1))
+    mmap("k", mstep(-1))
+    mmap("<Down>", mstep(1))
+    mmap("<Up>", mstep(-1))
+    -- Same trap as the picker: an accidental <C-j> here is window navigation, which
+    -- would drop the menu AND the picker. The menu is eleven rows, so a 5-row jump
+    -- would just slam into the ends — one row is the useful behaviour.
+    mmap("<C-j>", mstep(1))
+    mmap("<C-k>", mstep(-1))
+
+    mmap("<CR>", function()
+      mclose(rows[vim.api.nvim_win_get_cursor(mwin)[1]])
+    end)
+    for _, row in ipairs(rows) do
+      if row.digit then
+        mmap(row.digit, function()
+          mclose(row)
+        end)
+      end
+    end
+    mmap("q", function()
+      mclose(nil)
+    end)
+    mmap("<Esc>", function()
+      mclose(nil)
+    end)
+    mmap("m", function()
+      mclose(nil)
+    end)
+    mmap("<C-c>", function()
+      mclose(nil)
+    end)
+
+    -- Anything that pulls focus elsewhere (or wipes the buffer) closes the menu
+    -- rather than leaving a second float floating.
+    vim.api.nvim_create_autocmd({ "WinLeave", "BufWipeout" }, {
+      buffer = mbuf,
+      once = true,
+      callback = function()
+        if not mclosing then
+          menu_open = false
+          mclosing = true
+          if vim.api.nvim_win_is_valid(mwin) then
+            pcall(vim.api.nvim_win_close, mwin, true)
+          end
+        end
+      end,
+    })
+
+    -- Start on the row for the active grouping mode.
+    for i, mode in ipairs(group_modes) do
+      if mode.key == group_mode_key then
+        pcall(vim.api.nvim_win_set_cursor, mwin, { i, 0 })
+        break
+      end
+    end
+  end)
+
+  -- Incremental fuzzy JUMP. Scores against every installed scheme, including any
+  -- the filters are currently hiding — landing on one of those clears the filters,
+  -- so a filtered-out theme is never unreachable by name. The list is never
+  -- reduced: this only moves the cursor, and <CR> leaves you free to keep
+  -- scrolling from there.
   local function move_to(name)
     local row
     for i, entry in ipairs(entries) do
@@ -668,10 +1166,14 @@ local function pick_colorscheme()
       end
     end
     if not row then
-      -- Only reachable when the match is a hidden light variant.
-      show_light = true
+      -- The match exists but a filter is hiding it. Drop the filters rather than
+      -- refuse the jump, and say so: silently landing on a row while the title
+      -- still claimed "dark only" would be a lie about what the list contains.
+      bg_filter, base16_filter, glow_filter, colored_keys_only = "all", "all", "all", false
+      save_view()
       render(name)
       draw_marker()
+      vim.notify("filters cleared to reach " .. name)
       return
     end
     vim.api.nvim_win_set_cursor(win, { row, 0 })
@@ -682,7 +1184,12 @@ local function pick_colorscheme()
 
   local function set_title(text)
     if vim.api.nvim_win_is_valid(win) then
-      vim.api.nvim_win_set_config(win, { title = text, title_pos = "center" })
+      vim.api.nvim_win_set_config(win, {
+        title = text,
+        title_pos = "center",
+        footer = footer_hint,
+        footer_pos = "center",
+      })
     end
   end
 
@@ -780,6 +1287,43 @@ end
 
 vim.api.nvim_create_user_command("ColorschemePicker", pick_colorscheme, {})
 
+-- :ThemeBack / <leader>tp — swap straight back to the theme you were on before
+-- the current one, no picker, no scrolling. The pair is what colorscheme_state
+-- already tracks (current + previous), and because the swap itself goes through
+-- state.write(), the two names just trade places: pressing it again returns you
+-- to where you started. Same apply_scheme() as the picker, so 'background' is
+-- set correctly before the scheme loads.
+local function swap_previous()
+  local ok, state = pcall(require, "config.colorscheme_state")
+  if not ok then
+    vim.notify("ThemeBack: config.colorscheme_state failed to load", vim.log.levels.ERROR)
+    return
+  end
+  local prev = state.previous()
+  if not prev then
+    vim.notify("ThemeBack: no previous colorscheme recorded yet", vim.log.levels.WARN)
+    return
+  end
+  if prev == current_colorscheme() then
+    vim.notify("ThemeBack: already on " .. prev)
+    return
+  end
+  apply_scheme(prev)
+  -- Only record the swap if it actually landed — a theme that errors out would
+  -- otherwise poison both slots with a name that cannot load.
+  local now = current_colorscheme()
+  if now == prev then
+    state.write(prev)
+    vim.notify("theme: " .. prev)
+  else
+    vim.notify("ThemeBack: " .. prev .. " failed to load", vim.log.levels.WARN)
+  end
+end
+
+vim.api.nvim_create_user_command("ThemeBack", swap_previous, {
+  desc = "Swap back to the previously used colorscheme",
+})
+
 -- Favorite the theme you are ALREADY IN, without opening the picker — the picker's
 -- `f` needs you to scroll to the row first, which is backwards when you have just
 -- landed on something you like. Both take an optional name argument.
@@ -871,6 +1415,9 @@ return {
       -- <leader>th used to open telescope's colorscheme list (telescope removed
       -- 2026-07-26); same muscle memory, better picker.
       { "<leader>th", pick_colorscheme, desc = "Pick colorscheme" },
+      -- <leader>tt is the terminal (config/keymaps.lua), so the quick swap gets
+      -- `tp` — previous theme.
+      { "<leader>tp", swap_previous, desc = "Swap to previous colorscheme" },
     },
   },
 }
