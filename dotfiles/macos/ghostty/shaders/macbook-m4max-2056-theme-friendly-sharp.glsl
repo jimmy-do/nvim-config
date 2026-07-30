@@ -53,9 +53,38 @@ float softAmount = 0.0; // 0.18 -> 0.0 on 2026-07-25. This was the ONLY thing ma
 // foreground fails the saturation gate and stays razor sharp, exactly the
 // same neutral-vs-saturated split the paper-lift below already relies on.
 // Set neonBloom to 0.0 to switch the whole effect off.
-float neonBloom = 0.60;        // 0.40 -> 0.60 on 2026-07-28 (REVERT, same day): Jimmy vetoed the bloom cut
-                               // in ALL CAPS -- the bloom itself is wanted; "nvim blurry" must be solved some
-                               // other way or not at all. Do NOT lower this knob for sharpness complaints.
+float neonBloom = 0.30;        // 0.60 -> 0.30 on 2026-07-30: "you can half the bloom". SAFE NOW in a
+                               // way it never was before: the old low values (0.50/0.42/0.34/0.26) all
+                               // looked wrong because occupancyKnockout made the halo a RING, and
+                               // dimming a ring turns it into a traced outline. With the knockout off
+                               // (occupancyKnockout = 0.0) the halo is centred and monotonic, so
+                               // strength now scales glow cleanly instead of exposing an artifact.
+                               // Do NOT read the 07-29 walk-down as evidence about this value.
+                               // 0.0 -> 0.60 on 2026-07-30: back ON, paired with the SMOOTHSTEP KNEE
+                               // (kneeLo/kneeHi below + line ~457). Not a revert of the 07-29 walk-down:
+                               // every value judged 0.60 -> 0.26 was judged through the RING ARTIFACT the
+                               // old hard-clamp knee produced, so none of those judgements describe this
+                               // shader anymore. 0.60 is the last value eye-confirmed at a real 1:1
+                               // 1920x1200 backing, so it is the honest place to restart from.
+                               // 0.26 -> 0.0 on 2026-07-30: OFF at Jimmy's request. The complaint was a
+                               // "weird outline" -- NOT weak glow. See the knee comment: the halo was a
+                               // ring offset from the glyph, and at low strength that ring stopped
+                               // reading as glow and started reading as a traced outline.
+                               // 0.34 -> 0.26 on 2026-07-29: fourth "down" the same session.
+                               // 0.42 -> 0.34 on 2026-07-29: third "down" the same session.
+                               // 0.50 -> 0.42 on 2026-07-29: second "turn it down" the same session.
+                               // 0.60 -> 0.50 on 2026-07-29: Jimmy asked for a lower bloom repeatedly and
+                               // explicitly retracted the 07-28 "do NOT lower" veto, which is now removed.
+                               // 0.50 is the midpoint of the only valid window at THIS backing: 0.60 is the
+                               // eye-confirmed value at 1:1 1920x1200, 0.40 was vetoed as too weak. Higher
+                               // rungs (0.90 hot, 1.20 blown out) are documented below.
+                               // Radius 13 and the 7.0 fill knee are UNTOUCHED ON PURPOSE -- see the knee
+                               // comment near the bottom: (neonBloom, radius, knee) is a CALIBRATED TRIPLE
+                               // per display mode. 3200x1800 = 0.45/22/4.0; 1920x1200 = 13/7.0. Radius
+                               // tracks backing width linearly (22/13 = 1.69 ~ 3200/1920 = 1.67), so 13 is
+                               // already correct here. An earlier edit this session briefly set 0.45 by
+                               // borrowing it out of the 3200x1800 triple -- that is the exact desync the
+                               // knee comment warns about, and it was wrong. Strength is the ONLY free knob.
                                // 0.90 -> 0.60 on 2026-07-28 (REVERT): the 0.60 -> 0.90 bump below was justified
                                // by an NSScreen probe reading 1920x1200 @ scale 1.0. That probe was WRONG -- a
                                // compiled probe the same day read backing 3456. The glow looked weak because the
@@ -90,6 +119,65 @@ float neonBloom = 0.60;        // 0.40 -> 0.60 on 2026-07-28 (REVERT, same day):
                                // true black and therefore reads much glowier. That
                                // divergence is intentional and wanted -- do not "fix" it
                                // by splitting the presets again.
+// ---- FILL KNEE (occupancy knockout). Added as named knobs 2026-07-30. ----
+// Was a hard clamp at line ~457: fill = 1.0 - clamp(wsum / 7.0, 0.0, 1.0).
+// wsum = gate weight gathered from the 24 taps = "how lit is my neighborhood".
+// fill = how much of that gathered glow this pixel keeps. Purpose: stop halos
+// filling in the INSIDE of letterforms punched out of a lit slab (knockout text
+// on the clock pill / DEVOPS chip). Surrounded pixel -> high wsum -> fill 0.
+//
+// WHY THE CLAMP WAS REPLACED: a linear ramp with clamp() has a derivative
+// DISCONTINUITY at both corners -- a hard edge at wsum=0 (glow snaps to full)
+// and another at wsum=kneeHi (knockout snaps to zero). Across a glyph, wsum
+// falls off a cliff one pixel outside the stroke, and the clamp preserved that
+// cliff verbatim: the halo became a RING with a sharp inner edge, offset from
+// the letterform instead of centred on it. At high strength that ring read as
+// glow; walked down to 0.26 it read as a traced OUTLINE -- Jimmy's complaint,
+// and the real reason the effect never survived being turned down.
+// smoothstep() is C1 at both ends, so both corners round off and the halo
+// falls off continuously into the stroke instead of ringing it.
+//
+// kneeLo: below this wsum a pixel is "in open dark" and keeps full glow.
+// kneeHi: at/above this it is "fully enclosed" and is knocked out completely.
+// Max possible wsum with this kernel is ~7.6 (24 taps x mean gaussian 0.32).
+// Widen the gap = softer, more diffuse falloff. Narrow it = back toward the
+// old hard ring. kneeHi 7.0 preserves the calibrated 1920x1200 triple value.
+// ---- OCCUPANCY KNOCKOUT MASTER SWITCH (2026-07-30) ----
+// 0.0 = NO mask. Added glow is purely `neon * strength`, which is maximum on
+//       the glyph and decays monotonically outward: a centred halo with no
+//       edge, no ring, no dropoff anywhere. Text stays sharp (bloom is
+//       additive; it never blurs its own source). THIS IS THE CURRENT SETUP
+//       and it is what Jimmy asked for on 07-30.
+// 1.0 = full knockout: halos are suppressed inside lit slabs to protect
+//       knockout text on the clock pill / DEVOPS chip / session chips. This
+//       is the ONLY thing the mask ever bought, and it costs a visible edge
+//       at the glyph boundary. Jimmy traded it away deliberately.
+// Anything between blends the two. Do NOT try to fix a slab-legibility
+// complaint by tuning kneeLo/kneeHi -- that path produced the outline four
+// separate times. Move THIS number instead.
+float occupancyKnockout = 0.0;
+
+// selfGlowExempt: how completely a SELF-EMITTING pixel escapes the occupancy
+// knockout. This is the knob that decides whether you get a centred glow or a
+// ring. See the long note at the fill knee (~line 508) for the mechanism.
+//   1.0 = glyph strokes glow at full strength; halo peaks ON the text and
+//         decays outward. No outline. This is what "smooth bloom" means.
+//   0.0 = the pre-07-30 behaviour: knockout applied to strokes too, so the
+//         halo peaks OUTSIDE them and reads as an outline traced around text.
+// Set to 0.0 to revert the whole self-emission fix in one number.
+float selfGlowExempt = 1.0;
+
+float kneeLo = 0.0;             // 1.5 -> 0.0 on 2026-07-30: Jimmy asked for the text as SMOOTH as
+                                // possible with bloom on. kneeLo is the start of the knockout ramp, so
+                                // any value above 0.0 leaves a FLAT PLATEAU where every pixel out to
+                                // that wsum keeps 100% glow -- and the plateau's outer boundary is
+                                // itself a visible step, the last remnant of the old ring. 0.0 removes
+                                // the plateau entirely: the smoothstep now spans the FULL wsum range,
+                                // so glow decays continuously from the first lit neighbour all the way
+                                // to full knockout. This is the smoothest this knee can be.
+float kneeHi = 7.0;             // full knockout (was the /7.0 divisor). Kept at the calibrated
+                                // 1920x1200 triple value -- raising it past ~7.6 (max possible wsum)
+                                // would mean knockout never completes and slab interiors fill in.
 float neonBloomRadiusPx = 13.0; // 17 -> 13 on 2026-07-28: the 17 experiment made yaml-key halos
                                // spill onto neighbouring text ("white blooming"). 13 is the
                                // confirmed value for this backing; bigger reach = key-glow spill.
@@ -442,7 +530,84 @@ void mainImage(out vec4 fragColor, in vec2 fragCoord)
         // Those two were reverted to 0.22 / 13 for 1920x1200 but this knee was
         // missed, leaving an aggressive knockout stacked on a weak halo = no
         // visible glow. Keep all THREE in sync on any display-mode change.
-        float fill = 1.0 - clamp(wsum / 7.0, 0.0, 1.0);
+        // 2026-07-30: hard clamp -> smoothstep. The linear ramp's corner at
+        // wsum=0 held glow at full right up to the stroke edge, turning the
+        // halo into a hard-edged ring offset from the glyph (the "weird
+        // outline"). smoothstep is C1 at both ends so the falloff is
+        // continuous. Knobs are kneeLo/kneeHi up top -- tune them there.
+        // Old line, kept for one-word revert:
+        //   float fill = 1.0 - clamp(wsum / 7.0, 0.0, 1.0);
+        // ---- 2026-07-30 FINAL: OCCUPANCY KNOCKOUT OFF BY DEFAULT ----
+        // Jimmy: "i really dont care for extra logic for the panes and pill
+        // anymore ... i want the text as sharp as possible with bloom, i dont
+        // wanna be able to see text outline and then a sudden dropoff."
+        //
+        // That is a direct trade he is entitled to make, and it resolves the
+        // whole saga. ANY spatially-varying mask multiplied into an additive
+        // halo produces an edge somewhere -- that is what he has been seeing
+        // through four different knee configurations:
+        //   hard clamp      -> ring with a hard inner edge
+        //   smoothstep      -> same ring, rounded corners (still visible)
+        //   + self-exempt   -> fill is 1.0 ON the stroke and drops to the
+        //                      knockout value one pixel OFF it, i.e. a step
+        //                      at the glyph boundary = "outline then dropoff"
+        // With the mask gone, added glow is just `neon * neonBloom/6.0`. neon
+        // is maximum on the glyph and decays monotonically outward, so the
+        // halo is centred on the text with NO inflection point anywhere. The
+        // text itself stays razor sharp: bloom is ADDITIVE and never blurs the
+        // source (softAmount, the only real glyph blur, is 0.0 at line 47).
+        //
+        // WHAT THIS COSTS: knockout text inside a lit slab (the clock pill,
+        // DEVOPS chip, session chips) now receives halo light from all sides
+        // and will fill in / soften. That was the mask's ONLY legitimate job.
+        // Jimmy explicitly accepted this. If a chip ever becomes unreadable,
+        // the fix is occupancyKnockout = 1.0 -- NOT re-tuning the knee, which
+        // is what produced the outline every previous time.
+        //
+        // The knee + self-exemption code is preserved intact under the flag so
+        // this is a one-number restore, not an archaeology exercise.
+        float fill = 1.0;
+        if (occupancyKnockout > 0.0) {
+        float knock = 1.0 - smoothstep(kneeLo, kneeHi, wsum);
+
+        // ---- 2026-07-30: SELF-EMISSION EXEMPTION. The actual outline fix. ----
+        // The smoothstep above rounded the knee's corners but did NOT stop the
+        // ring, because the ring is STRUCTURAL, not a tuning artifact:
+        //
+        //   added glow = neon * fill
+        //   neon is MAXIMUM on the glyph and falls off outward.
+        //   fill is MINIMUM on the glyph and rises outward.
+        //
+        // A product of two opposing ramps peaks BETWEEN them -- i.e. just
+        // outside the stroke. That is a ring generator, and no kneeLo/kneeHi
+        // pair can flatten it: tuning only moves where the ring sits. Jimmy
+        // reported "I see the outline of the text and then the bloom" through
+        // three separate knee values, which is exactly this signature.
+        //
+        // Root cause: the occupancy knockout was applied to EVERY pixel,
+        // including glyph strokes -- the pixels that should glow the MOST. It
+        // only ever needed to protect the dark KNOCKOUT HOLES inside a lit slab
+        // (text punched out of the clock pill / DEVOPS chip). Those holes are
+        // dark pixels with lit surroundings; a glyph stroke is a LIT pixel with
+        // dark surroundings. The center pixel's own emission separates them
+        // cleanly, and it costs one texture read we were already doing at 396.
+        //
+        // So: exempt self-emitting pixels from knockout. A glyph stroke gets
+        // fill -> 1.0 and glows at full strength AT THE SOURCE, so the halo now
+        // decays monotonically outward from the letterform = a centred glow
+        // instead of a ring around a hole. Dark knockout holes keep selfEmit ~0
+        // and the original knockout, so slab legibility is unchanged.
+        //
+        // Alpha decode matches the taps below: gate is stored as w * 0.5. An
+        // alpha > 0.99 means neon_gate.glsl is missing from the chain (raw
+        // terminal alpha is 1.0), so selfEmit falls back to 0.0 and the knee
+        // behaves exactly as it did before this block existed.
+        float selfA = texture(iChannel0, sampleUv).a;
+        float selfEmit = (selfA <= 0.99) ? clamp(selfA * 2.0, 0.0, 1.0) : 0.0;
+        knock = mix(knock, 1.0, selfEmit * selfGlowExempt);
+        fill = mix(1.0, knock, occupancyKnockout);
+        }
+
         color += neon * (neonBloom / 6.0) * fill;
     }
 
