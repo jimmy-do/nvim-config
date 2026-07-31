@@ -1,10 +1,11 @@
 background-opacity = 1
 #background = #080808
 #background = #0D0D0B
-background = #080806
+#background = #080806
+background = #111113
 background-blur = 0
-background-opacity-cells = false
-foreground = #00b012
+# background-opacity-cells: deduped 2026-07-26 — single declaration now lives near line 421 (true)
+foreground = #23af23
 # slates: 8892B0, 6C7D9C, 717FAB, 5D74B0, 496A87, 6075A1, 606bac, #49638f, #5c7d79, #77918, #465481, #364b8b
 # term-greens: #00ff09, #00eb08, 00e600, #00c707
 
@@ -74,30 +75,49 @@ foreground = #00b012
 #  They never touch iFocus / iCursorVisible / iBackgroundColor — the three uniforms that
 #  Ghostty 1.3.1 DOCUMENTS but that killed our compile. Strong hint: stick to this set.
 #  Tunables live at the top of each file (DURATION, MAX_TRAIL_LENGTH, COLOR, BLUR...).
-#  ---- ONE PRESET PER DISPLAY MODE. Uncomment exactly ONE of these three. ----
-#  Ghostty applies shaders GLOBALLY — there is no per-display option, so this
-#  does not auto-switch. Swap it by hand when you change monitors.
-#    321urx         = MSI MPG 321URX @ 2560x1440, NO HiDPI (shader px IS a logical px)
-#    macbook        = MacBook 16" built-in @ 2056x1329 HiDPI (backing 4112x2658, 2x)
-#    macbook-native = MacBook 16" built-in @ 1728x1117 HiDPI (backing 3456x2234, 2x)
-#  They differ ONLY in SOFT_RADIUS / BLOOM_RADIUS / SCANLINE_PX / SCANLINE_WIDTH /
-#  SCANLINE_DEPTH.  Never re-tune one for another display — copy it to a new file.
-#
-#  🔑 macbook-native REQUIRES THE DISPLAY SET TO "looks like 1728x1117" FIRST.
-#     It is WRONG at any other resolution. Its whole premise is that the 3456x2234
-#     backing store IS the physical panel — 1:1, no resample. At 2056x1329 macOS
-#     renders 4112x2658 and squeezes it 0.840x, and THAT squeeze is the root cause
-#     of BOTH the scanline beat AND the white spots. Pitch 2.0 at 2056 was tried and
-#     reads as NO SCANLINES AT ALL — the resample eats them. So: change the res in
-#     System Settings > Displays > Scaled, THEN swap this line. Not the other order.
-#     Buys: 68% more lines, 2.5x thinner, zero beat, zero shader spotting.
-#     Costs: 16% less screen area. Lines are NOT blacker, just clean — see the file.
-#     font-size ~17 here reproduces the apparent text size of font-size 20 at 2056.
+#  ---- ONE LIVE PRESET, ALL DISPLAYS (rule rewritten 2026-07-28) ----
+#  macbook-…-sharp is THE shader, on every display. Both displays run non-HiDPI 1:1
+#  (MacBook 1900x1200, 321UX 2560x1440), so the old per-display swap rule is dead.
+#  Current era: scan 0.0, paperLift/grain 0.0, saturation-gated neon bloom, hue-gated fg.
+#  If a display ever needs its own tune (px-measured radii ARE display-specific):
+#  COPY the macbook file to a new name and retune the copy — never re-tune in place,
+#  and never swap to 321urx-…-sharp below: it is a frozen 07-18 pre-bloom baseline
+#  (paperLift 0.14, grain 0.016, no bloom) kept only as a reference.
+#  Resolution changes happen FIRST in System Settings, THEN any shader change —
+#  px-pitch shaders are wrong at any resolution they weren't tuned at, and macOS
+#  resampling eats/aliases their effects (this is also what the old "white spots" were).
 # --- clean/ = pristine 0xhckr/ghostty-shaders. ONLY change: curvature off. ---
 #     bettercrt      : no tint. amber comes from foreground=#ecad53. scan 0.25x
 #     retro-terminal : same + teal tint (r=0.0 -> kills reds). scan 0.50x
 #     crt            : Lottes CRTS. 2px beam scanlines, no mask, no vignette.
+# neon_gate: precomputes the bloom gate into alpha for the macbook shader
+# (2026-07-28 thermal optimization; without it the main shader falls back to
+# full-cost inline gating -- looks identical, GPU hotter).
+#
+# 2026-07-30: briefly disabled while neonBloom was 0.0 (nothing reads what it
+# writes when the bloom block is off -- every iChannel0 alpha read lives inside
+# `if (neonBloom > 0.0)`, and the cursor shaders only read the cursor uniform's
+# alpha). RE-ENABLED same day: bloom is back at 0.60 with the smoothstep knee.
+# ⚠️ Rule: this line tracks neonBloom. Bloom 0.0 -> comment it out (free pass
+# removed). Bloom > 0.0 -> it MUST be here, and MUST be first in the chain.
+# 2026-07-30 (later): commented out AGAIN — neonBloom is 0.0 on the live 321urx
+# preset, so nothing reads the alpha this writes. Free pass removed, and it gives
+# back a full pass of fill rate at 3200x1800. Re-enable, FIRST in the chain, the
+# moment bloom goes above 0.0 again.
+# 2026-07-30 (later still): BACK ON — the macbook preset is live again and it runs
+# neonBloom 0.30, so the gate is required and must be FIRST in the chain.
 custom-shader = /Users/jimmy/.config/ghostty/shaders/neon_gate.glsl
+# PRESET SWAP (one active at a time; both use the neon_gate pre-pass above):
+#   321urx-3200x1800-…  = external 321URX @ 3200x1800 non-HiDPI (bloom 0.45 / radius 22 / knee 4.0)
+#   macbook-m4max-…     = MacBook @ 1920x1200 non-HiDPI (bloom 0.60 / radius 13 / knee 7.0)
+# 2026-07-30: PHOSPHOR PASS DROPPED at Jimmy's request ("try dropping it completely").
+# Every knob in it is now 0.0 — warp, scan, paperLift, paperGrain, softAmount, neonBloom,
+# and all motion (barDark/retraceBright/flagAmount/wobbleAmount). The only surviving
+# effect was an ungated +1.2-4% beam highlight on alternate rows, which is imperceptible.
+# So this was a full-screen pass at 5.76 Mpx x 120Hz doing nothing visible. Re-enable by
+# uncommenting; the file is untouched and every knob is still there. If bloom comes back,
+# neon_gate.glsl above must be uncommented too, FIRST in the chain.
+#custom-shader = /Users/jimmy/.config/ghostty/shaders/321urx-3200x1800-theme-friendly-sharp.glsl
 custom-shader = /Users/jimmy/.config/ghostty/shaders/macbook-m4max-2056-theme-friendly-sharp.glsl
 #custom-shader = /Users/jimmy/.config/ghostty/shaders/321urx-monitor-preset-theme-friendly-sharp.glsl
 # hckr experiments prepared 2026-07-19. Do not enable until visual toggle test.
@@ -151,7 +171,12 @@ custom-shader = /Users/jimmy/.config/ghostty/shaders/sonic_boom_cursor.glsl
 # it was HiDPI: 2056x1329 HiDPI = a 4112x2658 backing store (10.9M px), and the shader
 # chain (~750 lines, 3 passes) is per-pixel work. Switching the display to 2336x1510
 # non-HiDPI (3.5M px, 3.1x fewer) dropped WindowServer to ~17%. Leave this at `true`.
-custom-shader-animation = true
+#
+# 2026-07-28: 50% again, but NOT HiDPI (321URX non-HiDPI 2560x1440 confirmed) -- this
+# time it was 240Hz: `true` renders the chain every vsync while focused, so 240Hz
+# doubled the 120Hz-era workload. `false` stops idle frame production; adaptive sync
+# can then drop to its floor. Cursor trails only animate while frames are produced.
+custom-shader-animation = false
 
 # ---------- colours (explicit colours ALWAYS beat `theme`, order is irrelevant) ----------
 # ⚠️ CORRECTION 2026-07-19: the old heading here said "palette MUST come after theme,
@@ -207,11 +232,15 @@ custom-shader-animation = true
 
 # Standard base16 -> ANSI mapping (0-15). Normal and bright share hues by design;
 # base16 varies only black (base00/base03) and white (base05/base07).
+# DO NOT COMMENT THESE OUT. Removed 2026-07-30 to "free up" `theme =`, which
+# dropped ANSI 0-15 to Ghostty's stock palette and recoloured everything that
+# renders through palette slots — Claude Code transcript syntax, tmux, starship.
+# This block IS the look. Restored immediately.
 palette = 0=#16161e
 palette = 1=#f7768e
 palette = 2=#41a6b5
 palette = 3=#e0af68
-palette = 4=#7aa2f7
+palette = 4=#ff5e7a
 palette = 5=#bb9af7
 palette = 6=#7dcfff
 palette = 7=#9aa0c0
@@ -219,7 +248,7 @@ palette = 8=#444b6a
 palette = 9=#f7768e
 palette = 10=#41a6b5
 palette = 11=#e0af68
-palette = 12=#7aa2f7
+palette = 12=#ff5e7a
 palette = 13=#bb9af7
 palette = 14=#7dcfff
 palette = 15=#d5d6db
@@ -316,10 +345,10 @@ font-family = jetbrainsmono nerd font
 
 
 #jetbrainsmono nerd font
-font-style = light
+font-style = medium
 font-size = 20
 font-thicken = false
-font-thicken-strength = 0
+font-thicken-strength = 255
 adjust-cell-height = 0%
 adjust-cell-width = 0%
 
@@ -333,7 +362,10 @@ adjust-cell-width = 0%
 #adjust-cell-height = 20%
 
 cursor-style = block
-cursor-style-blink = true
+# 2026-07-28: blink OFF -- each blink toggle forced a full 3-pass shader render
+# (2/sec, forever). With status-interval 15 and no blink, an idle terminal
+# renders zero frames and the shader chain costs nothing at idle.
+cursor-style-blink = false
 cursor-color = #c8fff4
 cursor-text = #151515
 shell-integration-features = no-cursor
@@ -346,6 +378,11 @@ macos-titlebar-style = hidden
 
 # Start every new window in fullscreen (incl. the one launched at login).
 fullscreen = true
+
+# Native fullscreen puts Ghostty on its own Space, so a cold launch via the
+# Raycast hotkey yanked whatever was frontmost (Firefox) off-screen with no way
+# to cmd-tab back. Non-native fills the screen on the CURRENT Space instead.
+macos-non-native-fullscreen = padded-notch
 
 # Without this, macOS state restoration replays the last window's saved size
 # and beats `fullscreen = true` -- Raycast-launched windows came up tiny.
