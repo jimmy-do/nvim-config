@@ -53,7 +53,7 @@ float softAmount = 0.0; // 0.18 -> 0.0 on 2026-07-25. This was the ONLY thing ma
 // foreground fails the saturation gate and stays razor sharp, exactly the
 // same neutral-vs-saturated split the paper-lift below already relies on.
 // Set neonBloom to 0.0 to switch the whole effect off.
-float neonBloom = 0.30;        // 0.60 -> 0.30 on 2026-07-30: "you can half the bloom". SAFE NOW in a
+float neonBloom = 1.50;        // 0.55 -> 1.50 on 2026-07-30, TEST. Measured: at 0.55 the halo hugging the stroke is only 4.4% of glyph brightness, so the glyph->halo cliff survives. The old "1.20 is blown out" reading was taken with the BROAD exp(-3) falloff, where the budget smeared across the whole radius into fog; with exp(-10) the far field stays dark, so a bigger budget may be spendable. Prediction: at-stroke climbs toward 12-15% with flat fog. If fog returns, this is the ceiling.        // 0.30 -> 0.55 on 2026-07-30, PAIRED with the tightened falloff at ~line 465. MEASURED cause: at 0.30 the added glow ceiling is neon*(0.30/6.0) = 0.05*255 ~ 12 luma, so on a 17-luma background the halo peaked at 23 while the glyph sat at 142. The halo could not reach the letterform, so it read as a separate haze with sharp text on top ("tracing of the characters against the hazy bloom"). Raise the budget AND concentrate it; either alone fails (tighter-only = smaller faint haze, brighter-only = brighter fog).        // 0.60 -> 0.30 on 2026-07-30: "you can half the bloom". SAFE NOW in a
                                // way it never was before: the old low values (0.50/0.42/0.34/0.26) all
                                // looked wrong because occupancyKnockout made the halo a RING, and
                                // dimming a ring turns it into a traced outline. With the knockout off
@@ -462,7 +462,13 @@ void mainImage(out vec4 fragColor, in vec2 fragCoord)
             float rr = sqrt(fi / float(TAPS));
             float a = fi * 2.39996323 + spin;
             vec2 off = vec2(cos(a), sin(a)) * rr * neonBloomRadiusPx * px;
-            float g = exp(-3.0 * rr * rr);
+            // 3.0 -> 10.0 on 2026-07-30: falloff SHAPE. At 3.0 the tap weight only
+            // decays to exp(-3) ~ 0.05 at the disc edge, spreading a tiny energy budget
+            // evenly to the full radius = maximum fog, minimum brightness next to the
+            // stroke. 10.0 lands the energy against the letterform so the halo starts
+            // near the glyph and rolls off. Measured profile before the change: bg 17,
+            // halo peak 23, glyph 142 (halo = 5% of glyph). See neonBloom note up top.
+            float g = exp(-10.0 * rr * rr);
             vec4 tap4 = texture(iChannel0, sampleUv + off);
             vec3 tapc = tap4.rgb;
             float w;

@@ -107,9 +107,15 @@ foreground = #23af23
 # 2026-07-30 (later still): BACK ON — the macbook preset is live again and it runs
 # neonBloom 0.30, so the gate is required and must be FIRST in the chain.
 custom-shader = /Users/jimmy/.config/ghostty/shaders/neon_gate.glsl
-# PRESET SWAP (one active at a time; both use the neon_gate pre-pass above):
-#   321urx-3200x1800-…  = external 321URX @ 3200x1800 non-HiDPI (bloom 0.45 / radius 22 / knee 4.0)
-#   macbook-m4max-…     = MacBook @ 1920x1200 non-HiDPI (bloom 0.60 / radius 13 / knee 7.0)
+# ⛔ DO NOT SWAP PRESETS WHEN THE DISPLAY CHANGES. There is nothing to swap.
+# macbook-m4max-… is THE shader on every display. Both run non-HiDPI 1:1 with one
+# shared font-size, so glyphs are the same pixel size everywhere and radius 13 means
+# the same thing relative to a letterform on either panel. The filename is history,
+# not a scope. Doing this swap on 2026-07-30 cost an entire evening.
+# Live, approved by eye on BOTH displays 07-30: neonBloom 1.50 / radius 13 /
+# falloff exp(-10) / paperLift 0.10 / occupancyKnockout 0.0.
+# The 321urx-* files below are dead: 3200x1800 was stripped to a no-op that night,
+# and monitor-preset-* is a frozen 07-18 pre-bloom reference. Neither is a fallback.
 # 2026-07-30: PHOSPHOR PASS DROPPED at Jimmy's request ("try dropping it completely").
 # Every knob in it is now 0.0 — warp, scan, paperLift, paperGrain, softAmount, neonBloom,
 # and all motion (barDark/retraceBright/flagAmount/wobbleAmount). The only surviving
@@ -345,7 +351,7 @@ font-family = jetbrainsmono nerd font
 
 
 #jetbrainsmono nerd font
-font-style = medium
+font-style = semibold
 font-size = 20
 font-thicken = false
 font-thicken-strength = 255
