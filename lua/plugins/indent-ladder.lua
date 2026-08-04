@@ -70,15 +70,46 @@ local anim = {
   -- i.e. reads as fully dark/off), 1 is the resting lit colour, and >1 pushes on
   -- past it toward white. So 0 -> 1 is a full dark-to-max swing.
   breathe = true, -- false disables the breathe; the guide just rests when filled
+  -- 0.0 is CORRECT and deliberate: the swing must go from max contrast all the
+  -- way down to nothing. Do NOT raise this to "soften" the fade -- tried 0.55
+  -- on 2026-07-31 and it was immediately rejected ("how the fuck is it fading
+  -- like halfway only now"). A partial swing is the bug, not the fix.
   breathe_min = 0.0,
   breathe_max = 1.0,
-  breathe_period = 2600, -- ms for one full bright -> dark -> bright cycle
+  -- ms for one full bright -> dark -> bright cycle.
+  --
+  -- 2026-07-31: tried 1400 (rejected, frantic) and a cosine->triangle waveform
+  -- blend to cut the dwell at black (rejected, caused horizontal flicker: the
+  -- linear ramp produces a distinct colour nearly every frame, and every
+  -- distinct colour is a set_hl and therefore a FULL SCREEN REDRAW -- the
+  -- cosine's dwell was actually load-bearing, it lets most frames dedupe out).
+  -- Everything is back to the original values. Do not retune this without
+  -- Jimmy watching it live.
+  breathe_period = 2600,
+  -- HOLD AT FULL BRIGHTNESS BEFORE THE FIRST DIP (2026-08-02).
+  --
+  -- The breathe used to start at exactly t=1, and t=1 is the instant the fill's
+  -- trailing gradient FINALLY reaches the last row (edge_down hits to+trail at
+  -- p=1). So the bottom of the guide arrived at full brightness in the same
+  -- frame the down-swing began: the tail crossed max on its way down and never
+  -- rested there. Jimmy: "I want the flashing to start AFTER the line has
+  -- finished filling up ... it doesn't start going dim while it's still filling
+  -- up resulting in some weird dim ass shit."
+  --
+  -- During the hold the animation sits at p=1 / level=1, which draws the WHOLE
+  -- block fully lit -- so what you see is the completed guide, held, and only
+  -- then does it breathe. 0 restores the old back-to-back behaviour.
+  breathe_delay = 400,
   -- How many breathe cycles before the guide settles at its resting colour and
   -- the timer SHUTS DOWN. An endless breathe means a parked editor never stops
   -- waking the CPU and repainting -- on battery that is the whole cost of this
   -- plugin. After this many cycles the guide is drawn once, plain, and there is
   -- literally zero ongoing work until the cursor enters a new scope. Set to nil
   -- for the old forever-breathe.
+  -- 3 is correct. Tried 1 on 2026-07-31 and it read as STATIC: the animation
+  -- only re-triggers on ENTERING a new scope, so a single slow swing is one
+  -- barely-perceptible dip and then nothing forever. It takes repeats to read
+  -- as breathing at all. Do not lower this to shorten the animation.
   breathe_cycles = 3,
 
   -- Rows in the soft leading-edge gradient. Geometry lands on whole lines, so the
@@ -119,14 +150,56 @@ local GLOW = "IndentLadderGlow" -- per-frame: the breathing lit colour
 
 local WHITE = { 255, 255, 255 }
 
+-- How close (per RGB channel) the faded guide has to be to the backdrop before
+-- its marks are REMOVED rather than painted (transparency only -- see the block
+-- in animate()). This used to be a `level` threshold, which broke the moment the
+-- level->colour curve changed; the distance to the backdrop is what actually
+-- decides whether pulling the mark is visible, so that is what is measured.
+-- 2 is a channel step you cannot see; larger values start to pop.
+local CLEAR_EPSILON = 2
+
+-- Ghostty's `background` value. Only used when Normal has no bg (transparency):
+-- it is what the guide fades INTO so that "off" actually reads as off. Keep in
+-- sync with `background = ...` in the Ghostty config.
+local TERMINAL_BG = "#111113"
+
 local function unpack_rgb(int)
   return math.floor(int / 0x10000) % 0x100, math.floor(int / 0x100) % 0x100, int % 0x100
 end
 
--- Linear blend: a=0 yields c1, a=1 yields c2. Each colour is an {r,g,b} triple.
+-- Blend in LINEAR LIGHT, not in sRGB bytes: a=0 yields c1, a=1 yields c2.
+--
+-- 2026-08-02. Blending the raw bytes is blending an encoded signal. sRGB is
+-- roughly a 2.2 gamma, so byte-halfway between the backdrop and the lit colour
+-- is about 73% of the PERCEIVED brightness -- the bottom half of the swing
+-- lives in bytes 0..60, where nothing is distinguishable from the backdrop,
+-- especially under transparency where those bytes are competing with the
+-- wallpaper. The ramp was mathematically smooth and measurably 25 steps
+-- (verified live), but most of those steps were perceptually the same "dark",
+-- so what you SAW was bright -> gone. Decode to linear, blend, re-encode: the
+-- steps are then evenly spaced in perceived brightness, which is what the
+-- cosine was always meant to be modulating.
+local function srgb_to_linear(v)
+  v = v / 255
+  if v <= 0.04045 then
+    return v / 12.92
+  end
+  return ((v + 0.055) / 1.055) ^ 2.4
+end
+
+local function linear_to_srgb(v)
+  if v <= 0.0031308 then
+    v = v * 12.92
+  else
+    v = 1.055 * v ^ (1 / 2.4) - 0.055
+  end
+  return math.max(0, math.min(255, math.floor(v * 255 + 0.5)))
+end
+
 local function blend(c1, c2, a)
   local function ch(i)
-    return math.floor(c1[i] + (c2[i] - c1[i]) * a + 0.5)
+    local l1, l2 = srgb_to_linear(c1[i]), srgb_to_linear(c2[i])
+    return linear_to_srgb(l1 + (l2 - l1) * a)
   end
   return { ch(1), ch(2), ch(3) }
 end
@@ -250,6 +323,43 @@ end
 local function struct_indent(lnum)
   local dash = vim.fn.getline(lnum):match("^%s*(%-%s+)")
   return vim.fn.indent(lnum) + (dash and #dash or 0)
+end
+
+-- A list item's CONTENT should light the same guide as its dash, not a deeper
+-- one of its own. Given:
+--
+--     steps:              indent 0
+--       - name: X         indent 2   -> guide col 0
+--         uses: Y         indent 4   -> guide col 2   (WRONG: its own column)
+--
+-- the raw rule ("guide immediately left of the cursor indent") puts the cursor
+-- on col 0 while it sits on a dash row and col 2 while it sits on the rows just
+-- under that dash. So jk-ing down a list made the lit guide flip columns on
+-- every dash -- Jimmy: "everytime i jk onto a - mark it'll pop back out
+-- anyways, its useless". The dash row's answer is the useful one (it spans the
+-- WHOLE list, not one entry), so content rows are pulled back to it.
+--
+-- Only rows whose indent is exactly the dash's content indent are pulled back;
+-- anything deeper (a nested `with:` block) keeps its own guide, so real nesting
+-- still reads normally.
+local function delist_indent(cur, ci)
+  if ci <= 0 or vim.fn.getline(cur):match("^%s*%-%s") then
+    return ci -- top level, or already sitting on the dash row itself
+  end
+  for l = cur - 1, math.max(1, cur - 500), -1 do
+    if not is_blank(l) then
+      local ind = vim.fn.indent(l)
+      if ind < ci then
+        -- First shallower row above us. If it is the dash that owns this
+        -- content, adopt its indent; otherwise we are in an ordinary block.
+        if vim.fn.getline(l):match("^%s*%-%s") and struct_indent(l) == ci then
+          return ind
+        end
+        return ci
+      end
+    end
+  end
+  return ci
 end
 
 -- Pattern matching this filetype's line comments, or nil if unknown.
@@ -420,6 +530,11 @@ local last_key = nil
 -- above `animate` -- the timer callback closes over it as an upvalue, and a
 -- later declaration would silently read a nil global instead.
 local focused = true
+-- Mirrored to a g: var purely so the state is observable from OUTSIDE the
+-- process (nvim --remote-expr) -- `focused` is an upvalue and unreachable
+-- otherwise. Stamped here at load as well as in the handlers, so the variable
+-- existing at all is also a reliable "this file has been reloaded" signal.
+vim.g.indent_ladder_focused = true
 -- Set when something outside the timer (a scroll, a resize) means the current
 -- frame must be redrawn even though the colour has not changed. Without it the
 -- breathe's skip-unchanged-frames optimisation would leave newly scrolled-in rows
@@ -430,6 +545,10 @@ local anim_dirty = false
 -- repaint() closes over it, and a later declaration would read a nil global.
 local scrolling = false
 
+-- What the live timer is animating, so stopping it can leave a finished guide
+-- instead of an abandoned half-fill. Set by animate(), consumed by stop_timer().
+local anim_ctx = nil
+
 local function stop_timer()
   if timer then
     pcall(function()
@@ -437,6 +556,42 @@ local function stop_timer()
       timer:close()
     end)
     timer = nil
+  end
+  -- FINALIZE AN ABANDONED ANIMATION (2026-08-01, the "stopped midway" bug).
+  --
+  -- A live animation dies two ways while its buffer is NOT current: its own
+  -- tick notices the buffer changed and bails, or another window's repaint()
+  -- starts a new animation whose stop_timer() kills it externally (a split
+  -- switch fires both, in a race). Either way the fill's half-painted rows
+  -- stayed exactly as they were, last_key stayed set so nothing re-animated,
+  -- and since repaint() only serves the current buffer, a guide in the OTHER
+  -- split froze that way indefinitely.
+  --
+  -- So: whenever a timer is stopped while its buffer is not the current one,
+  -- leave the same thing the unfocused branch leaves -- the complete static
+  -- resting guide. draw() reads the current window's w0/w$ and the current
+  -- buffer's indents, so it must run inside a window showing that buffer
+  -- (nvim_win_call). No window any more -> wipe the half-fill and drop
+  -- last_key so re-entering the scope animates fresh. Same-buffer stops
+  -- (scope settle, clear(), the unfocused repaint) skip this entirely: their
+  -- callers already draw or wipe, and finalizing would double up.
+  local ctx = anim_ctx
+  anim_ctx = nil
+  --
+  -- 2026-08-02: the finalize used to draw the COMPLETE static guide into the
+  -- other window when that buffer was still visible. Measured live (tmux
+  -- capture-pane, devops:2.1): three guide colours on screen at once and static
+  -- across every frame -- the lit cyan #2ff5ff in the active window, and a dull
+  -- #7e816c bar in the other split, which is that finalized guide after
+  -- tint.nvim's inactive-window dim. That is the dim bar Jimmy keeps seeing, and
+  -- it sits there permanently because nothing ever repaints an inactive window.
+  -- ONE guide on screen, in the window being looked at ([[no-guide-lines]]).
+  -- Wiping still fixes the original "stopped midway" bug -- a cleared guide is
+  -- not a frozen half-fill -- and dropping last_key means re-entering the scope
+  -- animates fresh from nothing.
+  if ctx and vim.api.nvim_buf_is_valid(ctx.buf) and vim.api.nvim_get_current_buf() ~= ctx.buf then
+    clear_marks(ctx.buf)
+    last_key = nil
   end
 end
 
@@ -452,22 +607,66 @@ local function animate(buf, col, from, to, origin)
     draw(buf, col, from, to)
     return
   end
+  anim_ctx = { buf = buf, col = col, from = from, to = to }
   local start = uv.now()
   local interval = math.max(1, math.floor(1000 / anim.fps))
   local breathe_interval = math.max(1, math.floor(1000 / (anim.breathe_fps or anim.fps)))
   local slowed = false
+
+  -- Transparency changes what "faded to nothing" MEANS.
+  --
+  -- The breathe fades the guide down to `dim`, and that only ever read as
+  -- "gone" because dim IS the window background -- this theme paints
+  -- SnacksIndent at exactly Normal.bg (measured 2026-07-31: both #13130f, which
+  -- is also why Jimmy says "the dimmed version is non existent" -- correct, it
+  -- is deliberately invisible). Under :BgTransparency 100 there is no Normal.bg
+  -- at all, the derived dim lands on #181616, and the bottom of every swing
+  -- paints an OPAQUE grey stripe over the wallpaper instead of disappearing.
+  -- A foreground colour cannot be transparent, so the only honest "nothing" is
+  -- to remove the marks and put them back on the way up.
+  local ok_n, n_hl = pcall(vim.api.nvim_get_hl, 0, { name = "Normal", link = false })
+  local transparent = not (ok_n and n_hl and n_hl.bg)
   -- Colours sampled once per animation. `base` is the guide's resting colour and
   -- `dim` is the colour rows fade UP from -- the dim ladder snacks already draws
   -- underneath, so a row emerges out of the existing guide rather than out of
   -- nowhere. Missing either one just disables the fade and we draw plain.
   local base = group_fg(config.hl)
   local dim = group_fg("SnacksIndent") or group_fg("NonText")
+
+  -- WHAT "FADED TO NOTHING" MEANS UNDER TRANSPARENCY (fixed 2026-08-01).
+  --
+  -- The breathe fades base -> dim, and that only ever read as "gone" because dim
+  -- IS the window background: this theme paints SnacksIndent at exactly
+  -- Normal.bg. Under :BgTransparency 100 there is no Normal.bg, the derived dim
+  -- lands on #181616, and #181616 over a see-through window is an OPAQUE GREY
+  -- LINE -- so the guide never vanished, it just went grey.
+  --
+  -- The first attempt at this cleared the extmarks below a 0.10 threshold. That
+  -- removed the grey line but replaced it with a hard on/off: measured, the
+  -- guide was CLEARED for 533ms of every 2600ms cycle, which is exactly what
+  -- Jimmy saw -- "flash statically ... a slideshow". A pop is not a fade.
+  --
+  -- What actually works: fade toward what is REALLY behind the text. Ghostty
+  -- paints `background` at `background-opacity`, and at 0.94 that backdrop is
+  -- ~94% TERMINAL_BG and only ~6% wallpaper -- so fading to TERMINAL_BG reads as
+  -- invisible while staying a continuous 52-step colour ramp. No threshold, no
+  -- clear, no pop.
+  --
+  -- ⚠️ TERMINAL_BG must match `background` in the Ghostty config. If that value
+  -- changes, change this. At much lower opacity the wallpaper dominates and the
+  -- trough will start to show again -- that is inherent: a foreground colour
+  -- cannot be transparent, so there is no exact answer, only this good one.
+  if transparent then
+    dim = { unpack_rgb(tonumber(TERMINAL_BG:sub(2), 16)) }
+  end
   if base and dim then
     build_ramp(dim, base)
   end
   local elig = {} -- per-animation row-eligibility memo (see draw)
   local trail = math.max(1, anim.trail)
   local last_glow = nil -- dedupe: skip the frame entirely if the colour is unchanged
+  -- True while the marks are pulled for the bottom of the swing (see CLEAR_EPSILON).
+  local blanked = false
   timer:start(
     0,
     interval,
@@ -475,12 +674,25 @@ local function animate(buf, col, from, to, origin)
       -- Bail if the buffer went away or the user moved to a different one --
       -- otherwise the timer keeps drawing into a buffer that is no longer shown.
       if not focused then
-        -- Focus went away mid-fill: leave the rows as they are and stop. The
-        -- FocusLost handler's repaint puts the static guide down.
+        -- Focus went away mid-animation. This USED to just stop and rely on the
+        -- FocusLost handler's repaint -- but if focus was lost while the swing
+        -- was at the bottom, the marks are CLEARED (see the transparency block
+        -- below) and stopping here leaves them cleared: the guide is simply GONE
+        -- until the cursor enters a different scope. Switching apps during the
+        -- dark half of a breathe is the most ordinary thing in the world, which
+        -- is why this looked like "it does not even light up" with every other
+        -- piece of state (marks, ramp, colours) measuring perfectly healthy.
+        -- Restore the static guide here rather than trusting the handler to have
+        -- got there first.
         stop_timer()
+        if vim.api.nvim_buf_is_valid(buf) and vim.api.nvim_get_current_buf() == buf then
+          draw(buf, col, from, to)
+        end
         return
       end
       if not vim.api.nvim_buf_is_valid(buf) or vim.api.nvim_get_current_buf() ~= buf then
+        -- stop_timer() finalizes the abandoned guide (see anim_ctx there) --
+        -- this bail must not draw anything itself or the two would double up.
         stop_timer()
         return
       end
@@ -519,8 +731,11 @@ local function animate(buf, col, from, to, origin)
       end
 
       local level = 1
-      if t >= 1 and anim.breathe then
-        local phase = (e - anim.duration) / anim.breathe_period
+      -- The hold: fill is geometrically complete, but leave it parked at full
+      -- brightness for breathe_delay ms before the first dip (see the knob).
+      local breathe_start = anim.duration + (anim.breathe_delay or 0)
+      if e >= breathe_start and anim.breathe then
+        local phase = (e - breathe_start) / anim.breathe_period
         if anim.breathe_cycles and phase >= anim.breathe_cycles then
           -- Breathe budget spent: settle on the resting colour, drop the marks
           -- back onto the plain theme group, and stop. Nothing runs after this
@@ -532,6 +747,52 @@ local function animate(buf, col, from, to, origin)
         end
         local osc = (1 + math.cos(phase * 2 * math.pi)) / 2
         level = anim.breathe_min + (anim.breathe_max - anim.breathe_min) * osc
+      end
+
+      -- BOTTOM OF THE SWING = ACTUALLY NOTHING (2026-08-01).
+      --
+      -- With no window bg there is no foreground colour that means "invisible":
+      -- fading to TERMINAL_BG still paints an OPAQUE #111113 line over the
+      -- wallpaper, so the guide never vanished, it just went dark grey. Measured
+      -- live: Normal.bg = nil, so this branch is the one that runs.
+      --
+      -- The first attempt at this cleared the marks at level <= 0.10, and that
+      -- POPPED -- at 0.10 the colour is still ~#12232f, clearly brighter than the
+      -- backdrop, so the mark vanished while it was plainly still visible.
+      -- The threshold was the bug, not the clearing: the clear has to happen only
+      -- once the ramp has ALREADY arrived at the backdrop, so pulling the mark is
+      -- imperceptible and what you see is a continuous fade that ends in real
+      -- nothingness -- it is the FADE that gets you there, not a cut.
+      --
+      -- 2026-08-02: this is now measured against the COLOUR, not against `level`.
+      -- A level threshold silently depends on the level->colour mapping, so the
+      -- move to a linear-light blend (see blend()) turned 0.03 back into a visible
+      -- pop -- at that level the guide was still ~#233324. Comparing the rendered
+      -- colour to the backdrop is mapping-independent: whatever the curve, the
+      -- clear lands exactly when the fade has nothing left to show.
+      --
+      -- Only under transparency. Opaque windows already work: the theme paints
+      -- SnacksIndent at exactly Normal.bg, so level 0 is genuinely invisible.
+      if transparent then
+        local faded = level <= 1 and blend(dim, base, level) or nil
+        local at_backdrop = faded ~= nil
+          and math.abs(faded[1] - dim[1]) <= CLEAR_EPSILON
+          and math.abs(faded[2] - dim[2]) <= CLEAR_EPSILON
+          and math.abs(faded[3] - dim[3]) <= CLEAR_EPSILON
+        if at_backdrop then
+          if not blanked then
+            blanked = true
+            clear_marks(buf)
+            last_glow = nil -- the dedupe must not skip the repaint on the way up
+          end
+          return
+        elseif blanked then
+          -- Coming back up: marks were wiped, so `active` and the row memo are
+          -- both stale and every row has to be re-laid.
+          blanked = false
+          elig = {}
+          last_glow = nil
+        end
       end
 
       -- The ONE per-frame highlight write. If the rounded colour has not changed
@@ -552,6 +813,45 @@ local function animate(buf, col, from, to, origin)
         anim_dirty = false
       end
       pcall(vim.api.nvim_set_hl, 0, GLOW, { fg = glow })
+
+      -- THE BREATHE'S FRAMES WERE NEVER REACHING THE SCREEN (2026-08-02). This
+      -- is the bug behind "it lights up once and then it is just static".
+      --
+      -- The design above assumed a set_hl "is therefore a FULL SCREEN REDRAW".
+      -- It is not -- not on 0.12, and not for a group that appears ONLY inside
+      -- extmark virt_text. Redefining such a group dirties no line, so no redraw
+      -- is scheduled and the terminal keeps showing the last frame that happened
+      -- to get flushed. The FILL never exposed it: the fill hands every row a
+      -- different FADE_* group each frame, and changing an extmark's group DOES
+      -- dirty its line. The BREATHE gives every row the same GLOW group forever
+      -- and only recolours the group -- which was the entire performance win --
+      -- so from t=1 onward it wrote colour after colour that nothing ever
+      -- painted.
+      --
+      -- Measured against a REAL attached tmux client: the fill delivered 6
+      -- frames, then the guide sat frozen on one mid-fill colour for the whole
+      -- ~8s breathe and only snapped to the resting colour when an unrelated
+      -- redraw (a keypress, <C-l>) came along. The extmarks and GLOW both read
+      -- perfectly healthy the entire time -- the marks said bright while the
+      -- screen said dim. That is why this survived so long: every measurement of
+      -- the STATE agreed with the design, and only the pixels disagreed.
+      --
+      -- nvim__redraw({valid=false}) was tried first and did NOT deliver the
+      -- frames either. What works is to stop relying on a recoloured group at
+      -- all: walk the rows along the PRECOMPUTED ramp instead, so each frame is
+      -- a real group change on the extmark, which dirties the line the same way
+      -- the fill's frames do. The ramp already exists (FADE_STEPS+1 groups, dim
+      -- -> resting colour) and is rebuilt only when the theme changes, so this
+      -- costs one extmark update per visibly distinct step -- not per frame,
+      -- because the dedupe above still drops the rest.
+      --
+      -- GLOW stays the group for the fill's fully-lit rows and for any overshoot
+      -- past the resting colour (level > 1), which the ramp cannot express.
+      local lit_group = GLOW
+      if t >= 1 and level <= 1 then
+        local step = math.floor(level * FADE_STEPS + 0.5)
+        lit_group = FADE_PREFIX .. math.max(0, math.min(FADE_STEPS, step))
+      end
 
       -- Continuous edge positions. Geometry lands on whole lines, but each row's
       -- brightness is driven by how far the edge has travelled PAST it, which varies
@@ -580,7 +880,12 @@ local function animate(buf, col, from, to, origin)
           return nil -- edge has not reached this row yet: draw nothing
         end
         if a >= 1 then
-          return GLOW -- fully lit rows all share one group, so the breathe is free
+          -- Fully lit rows share ONE group. During the fill that is GLOW (one
+          -- set_hl per frame, and the per-row group changes already force the
+          -- redraw). During the breathe it is the ramp step for this frame --
+          -- see lit_group above: sharing a recoloured group there meant the
+          -- frames were computed and never drawn.
+          return lit_group
         end
         return FADE_PREFIX .. math.floor(a * FADE_STEPS + 0.5)
       end, elig)
@@ -645,7 +950,7 @@ local function repaint()
 
   local last = vim.fn.line("$")
   local cur = vim.fn.line(".")
-  local ci = cursor_indent(cur, last)
+  local ci = delist_indent(cur, cursor_indent(cur, last))
   if ci <= 0 then
     return clear() -- top level: no enclosing guide to light
   end
@@ -662,10 +967,16 @@ local function repaint()
   local key = table.concat({ buf, col, from, to }, ":")
   if not focused then
     -- Unfocused: kill any live animation and paint the resting guide once.
-    -- last_key is dropped so regaining focus re-animates from scratch rather
-    -- than treating this as "same scope, nothing to do".
+    --
+    -- 2026-07-31: this used to also clear `last_key`, deliberately, so that
+    -- regaining focus replayed the grow animation from scratch. In practice
+    -- FocusLost/FocusGained fire on every tmux WINDOW SWAP, so simply cycling
+    -- away and back re-animated a scope Jimmy never left -- his verdict: "0
+    -- need for it to reanimate". Keeping the key means refocus lands in the
+    -- "same scope, nothing to do" branch below and the guide is just repainted
+    -- at full extent. A genuinely new scope still animates, because the key
+    -- changes on its own.
     stop_timer()
-    last_key = nil
     draw(buf, col, from, to)
     return
   end
@@ -691,6 +1002,12 @@ end
 
 -- Debounce: CursorMoved fires in bursts; coalesce to one repaint per tick.
 local scheduled = false
+-- A repaint that throws is swallowed (it must be -- this runs on every
+-- CursorMoved and an error loop through noice melts the session, see the
+-- statuscolumn rule). But swallowing it SILENTLY is how the guide freezes with
+-- no trace: clear() never runs, the last-painted marks sit there forever, and
+-- :messages shows nothing. Report the first failure once, then stay quiet.
+local repaint_error_reported = false
 local function schedule()
   if scheduled then
     return
@@ -698,7 +1015,14 @@ local function schedule()
   scheduled = true
   vim.schedule(function()
     scheduled = false
-    pcall(repaint)
+    local ok, err = pcall(repaint)
+    if not ok then
+      vim.g.indent_ladder_last_error = tostring(err)
+      if not repaint_error_reported then
+        repaint_error_reported = true
+        vim.notify("indent-ladder: repaint failed (guide may freeze): " .. tostring(err), vim.log.levels.WARN)
+      end
+    end
   end)
 end
 
@@ -749,8 +1073,17 @@ vim.api.nvim_create_autocmd("FocusLost", {
   group = group,
   callback = function()
     focused = false
+    vim.g.indent_ladder_focused = false
+    -- Only repaint if we just KILLED a live animation -- that is the one case
+    -- where the marks on screen are a half-fill that needs finishing. With no
+    -- timer running the guide is already sitting at its resting state and
+    -- redrawing it is a full guide_indent() scan of every visible row for
+    -- literally no pixel change. See the FocusGained note below.
+    local had_timer = timer ~= nil
     stop_timer()
-    schedule()
+    if had_timer then
+      schedule()
+    end
   end,
 })
 
@@ -758,7 +1091,46 @@ vim.api.nvim_create_autocmd("FocusGained", {
   group = group,
   callback = function()
     focused = true
-    schedule()
+    vim.g.indent_ladder_focused = true
+    -- THE SWAP LAG (2026-08-02). FocusLost AND FocusGained both fire on every
+    -- tmux WINDOW swap, and both used to schedule() unconditionally -- so each
+    -- swap cost two full repaints, and repaint()'s same-scope branch calls
+    -- draw(), which re-runs guide_indent() over every visible row (see the
+    -- scroll note: "dozens of vimscript round-trips"). Nothing about the guide
+    -- changed while we were away: extmarks are line-anchored, the text did not
+    -- move, and the scope is the same one we left. Worse, the swap's own redraw
+    -- can fire WinScrolled, which parks repaint() behind scroll_quiet_ms -- so
+    -- the wasted work landed as a visible dead beat right at the start.
+    --
+    -- With a guide already painted (last_key set) there is nothing to do but
+    -- flip the flag. A guide that is genuinely absent still gets drawn, and any
+    -- real cursor move repaints through the normal path.
+    if not last_key then
+      schedule()
+    end
+  end,
+})
+
+-- SELF-HEAL (2026-08-02). `focused` gates the ENTIRE animation: a false value
+-- makes animate()'s first tick stop the timer and repaint() paint the static
+-- guide, so the guide simply never moves again. That is a latch -- one missed
+-- FocusGained and the animation is dead for the rest of the session, silently,
+-- with everything else (marks, colours, the ramp) still looking perfectly
+-- healthy. FocusLost/FocusGained arrive over terminal focus reporting through
+-- tmux, across app switches, tmux window swaps and floats; anything that eats
+-- one of them leaves the latch stuck.
+--
+-- Keystrokes are proof of focus: input cannot reach a terminal that does not
+-- have it. So any cursor movement clears the latch. Costs a boolean compare on
+-- CursorMoved and only ever schedules when it actually just repaired itself.
+vim.api.nvim_create_autocmd({ "CursorMoved", "CursorMovedI", "ModeChanged" }, {
+  group = group,
+  callback = function()
+    if not focused then
+      focused = true
+      vim.g.indent_ladder_focused = true
+      schedule()
+    end
   end,
 })
 
@@ -948,7 +1320,7 @@ vim.api.nvim_create_user_command("IndentLadderDebug", function()
   if sw == 0 then
     sw = vim.bo.tabstop
   end
-  local ci = cursor_indent(cur, last)
+  local ci = delist_indent(cur, cursor_indent(cur, last))
   local col = math.floor((ci - 1) / sw) * sw
   local from, to = block_range(cur, col, last)
 
