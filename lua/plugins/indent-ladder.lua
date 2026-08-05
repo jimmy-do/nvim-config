@@ -749,6 +749,32 @@ local function animate(buf, col, from, to, origin)
         level = anim.breathe_min + (anim.breathe_max - anim.breathe_min) * osc
       end
 
+      -- ERASE FROM THE ENDS, DO NOT DIM (2026-08-05). The fix for "gday makes it
+      -- buggy".
+      --
+      -- theme.lua sets bg_transparency = 100 permanently, so Normal.bg is nil in
+      -- BOTH day and night -- this branch has always been the live one. Night
+      -- only LOOKS smooth because ghostty-mode.sh turns the phosphor shaders on
+      -- and they paint over the damage; day drops them and exposes it.
+      --
+      -- Under transparency no foreground colour means "invisible", so a tonal
+      -- fade cannot end at nothing. Both previous attempts failed in opposite
+      -- directions: fading to TERMINAL_BG left an OPAQUE #111113 bar over the
+      -- wallpaper ("dim guidelines that aren't supposed to be there"), and
+      -- clearing at a threshold dropped every row in one frame ("a slideshow").
+      --
+      -- So make the fade SPATIAL. The colour stays pinned at full strength and
+      -- the guide retreats from both ends toward the cursor row, then grows back
+      -- out. A row is either fully lit or absent -- never a dim colour, so the
+      -- bar is structurally impossible -- and the swing is one row per step over
+      -- the block's half-height, so it reads as continuous rather than as a cut.
+      -- The trough is genuinely empty, which is the only honest "nothing" here.
+      local erase = nil
+      if transparent and t >= 1 and anim.breathe then
+        erase = level
+        level = 1 -- colour is not the fade any more; keep it lit
+      end
+
       -- BOTTOM OF THE SWING = ACTUALLY NOTHING (2026-08-01).
       --
       -- With no window bg there is no foreground colour that means "invisible":
@@ -803,10 +829,33 @@ local function animate(buf, col, from, to, origin)
       -- carries on past it toward white, so breathe_max can overshoot the theme
       -- colour without the resting colour itself stopping coming from the theme.
       local glow = hex(level <= 1 and blend(dim, base, level) or blend(base, WHITE, level - 1))
-      if glow == last_glow and t >= 1 and not anim_dirty then
+
+      -- How far the guide has retreated toward the cursor row. Both ends travel
+      -- their own distance, so a scope that is 2 rows above and 30 below empties
+      -- and refills as one motion instead of one end finishing far ahead of the
+      -- other. Below half a row of reach there is nothing left to show: the range
+      -- goes inverted, draw() retires every row, and the guide is really gone --
+      -- which is also what gives the trough its dwell.
+      local erase_lo, erase_hi
+      if erase then
+        local up, down = origin - from, to - origin
+        if erase <= 0.5 / math.max(1, math.max(up, down)) then
+          erase_lo, erase_hi = 1, 0
+        else
+          erase_lo = origin - math.floor(up * erase + 1e-6)
+          erase_hi = origin + math.floor(down * erase + 1e-6)
+        end
+      end
+
+      -- The dedupe has to key on the erase span too. During the spatial fade the
+      -- colour is CONSTANT, so a glow-only comparison would skip every single
+      -- frame and the guide would never move -- the same class of bug as the
+      -- recoloured-group breathe that never reached the screen.
+      local frame_key = glow .. ":" .. tostring(erase_lo) .. ":" .. tostring(erase_hi)
+      if frame_key == last_glow and t >= 1 and not anim_dirty then
         return
       end
-      last_glow = glow
+      last_glow = frame_key
       if anim_dirty then
         -- A scroll or an edit got us here; the row-eligibility memo may be stale.
         elig = {}
@@ -868,6 +917,12 @@ local function animate(buf, col, from, to, origin)
       -- block entirely, running the guide past the end of the nested chunk.
       local lo = math.max(from, math.floor(edge_up))
       local hi = math.min(to, math.ceil(edge_down))
+      -- The spatial fade narrows the drawn range; draw() retires every row that
+      -- falls outside it, so shrinking the range IS the erase. An inverted range
+      -- retires all of them, which is the empty trough.
+      if erase_lo then
+        lo, hi = math.max(lo, erase_lo), math.min(hi, erase_hi)
+      end
 
       draw(buf, col, lo, hi, function(l)
         -- How far the edge has swept past this row, in rows, spread over `trail`
