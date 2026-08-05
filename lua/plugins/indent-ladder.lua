@@ -100,6 +100,13 @@ local anim = {
   -- block fully lit -- so what you see is the completed guide, held, and only
   -- then does it breathe. 0 restores the old back-to-back behaviour.
   breathe_delay = 400,
+  -- How far ABOVE the resting colour the transparent-mode pulse lifts, on the
+  -- same brightness axis (1 = the theme colour, +1 = pure white). 0.55 blends
+  -- the peak just over halfway to white -- clearly a pulse without blowing the
+  -- guide out to a white line. THIS is the amplitude knob in day mode;
+  -- breathe_min/breathe_max only govern the downward swing that opaque
+  -- (night-mode-looking) windows still use.
+  breathe_lift = 0.55,
   -- How many breathe cycles before the guide settles at its resting colour and
   -- the timer SHUTS DOWN. An endless breathe means a parked editor never stops
   -- waking the CPU and repainting -- on battery that is the whole cost of this
@@ -147,6 +154,12 @@ local uv = vim.uv or vim.loop
 local FADE_PREFIX = "IndentLadderFade" -- static trail ramp: dim -> base
 local FADE_STEPS = 48 -- ramp resolution; higher = smoother trail
 local GLOW = "IndentLadderGlow" -- per-frame: the breathing lit colour
+-- Static ramp for the UPWARD pulse (base -> white), the transparent-mode
+-- breathe. It has to be a precomputed ramp for the same reason the fade one
+-- does: recolouring a single group that appears only inside extmark virt_text
+-- dirties no line, so the frames are computed and never painted. Walking real
+-- group names per row is what actually delivers them.
+local LIFT_PREFIX = "IndentLadderLift"
 
 local WHITE = { 255, 255, 255 }
 
@@ -219,6 +232,8 @@ local function build_ramp(dim, base)
   end
   for i = 0, FADE_STEPS do
     pcall(vim.api.nvim_set_hl, 0, FADE_PREFIX .. i, { fg = hex(blend(dim, base, i / FADE_STEPS)) })
+    -- and the upward half: base -> white, for the transparent-mode pulse.
+    pcall(vim.api.nvim_set_hl, 0, LIFT_PREFIX .. i, { fg = hex(blend(base, WHITE, i / FADE_STEPS)) })
   end
   ramp_key = key
 end
@@ -731,6 +746,9 @@ local function animate(buf, col, from, to, origin)
       end
 
       local level = 1
+      -- The raw oscillator, kept outside the branch below so the transparent
+      -- pulse can read it. 1 at both turning points, 0 in the middle.
+      local osc_now = 1
       -- The hold: fill is geometrically complete, but leave it parked at full
       -- brightness for breathe_delay ms before the first dip (see the knob).
       local breathe_start = anim.duration + (anim.breathe_delay or 0)
@@ -745,12 +763,12 @@ local function animate(buf, col, from, to, origin)
           stop_timer()
           return
         end
-        local osc = (1 + math.cos(phase * 2 * math.pi)) / 2
-        level = anim.breathe_min + (anim.breathe_max - anim.breathe_min) * osc
+        osc_now = (1 + math.cos(phase * 2 * math.pi)) / 2
+        level = anim.breathe_min + (anim.breathe_max - anim.breathe_min) * osc_now
       end
 
-      -- ERASE FROM THE ENDS, DO NOT DIM (2026-08-05). The fix for "gday makes it
-      -- buggy".
+      -- PULSE UP, NEVER DOWN (2026-08-05, second attempt). The fix for "gday
+      -- makes it buggy".
       --
       -- theme.lua sets bg_transparency = 100 permanently, so Normal.bg is nil in
       -- BOTH day and night -- this branch has always been the live one. Night
@@ -763,16 +781,27 @@ local function animate(buf, col, from, to, origin)
       -- wallpaper ("dim guidelines that aren't supposed to be there"), and
       -- clearing at a threshold dropped every row in one frame ("a slideshow").
       --
-      -- So make the fade SPATIAL. The colour stays pinned at full strength and
-      -- the guide retreats from both ends toward the cursor row, then grows back
-      -- out. A row is either fully lit or absent -- never a dim colour, so the
-      -- bar is structurally impossible -- and the swing is one row per step over
-      -- the block's half-height, so it reads as continuous rather than as a cut.
-      -- The trough is genuinely empty, which is the only honest "nothing" here.
-      local erase = nil
+      -- A SPATIAL fade was tried first and rejected on sight -- "ITS A SLIDESHOW
+      -- BRUH". It erased rows from the ends inward, which is chunky BY
+      -- CONSTRUCTION: its resolution is the scope's ROW COUNT, so a 40-row scope
+      -- gets ~20 steps and an 8-row scope gets four. The colour ramp has 48 steps
+      -- at any height. Never animate on a spatial axis that short.
+      --
+      -- So the breathe goes UP instead: from the resting colour toward white and
+      -- back. It never goes dim and never disappears, so both failure modes are
+      -- structurally impossible, and it is exactly as smooth as night mode
+      -- because it walks the same 48-step ramp. The cost is honest and accepted:
+      -- under transparency this is a glow pulse, not a fade to nothing. Nothing
+      -- CAN fade to nothing here -- that was only ever true in night mode, where
+      -- the phosphor shaders were hiding the trough anyway.
+      --
+      -- Opaque mode is untouched: there the theme paints SnacksIndent at exactly
+      -- Normal.bg, so level 0 really is invisible and the tonal fade is right.
       if transparent and t >= 1 and anim.breathe then
-        erase = level
-        level = 1 -- colour is not the fade any more; keep it lit
+        -- osc is 1 at the turning points and 0 at the middle, so this rests at
+        -- the fill's landing colour, lifts to the peak, and returns -- the same
+        -- continuity with the fill that the downward swing was chosen for.
+        level = 1 + (anim.breathe_lift or 0) * (1 - osc_now)
       end
 
       -- BOTTOM OF THE SWING = ACTUALLY NOTHING (2026-08-01).
@@ -830,32 +859,10 @@ local function animate(buf, col, from, to, origin)
       -- colour without the resting colour itself stopping coming from the theme.
       local glow = hex(level <= 1 and blend(dim, base, level) or blend(base, WHITE, level - 1))
 
-      -- How far the guide has retreated toward the cursor row. Both ends travel
-      -- their own distance, so a scope that is 2 rows above and 30 below empties
-      -- and refills as one motion instead of one end finishing far ahead of the
-      -- other. Below half a row of reach there is nothing left to show: the range
-      -- goes inverted, draw() retires every row, and the guide is really gone --
-      -- which is also what gives the trough its dwell.
-      local erase_lo, erase_hi
-      if erase then
-        local up, down = origin - from, to - origin
-        if erase <= 0.5 / math.max(1, math.max(up, down)) then
-          erase_lo, erase_hi = 1, 0
-        else
-          erase_lo = origin - math.floor(up * erase + 1e-6)
-          erase_hi = origin + math.floor(down * erase + 1e-6)
-        end
-      end
-
-      -- The dedupe has to key on the erase span too. During the spatial fade the
-      -- colour is CONSTANT, so a glow-only comparison would skip every single
-      -- frame and the guide would never move -- the same class of bug as the
-      -- recoloured-group breathe that never reached the screen.
-      local frame_key = glow .. ":" .. tostring(erase_lo) .. ":" .. tostring(erase_hi)
-      if frame_key == last_glow and t >= 1 and not anim_dirty then
+      if glow == last_glow and t >= 1 and not anim_dirty then
         return
       end
-      last_glow = frame_key
+      last_glow = glow
       if anim_dirty then
         -- A scroll or an edit got us here; the row-eligibility memo may be stale.
         elig = {}
@@ -900,6 +907,13 @@ local function animate(buf, col, from, to, origin)
       if t >= 1 and level <= 1 then
         local step = math.floor(level * FADE_STEPS + 0.5)
         lit_group = FADE_PREFIX .. math.max(0, math.min(FADE_STEPS, step))
+      elseif t >= 1 then
+        -- Overshoot past the resting colour (the transparent-mode pulse). This
+        -- used to fall through to GLOW, a recoloured group -- which is exactly
+        -- the "computed but never painted" bug described above, and it would
+        -- have made the pulse invisible. Walk the lift ramp instead.
+        local step = math.floor((level - 1) * FADE_STEPS + 0.5)
+        lit_group = LIFT_PREFIX .. math.max(0, math.min(FADE_STEPS, step))
       end
 
       -- Continuous edge positions. Geometry lands on whole lines, but each row's
@@ -917,12 +931,6 @@ local function animate(buf, col, from, to, origin)
       -- block entirely, running the guide past the end of the nested chunk.
       local lo = math.max(from, math.floor(edge_up))
       local hi = math.min(to, math.ceil(edge_down))
-      -- The spatial fade narrows the drawn range; draw() retires every row that
-      -- falls outside it, so shrinking the range IS the erase. An inverted range
-      -- retires all of them, which is the empty trough.
-      if erase_lo then
-        lo, hi = math.max(lo, erase_lo), math.min(hi, erase_hi)
-      end
 
       draw(buf, col, lo, hi, function(l)
         -- How far the edge has swept past this row, in rows, spread over `trail`
