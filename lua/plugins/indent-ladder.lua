@@ -173,6 +173,13 @@ local LIFT_PREFIX = "IndentLadderLift"
 -- anim.cycle_colors at full brightness. Precomputed for the same reason as the
 -- other two ramps -- recolouring one group that lives only in extmark virt_text
 -- paints nothing, so each frame has to be a real group change on the extmark.
+-- The guide's RESTING group. Every static draw (settle, unfocused repaint,
+-- same-scope repaint) goes through this instead of config.hl, so the guide can
+-- never come to rest on the colorscheme's own scope colour -- which on his
+-- gruvbox is #5f6c1f, i.e. the dim bar. Set from `base` at the start of every
+-- animation; falls back to config.hl until then.
+local REST = "IndentLadderRest"
+local resting_hl = nil
 local CYCLE_PREFIX = "IndentLadderCycle"
 local CYCLE_STEPS = 96 -- around the whole loop; 32 per leg on a 3-colour cycle
 
@@ -281,6 +288,10 @@ end
 local function invalidate_ramp()
   ramp_key = nil
   cycle_key = nil
+  -- `hi clear` wipes REST along with the ramps, and a cleared group renders with
+  -- no highlight at all. Drop the pointer so static draws fall back to config.hl
+  -- until the next animation re-pins it.
+  resting_hl = nil
 end
 
 -- Resting colour of the guide, read live from the theme group each time an
@@ -537,7 +548,7 @@ local function draw(buf, col, lo, hi, hl_for, cache)
       end
     end
     if ok then
-      local hl = hl_for and hl_for(l) or config.hl
+      local hl = hl_for and hl_for(l) or resting_hl or config.hl
       if hl then
         want[l] = hl
       end
@@ -686,7 +697,26 @@ local function animate(buf, col, from, to, origin)
   -- `dim` is the colour rows fade UP from -- the dim ladder snacks already draws
   -- underneath, so a row emerges out of the existing guide rather than out of
   -- nowhere. Missing either one just disables the fade and we draw plain.
+  -- THE RESTING COLOUR IS NOT THE THEME'S (2026-08-05). This is the actual
+  -- "fills in and STAYS DIM" bug, and it was never the fade or transparency.
+  --
+  -- `base` used to be SnacksIndentScope, whatever the colorscheme happened to
+  -- put there. Measured in an isolated repro on his live config: he is on
+  -- base16-gruvbox-dark-medium-forest, whose SnacksIndentScope is #5f6c1f -- a
+  -- DARK OLIVE. So the fill climbed to dark olive, the cycle looked right for
+  -- 7.8s, and then the settle painted that olive and left it there forever.
+  -- Every "dim bar" complaint on a dark theme is this.
+  --
+  -- Order of authority: an explicit :IndentColor wins (it is the documented
+  -- owner, persisted in vim.g.indent_scope_color), then the first cycle colour
+  -- (his own, and the one the cycle returns to, so rest == cycle start), and the
+  -- theme group only as a last resort when neither is configured.
   local base = group_fg(config.hl)
+  local chosen = vim.g.indent_scope_color
+    or (type(anim.cycle_colors) == "table" and anim.cycle_colors[1])
+  if type(chosen) == "string" and chosen:match("^#%x%x%x%x%x%x$") then
+    base = { unpack_rgb(tonumber(chosen:sub(2), 16)) }
+  end
   local dim = group_fg("SnacksIndent") or group_fg("NonText")
 
   -- WHAT "FADED TO NOTHING" MEANS UNDER TRANSPARENCY (fixed 2026-08-01).
@@ -717,6 +747,11 @@ local function animate(buf, col, from, to, origin)
   end
   if base and dim then
     build_ramp(dim, base)
+    -- Pin the resting group to the SAME colour the fill climbs to, so the
+    -- handover from animation to rest is invisible instead of a drop to the
+    -- theme's dim scope colour.
+    pcall(vim.api.nvim_set_hl, 0, REST, { fg = hex(base) })
+    resting_hl = REST
   end
   -- Day mode (transparent) cycles hue; night mode (opaque) keeps the tonal
   -- fade-to-nothing. Nothing else in the animation differs between them.
