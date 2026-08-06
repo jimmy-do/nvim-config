@@ -588,7 +588,23 @@ local function draw(buf, col, lo, hi, hl_for, cache)
 end
 
 local timer = nil
-local last_key = nil
+-- The scope each buffer was last painted with, buf -> key.
+--
+-- PER BUFFER, not one global (2026-08-05, the C-h/C-l swap lag). A single
+-- global key was overwritten the moment the OTHER window's repaint() ran, so
+-- swapping back never matched and re-ran the full ~5s animation (450ms fill at
+-- anim.fps, then breathe_delay, then breathe_cycles) on EVERY press. Bouncing
+-- h/l tore that down and restarted it each time -- the lag and the half-drawn
+-- guide. Keyed per buffer, a swap-back lands in repaint()'s "same scope"
+-- branch and costs one static draw. Same verdict as the FocusGained note
+-- below: "0 need for it to reanimate".
+local painted = {}
+local function key_of(buf)
+  return painted[buf]
+end
+local function set_key(buf, key)
+  painted[buf] = key
+end
 -- Focus gate. When the terminal pane / GUI window loses focus, nothing here is
 -- being looked at, so the breathe is pure churn: it keeps redefining highlight
 -- groups every frame, which forces a full redraw of an unfocused pane and reads
@@ -656,9 +672,14 @@ local function stop_timer()
   -- Wiping still fixes the original "stopped midway" bug -- a cleared guide is
   -- not a frozen half-fill -- and dropping last_key means re-entering the scope
   -- animates fresh from nothing.
+  --
+  -- 2026-08-05: the key is now KEPT (it used to be dropped here, which is what
+  -- made every C-h/C-l swap-back re-run the whole animation -- see `painted`).
+  -- Wiping the marks still fixes the original "stopped midway" bug: coming back
+  -- to a kept key hits repaint()'s same-scope branch, which draws the COMPLETE
+  -- static guide. A wiped guide plus a static redraw is never a frozen half-fill.
   if ctx and vim.api.nvim_buf_is_valid(ctx.buf) and vim.api.nvim_get_current_buf() ~= ctx.buf then
     clear_marks(ctx.buf)
-    last_key = nil
   end
 end
 
@@ -1058,7 +1079,7 @@ local function repaint()
 
   local function clear()
     stop_timer()
-    last_key = nil
+    set_key(buf, nil)
     clear_marks(buf) -- keeps `active` in sync with the wiped namespace
   end
 
@@ -1140,21 +1161,26 @@ local function repaint()
     draw(buf, col, from, to)
     return
   end
-  if key == last_key or not anim.enabled then
+  if key == key_of(buf) or not anim.enabled then
     -- Same scope (or animation off): just repaint at full extent, no regrow.
     -- EXCEPT while a timer is live: CursorMoved fires on the same tick that a
     -- scope is entered, so this branch would immediately redraw the guide at full
     -- extent in the plain resting colour and stomp frame 1 of the animation. The
     -- two then fought for the rest of the run. The timer owns the pixels while it
     -- lives; just flag it to redraw in case this was a scroll.
-    if anim.enabled and timer then
+    --
+    -- The timer only owns the pixels of the buffer it is animating. With keys
+    -- kept per buffer a swap-back can land here while the OTHER window's
+    -- animation is still live -- deferring to it would leave this buffer's
+    -- guide wiped (stop_timer clears the marks) until that run finished.
+    if anim.enabled and timer and anim_ctx and anim_ctx.buf == buf then
       anim_dirty = true
     else
       draw(buf, col, from, to)
     end
     return
   end
-  last_key = key
+  set_key(buf, key)
 
   -- New scope: grow out from the cursor row, clamped into the block.
   animate(buf, col, from, to, math.min(math.max(cur, from), to))
@@ -1265,7 +1291,7 @@ vim.api.nvim_create_autocmd("FocusGained", {
     -- With a guide already painted (last_key set) there is nothing to do but
     -- flip the flag. A guide that is genuinely absent still gets drawn, and any
     -- real cursor move repaints through the normal path.
-    if not last_key then
+    if not key_of(vim.api.nvim_get_current_buf()) then
       schedule()
     end
   end,
@@ -1298,6 +1324,16 @@ vim.api.nvim_create_autocmd({ "CursorMoved", "CursorMovedI", "ModeChanged" }, {
 -- resting colour it fades up to has probably changed anyway. Drop the cache key
 -- so the next animation rebuilds from the new theme.
 vim.api.nvim_create_autocmd("ColorScheme", { group = group, callback = invalidate_ramp })
+
+-- `painted` is keyed by buffer number and buffer numbers are recycled, so a
+-- stale entry could make a brand new buffer look already-painted and skip its
+-- first animation. Drop the entry with the buffer.
+vim.api.nvim_create_autocmd({ "BufWipeout", "BufDelete" }, {
+  group = group,
+  callback = function(ev)
+    painted[ev.buf] = nil
+  end,
+})
 
 -- ---- :IndentColor -----------------------------------------------------------
 --
@@ -1350,7 +1386,7 @@ end
 -- to do" and leave the guide sitting at the previous colour until you moved.
 local function refresh_guide()
   invalidate_ramp()
-  last_key = nil
+  painted = {}
   stop_timer()
   schedule()
 end
