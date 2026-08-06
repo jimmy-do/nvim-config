@@ -100,13 +100,22 @@ local anim = {
   -- block fully lit -- so what you see is the completed guide, held, and only
   -- then does it breathe. 0 restores the old back-to-back behaviour.
   breathe_delay = 400,
-  -- How far ABOVE the resting colour the transparent-mode pulse lifts, on the
-  -- same brightness axis (1 = the theme colour, +1 = pure white). 0.55 blends
-  -- the peak just over halfway to white -- clearly a pulse without blowing the
-  -- guide out to a white line. THIS is the amplitude knob in day mode;
-  -- breathe_min/breathe_max only govern the downward swing that opaque
-  -- (night-mode-looking) windows still use.
-  breathe_lift = 0.55,
+  -- TRANSPARENT (gday) MODE: cycle hue instead of fading (2026-08-05).
+  --
+  -- Fading to nothing is impossible under transparency -- see the long block in
+  -- animate(). Jimmy's call once that was established: "keep the hue change,
+  -- make it go through the 3 gruvbox colors I've set ... the fading in and out
+  -- wont work during daytime." These three are his own, from starship.toml:
+  -- seg_os (#aaff00), seg_dir (#2ff5ff), seg_time (#ffc21e). #2ff5ff is also
+  -- what the guide already rests at, so the cycle starts on the colour the fill
+  -- lands on and there is no jump into it.
+  --
+  -- Brightness never changes, so the guide never approaches the backdrop and the
+  -- dim bar cannot occur. That is the POINT of this shape, not a side effect --
+  -- do not add a brightness component to it.
+  cycle_colors = { "#2ff5ff", "#aaff00", "#ffc21e" },
+  -- Milliseconds for one full trip through all three and back to the first.
+  cycle_period = 7800,
   -- How many breathe cycles before the guide settles at its resting colour and
   -- the timer SHUTS DOWN. An endless breathe means a parked editor never stops
   -- waking the CPU and repainting -- on battery that is the whole cost of this
@@ -160,6 +169,12 @@ local GLOW = "IndentLadderGlow" -- per-frame: the breathing lit colour
 -- dirties no line, so the frames are computed and never painted. Walking real
 -- group names per row is what actually delivers them.
 local LIFT_PREFIX = "IndentLadderLift"
+-- Static ramp for the transparent-mode HUE CYCLE: a closed loop through
+-- anim.cycle_colors at full brightness. Precomputed for the same reason as the
+-- other two ramps -- recolouring one group that lives only in extmark virt_text
+-- paints nothing, so each frame has to be a real group change on the extmark.
+local CYCLE_PREFIX = "IndentLadderCycle"
+local CYCLE_STEPS = 96 -- around the whole loop; 32 per leg on a 3-colour cycle
 
 local WHITE = { 255, 255, 255 }
 
@@ -238,8 +253,34 @@ local function build_ramp(dim, base)
   ramp_key = key
 end
 
+-- The hue cycle's own ramp, keyed separately: it depends on cycle_colors, not on
+-- the theme's dim/base pair, so it must not be rebuilt (or skipped) with them.
+local cycle_key = nil
+
+local function build_cycle(colors)
+  local key = table.concat(colors, ",")
+  if key == cycle_key then
+    return
+  end
+  local n = #colors
+  local rgb = {}
+  for i, c in ipairs(colors) do
+    rgb[i] = { unpack_rgb(tonumber(c:sub(2), 16)) }
+  end
+  for i = 0, CYCLE_STEPS - 1 do
+    -- Position around a CLOSED loop: the last colour blends back into the
+    -- first, so the cycle has no seam and no direction change.
+    local pos = i / CYCLE_STEPS * n
+    local a = math.floor(pos) % n
+    local c1, c2 = rgb[a + 1], rgb[(a + 1) % n + 1]
+    pcall(vim.api.nvim_set_hl, 0, CYCLE_PREFIX .. i, { fg = hex(blend(c1, c2, pos - math.floor(pos))) })
+  end
+  cycle_key = key
+end
+
 local function invalidate_ramp()
   ramp_key = nil
+  cycle_key = nil
 end
 
 -- Resting colour of the guide, read live from the theme group each time an
@@ -677,6 +718,15 @@ local function animate(buf, col, from, to, origin)
   if base and dim then
     build_ramp(dim, base)
   end
+  -- Day mode (transparent) cycles hue; night mode (opaque) keeps the tonal
+  -- fade-to-nothing. Nothing else in the animation differs between them.
+  local cycling = transparent
+    and anim.breathe
+    and type(anim.cycle_colors) == "table"
+    and #anim.cycle_colors > 1
+  if cycling then
+    build_cycle(anim.cycle_colors)
+  end
   local elig = {} -- per-animation row-eligibility memo (see draw)
   local trail = math.max(1, anim.trail)
   local last_glow = nil -- dedupe: skip the frame entirely if the colour is unchanged
@@ -746,9 +796,6 @@ local function animate(buf, col, from, to, origin)
       end
 
       local level = 1
-      -- The raw oscillator, kept outside the branch below so the transparent
-      -- pulse can read it. 1 at both turning points, 0 in the middle.
-      local osc_now = 1
       -- The hold: fill is geometrically complete, but leave it parked at full
       -- brightness for breathe_delay ms before the first dip (see the knob).
       local breathe_start = anim.duration + (anim.breathe_delay or 0)
@@ -763,8 +810,8 @@ local function animate(buf, col, from, to, origin)
           stop_timer()
           return
         end
-        osc_now = (1 + math.cos(phase * 2 * math.pi)) / 2
-        level = anim.breathe_min + (anim.breathe_max - anim.breathe_min) * osc_now
+        local osc = (1 + math.cos(phase * 2 * math.pi)) / 2
+        level = anim.breathe_min + (anim.breathe_max - anim.breathe_min) * osc
       end
 
       -- PULSE UP, NEVER DOWN (2026-08-05, second attempt). The fix for "gday
@@ -787,21 +834,25 @@ local function animate(buf, col, from, to, origin)
       -- gets ~20 steps and an 8-row scope gets four. The colour ramp has 48 steps
       -- at any height. Never animate on a spatial axis that short.
       --
-      -- So the breathe goes UP instead: from the resting colour toward white and
-      -- back. It never goes dim and never disappears, so both failure modes are
-      -- structurally impossible, and it is exactly as smooth as night mode
-      -- because it walks the same 48-step ramp. The cost is honest and accepted:
-      -- under transparency this is a glow pulse, not a fade to nothing. Nothing
-      -- CAN fade to nothing here -- that was only ever true in night mode, where
-      -- the phosphor shaders were hiding the trough anyway.
+      -- A PULSE UP toward white, never dimming -- also rejected. It dodged the
+      -- dim bar by never approaching the backdrop, but the brightness swing read
+      -- as a hue change he did not want in that form.
+      --
+      -- LIVE SHAPE: cycle the HUE through his three colours at constant
+      -- brightness. Same immunity as the pulse (the guide never goes near the
+      -- backdrop, so nothing can fail to disappear) but it is a deliberate
+      -- colour walk rather than a washed-out brightness swing. His words:
+      -- "keep the hue change, make it go through the 3 gruvbox colors I've set
+      -- ... the fading in and out wont work during daytime."
       --
       -- Opaque mode is untouched: there the theme paints SnacksIndent at exactly
       -- Normal.bg, so level 0 really is invisible and the tonal fade is right.
-      if transparent and t >= 1 and anim.breathe then
-        -- osc is 1 at the turning points and 0 at the middle, so this rests at
-        -- the fill's landing colour, lifts to the peak, and returns -- the same
-        -- continuity with the fill that the downward swing was chosen for.
-        level = 1 + (anim.breathe_lift or 0) * (1 - osc_now)
+      -- Night keeps the fade-to-nothing; only day cycles.
+      local cycle_step = nil
+      if cycling and e >= breathe_start then
+        local pos = ((e - breathe_start) / anim.cycle_period) % 1
+        cycle_step = math.floor(pos * CYCLE_STEPS) % CYCLE_STEPS
+        level = 1 -- brightness is constant here; hue carries the animation
       end
 
       -- BOTTOM OF THE SWING = ACTUALLY NOTHING (2026-08-01).
@@ -859,10 +910,16 @@ local function animate(buf, col, from, to, origin)
       -- colour without the resting colour itself stopping coming from the theme.
       local glow = hex(level <= 1 and blend(dim, base, level) or blend(base, WHITE, level - 1))
 
-      if glow == last_glow and t >= 1 and not anim_dirty then
+      -- The dedupe must key on the cycle step too. During the hue cycle the
+      -- BRIGHTNESS is constant, so `glow` never changes and a glow-only
+      -- comparison would skip every frame -- the guide would sit on one colour
+      -- forever, which is the same class of bug as the recoloured-group breathe
+      -- that never reached the screen.
+      local frame_key = cycle_step and (glow .. "@" .. cycle_step) or glow
+      if frame_key == last_glow and t >= 1 and not anim_dirty then
         return
       end
-      last_glow = glow
+      last_glow = frame_key
       if anim_dirty then
         -- A scroll or an edit got us here; the row-eligibility memo may be stale.
         elig = {}
@@ -904,7 +961,12 @@ local function animate(buf, col, from, to, origin)
       -- GLOW stays the group for the fill's fully-lit rows and for any overshoot
       -- past the resting colour (level > 1), which the ramp cannot express.
       local lit_group = GLOW
-      if t >= 1 and level <= 1 then
+      if cycle_step then
+        -- Hue cycle (day mode): a real group per step, for the same reason the
+        -- fade ramp is one. Checked FIRST -- it owns the colour outright here,
+        -- and the brightness ramps below would only fight it.
+        lit_group = CYCLE_PREFIX .. cycle_step
+      elseif t >= 1 and level <= 1 then
         local step = math.floor(level * FADE_STEPS + 0.5)
         lit_group = FADE_PREFIX .. math.max(0, math.min(FADE_STEPS, step))
       elseif t >= 1 then
