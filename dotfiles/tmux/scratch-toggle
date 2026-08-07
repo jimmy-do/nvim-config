@@ -1,0 +1,35 @@
+#!/usr/bin/env zsh
+# Persistent scratch SESSION, toggled with prefix T. Unlike floax (prefix o)
+# this is not a popup -- it is your own client switched onto a full-size
+# session named `scratch`, so it gets a real window with real dimensions.
+# Press prefix T again to come back.
+#
+# Dropped once (f267acd, 2026-07-19) over the exit path: `exit` in the scratch
+# shell killed its last pane, which destroyed the session, which detached the
+# client and closed the Ghostty window. The fix is `detach-on-destroy previous`
+# set on the session at creation -- when a session dies under a client, tmux
+# moves that client to the previous session instead of detaching it. So `exit`
+# now behaves exactly like a second prefix T.
+#
+# The float guard lives on the BINDING (tmux.conf), not here: a switch-client
+# issued from inside floax repoints the float's client and renders your real
+# session inside the 80% frame.
+
+set -u
+
+current_session=$(tmux display-message -p '#{session_name}')
+
+if [[ "$current_session" == "scratch" ]]; then
+  tmux switch-client -l
+  exit 0
+fi
+
+if ! tmux has-session -t '=scratch' 2>/dev/null; then
+  current_path=$(tmux display-message -p '#{pane_current_path}')
+  tmux new-session -d -s scratch -n scratch -c "$current_path"
+  # Survives the last pane exiting. Without this the client is detached and
+  # the terminal window closes -- the reason this toggle was deleted.
+  tmux set-option -t '=scratch' detach-on-destroy previous
+fi
+
+tmux switch-client -t '=scratch'

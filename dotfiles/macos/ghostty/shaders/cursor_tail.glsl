@@ -112,7 +112,21 @@ float getSdfRectangle(in vec2 p, in vec2 xy, in vec2 b)
 float seg(in vec2 p, in vec2 a, in vec2 b, inout float s, float d) {
     vec2 e = b - a;
     vec2 w = p - a;
-    vec2 proj = a + e * clamp(dot(w, e) / dot(e, e), 0.0, 1.0);
+    // max() 2026-07-31: a ZERO-LENGTH edge makes dot(e,e) == 0 and this divide
+    // 0.0/0.0 -> NaN, for every fragment on screen. The trail parallelogram is
+    // degenerate exactly when head_eased == tail_eased, which is not a rare
+    // instant: `progress` is CLAMPED, so it sits at exactly 0.0 on any frame
+    // rendered at the cursor-change timestamp and at exactly 1.0 on every frame
+    // after the animation ends, until the next cursor move. Measured: NaN over
+    // 100% of the screen at both ends.
+    //
+    // NaN is also why the vertical-move suppression below could not contain
+    // this — NaN * 0.0 is NaN, so `trailAlpha *= 0.0` does not clear it, and
+    // neither does mix(sdfTrail_diag, sdfTrail_rect, isStraightMove): GLSL mix
+    // evaluates BOTH operands, so a NaN diagonal SDF poisons a pure-vertical
+    // move too. That is the j/k and C-d/C-u "cursor flies in from somewhere
+    // off-screen" flash.
+    vec2 proj = a + e * clamp(dot(w, e) / max(dot(e, e), 1e-12), 0.0, 1.0);
     float segd = dot(p - proj, p - proj);
     d = min(d, segd);
 
@@ -256,6 +270,15 @@ void mainImage(out vec4 fragColor, in vec2 fragCoord){
         float comet = mix(TAIL_FADE, 1.0, smoothstep(0.0, 1.0, along));
 
         float trailAlpha = clamp(antialising(sdfTrail), 0.0, 1.0) * comet;
+
+        // Belt and braces for the degenerate frames the max() above makes
+        // merely finite rather than meaningful: when head and tail coincide the
+        // trail has zero length and there is nothing to draw anyway. Gate it to
+        // zero explicitly so a collapsed parallelogram can never paint, whatever
+        // the driver decides sqrt() of a clamped-to-zero distance should be.
+        // Costs nothing visually — these are exactly the frames where the trail
+        // is a zero-area sliver at the two ends of the animation.
+        trailAlpha *= step(1e-6, abs(head_eased - tail_eased));
 
         // KNOB 2 2026-07-27: purely vertical moves never trail. Page scrolls
         // (u/d) are pure-vertical cursor jumps and re-fired the trail on every

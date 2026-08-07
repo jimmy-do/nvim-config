@@ -1,0 +1,40 @@
+#!/bin/sh
+# Green confirmation banner after a copy. Called from every copy key.
+#
+# Why this exists: `y` is bound to a bare `copy-pipe` (NOT -and-cancel) on
+# purpose -- yanking must not eject you from copy mode. The side effect is that
+# a successful yank produces NO visible change beyond the selection clearing,
+# which is indistinguishable from a yank that silently failed. This is the
+# feedback.
+#
+# The size comes from the newest tmux paste buffer rather than from a format
+# passed by the caller: copy-pipe sets that buffer synchronously, and
+# #{buffer_size}/#{buffer_sample} are only resolvable against a buffer target,
+# not in the display-message context the copy binding runs in.
+
+BANNER=$(dirname "$0")/banner
+
+# ...but the newest buffer is only OURS if this yank actually copied something.
+# A yank with an empty or already-cleared selection is a silent no-op: copy-pipe
+# creates NO buffer, list-buffers still returns the previous one, and the banner
+# cheerfully reported a copy that never happened -- always with the same stale
+# byte count, which is the tell. Gate on buffer_created: anything older than a
+# couple of seconds predates this keypress, so say nothing rather than lie.
+# Do NOT drop this guard for "the buffer is always fresh" -- it is not.
+read -r created size sample <<EOF
+$(tmux list-buffers -F '#{buffer_created} #{buffer_size} #{buffer_sample}' 2>/dev/null | head -1)
+EOF
+
+[ -z "$size" ] && exit 0
+
+now=$(date +%s)
+[ -n "$created" ] && [ "$((now - created))" -gt 2 ] && exit 0
+
+# Trim the sample so the bar never wraps; the byte count is the real signal.
+sample=$(printf '%s' "$sample" | cut -c1-60)
+
+if [ "$size" = 1 ]; then
+    "$BANNER" green 900 "COPIED  ·  1 byte  ·  ${sample}"
+else
+    "$BANNER" green 900 "COPIED  ·  ${size} bytes  ·  ${sample}"
+fi
