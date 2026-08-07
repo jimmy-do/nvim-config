@@ -23,6 +23,13 @@
 --                                    so it sticks across restarts. Outside the
 --                                    picker, :ThemeFav / :ThemeUnfav do the same
 --                                    for the theme you are currently in.
+--   <S-Up> / <S-Down>                RANK a favorite: move it one slot in the
+--                                    list below, which IS the ranking — the
+--                                    favorites section renders in list order and
+--                                    `f` only appends or removes, so an order set
+--                                    here is permanent. No-op on a non-favorite.
+--                                    Shift-arrows because <C-j>/<C-k> are the
+--                                    5-row step and j/k are the cursor.
 --   m                                the CATEGORIES menu (also advertised in the
 --                                    float's footer). Picks what the list is
 --                                    GROUPED by — yaml-value glow / light vs dark
@@ -57,12 +64,10 @@
 -- {` on its own line and a bare `}`, so collapsing it breaks every toggle.
 local favorites = {
   "moonlit",
-  "kanagawa-dragon",
   "base16-gruvbox-material-dark-hard",
   "base16-everforest-dark-hard",
   "dracula-soft",
   "base16-tokyo-night-storm",
-  "base16-gruvbox-dark-medium-forest",
   "nvim-gruvbox",
 }
 
@@ -475,6 +480,47 @@ local function persist_favorite(name, removing)
   end
 
   return pcall(vim.fn.writefile, lines, self_path)
+end
+
+-- Rewrite the whole favorites block from the in-memory list, preserving ORDER.
+-- persist_favorite above can only append or delete a single line, which is all a
+-- toggle needs; ranking needs the order itself written out, and expressing that
+-- as a delete+insert pair would leave the file wrong if the second write failed.
+--
+-- Same block-finding contract as persist_favorite: the `local favorites = {`
+-- line and the next bare `}` are the fences, so the header comments and anything
+-- outside the block survive untouched.
+local function persist_favorites_order(list)
+  local ok, lines = pcall(vim.fn.readfile, self_path)
+  if not ok then
+    return false
+  end
+
+  local first, last
+  for i, line in ipairs(lines) do
+    if not first and line:match("^local favorites = {%s*$") then
+      first = i
+    elseif first and line:match("^}%s*$") then
+      last = i
+      break
+    end
+  end
+  if not first or not last then
+    return false
+  end
+
+  local rebuilt = {}
+  for i = 1, first do
+    rebuilt[#rebuilt + 1] = lines[i]
+  end
+  for _, name in ipairs(list) do
+    rebuilt[#rebuilt + 1] = "  " .. string.format("%q,", name)
+  end
+  for i = last, #lines do
+    rebuilt[#rebuilt + 1] = lines[i]
+  end
+
+  return pcall(vim.fn.writefile, rebuilt, self_path)
 end
 
 local function pick_colorscheme()
@@ -1376,6 +1422,44 @@ local function pick_colorscheme()
     else
       vim.notify("favorite not written to " .. self_path, vim.log.levels.WARN)
     end
+  end)
+
+  -- <S-Up> / <S-Down> — RANK a favorite, i.e. move it one slot in the favorites
+  -- list. The list is the ranking: the picker renders favorites in list order and
+  -- `f` only ever appends or removes, so an order set here is permanent.
+  --
+  -- Shift-arrows because the obvious pair is taken: <C-j>/<C-k> already step five
+  -- rows, and j/k are the cursor. No-ops on a non-favorite rather than silently
+  -- favoriting it -- moving something that is not in the list has no meaning, and
+  -- `f` is right there.
+  local function move_favorite(delta)
+    local name = selected()
+    if not name then
+      return
+    end
+    local index = favorite_index(name)
+    if not index then
+      vim.notify(name .. " is not a favorite (press f)", vim.log.levels.WARN)
+      return
+    end
+    local target = index + delta
+    if target < 1 or target > #favorites then
+      return
+    end
+    favorites[index], favorites[target] = favorites[target], favorites[index]
+    render(name)
+    if persist_favorites_order(favorites) then
+      vim.notify(("%s → rank %d/%d"):format(name, target, #favorites))
+    else
+      vim.notify("rank not written to " .. self_path, vim.log.levels.WARN)
+    end
+  end
+
+  map("<S-Up>", function()
+    move_favorite(-1)
+  end)
+  map("<S-Down>", function()
+    move_favorite(1)
   end)
 
   render(last_selected or original)

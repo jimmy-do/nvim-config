@@ -148,15 +148,47 @@ end
 -- and if the measurement keeps failing that redraw re-enters rung_for and
 -- schedules another one. A hook whose own action re-fires it. Only a real
 -- buffer change clears `false` back to nil.
+-- The BUFFER'S OWN parser, never `get_parser(buf, "yaml")`.
+--
+-- On a `helm` buffer the attached parser is `helm`, which INJECTS yaml -- that
+-- injected tree is where @property.yaml comes from, and it is the one this file
+-- must walk. Asking for lang "yaml" explicitly does not return that parser: it
+-- builds a SECOND, independent yaml parser for the same buffer. Nothing ever
+-- parses that one (paint() deliberately does not call :parse(), see below), so
+-- for_each_tree yielded zero trees and every key in a Helm template fell
+-- through to flat @property.yaml -- the depth-3+ receding colour, on every
+-- line. That is the "keys are purple in deployment.yaml" bug.
+--
+-- The lang filter inside each for_each_tree is what selects yaml, and it works
+-- for both cases: plain `yaml` buffers have a yaml root tree, `helm` buffers
+-- have a yaml injected tree.
+local function yaml_parser(buf)
+  local ok, parser = pcall(vim.treesitter.get_parser, buf)
+  if not ok then
+    return nil
+  end
+  return parser
+end
+
 local function compute_fit_max(buf)
   if not query_ok or not vim.api.nvim_buf_is_valid(buf) then
     return
   end
-  local ok, parser = pcall(vim.treesitter.get_parser, buf, "yaml")
-  if not ok or not parser then
+  local parser = yaml_parser(buf)
+  if not parser then
     fit_max[buf] = false
     return
   end
+  -- parse(true) so INJECTED yaml is materialised before measuring. This runs on
+  -- a debounce, not in a decoration callback, so the reparse is affordable here
+  -- (paint() must never do it -- see there).
+  --
+  -- Without this, a `helm` buffer measured deepest = 1: the root gotmpl tree has
+  -- no block_mapping_pair and the injected yaml tree had not been built yet, so
+  -- for_each_tree found nothing to count. rung_for then compressed the whole
+  -- ladder onto D1 and every key in the file rendered at the brightest rung --
+  -- no depth falloff at all, which is the second half of the Helm bug.
+  pcall(parser.parse, parser, true)
   local deepest = 1
   parser:for_each_tree(function(tree, ltree)
     if ltree:lang() ~= "yaml" then
@@ -237,8 +269,8 @@ local function paint(buf, top, bot)
   if not query_ok then
     return
   end
-  local ok, parser = pcall(vim.treesitter.get_parser, buf, "yaml")
-  if not ok or not parser then
+  local parser = yaml_parser(buf)
+  if not parser then
     return
   end
   -- Do NOT call parser:parse() here: on_win runs inside a decoration callback
@@ -378,29 +410,34 @@ _G.__yaml_key_depth_group_at = function(buf, row, col)
   if not query_ok or not yaml_ft.is_yaml(buf) then
     return nil
   end
-  local ok, parser = pcall(vim.treesitter.get_parser, buf, "yaml")
-  if not ok or not parser then
+  local parser = yaml_parser(buf)
+  if not parser then
     return nil
   end
-  local trees = parser:parse()
-  if not trees or not trees[1] then
-    return nil
-  end
-  local root = trees[1]:root()
-  for _, node in query:iter_captures(root, buf, row, row + 1) do
-    local srow, scol, erow, ecol = node:range()
-    -- Single-row keys in practice, but a multi-row scalar key is still legal.
-    local after_start = row > srow or (row == srow and col >= scol)
-    local before_end = row < erow or (row == erow and col < ecol)
-    if after_start and before_end then
-      local depth = depth_of(node)
-      local text = vim.treesitter.get_node_text(node, buf)
-      if depth >= MIN_DEPTH and text ~= "<<" then
-        return "YamlKeyD" .. rung_for(buf, depth)
+  -- parse(true) so injected yaml (helm) is materialised, then walk every yaml
+  -- tree -- on helm the root tree is gotmpl and holds no block_mapping_pair.
+  parser:parse(true)
+  local group = nil
+  parser:for_each_tree(function(tree, ltree)
+    if group or ltree:lang() ~= "yaml" then
+      return
+    end
+    for _, node in query:iter_captures(tree:root(), buf, row, row + 1) do
+      local srow, scol, erow, ecol = node:range()
+      -- Single-row keys in practice, but a multi-row scalar key is still legal.
+      local after_start = row > srow or (row == srow and col >= scol)
+      local before_end = row < erow or (row == erow and col < ecol)
+      if after_start and before_end then
+        local depth = depth_of(node)
+        local text = vim.treesitter.get_node_text(node, buf)
+        if depth >= MIN_DEPTH and text ~= "<<" then
+          group = "YamlKeyD" .. rung_for(buf, depth)
+          return
+        end
       end
     end
-  end
-  return nil
+  end)
+  return group
 end
 
 vim.api.nvim_set_decoration_provider(NS, {

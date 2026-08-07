@@ -167,6 +167,15 @@ local comment_protected_groups = {
   "^SpecialComment$",
   "^@comment",
   "^@lsp%.type%.comment",
+  -- TSComment is the LINK TARGET, and protecting only the link is worthless.
+  -- base16-nvim defines @comment as a link to TSComment (base16-colorscheme.lua
+  -- :390), so @comment matched "^@comment", skipped the fg chain, and then
+  -- resolved to a TSComment that had just been run through it: on nvim-gruvbox
+  -- at fg_saturation 99 that turned base03 #504a49 into rust #9a3401. Comment
+  -- stayed correct the whole time, which is exactly why it looked like the
+  -- treesitter groups were being recoloured on purpose.
+  "^TSComment$",
+  "^TSSpecialComment$",
 }
 
 -- ── Color math ───────────────────────────────────────────────────────────────
@@ -842,6 +851,120 @@ local function apply_onedark_dark_helm_trim_matches()
   add([[\v\{\{\zs-]])
   add([[\v-\ze\}\}]])
   vim.w.onedark_dark_helm_trim_match_ids = ids
+end
+
+-- ── Helm / gotmpl template tokens ────────────────────────────────────────────
+--
+-- A `helm` buffer is two languages: the yaml body (an INJECTED yaml tree, so it
+-- already gets the full @*.yaml ramp derived in derive_yaml_baseline) and the
+-- gotmpl template tree inside {{ }}, whose captures carry a `.helm`/`.gotmpl`
+-- language segment and are therefore invisible to every yaml rule in this file.
+--
+-- Nothing claimed those groups, so they fell through to whatever generic
+-- Function/Identifier/String the active colorscheme happens to ship. Measured
+-- on nvim-gruvbox: @string.yaml #f86932 vs @string.helm #aec100, @type.yaml
+-- #4092f2 vs @function.builtin.helm #aec100, @variable.helm #ff2b21. Two
+-- unrelated palettes in two panes of the same theme -- which is exactly what a
+-- Helm template looked like next to a workflow file.
+--
+-- The mapping is to the YamlExpr* vocabulary, not to raw hexes, because that
+-- vocabulary is already derived PER THEME (see derive_yaml_baseline above) and
+-- is the exact same role set: `{{ .Values.image.tag }}` in a chart is the same
+-- kind of token as `${{ env.AWS_REGION }}` in a workflow -- brace, context,
+-- property, function, string, number. Linking means every colorscheme, present
+-- and future, gets Helm for free and :FgAdjust/:Sepia keep working, with no
+-- per-theme table to maintain.
+--
+-- kanagawa is skipped on purpose: it hand-tunes these same groups in its own
+-- override table (KANAGAWA_SOFT_WHITE variables, red keywords/brackets), which
+-- is a deliberate choice and outranks a generic mapping.
+-- THE ROSTER. Every link below resolves to one of five colours, and those five
+-- are the palette itself, named by the groups that own them:
+--
+--   STRINGS    YamlExprStr           #96ff61 -> #a1fc69
+--   PRIMARY    @string.yaml          #ff6329 -> #f86932
+--   SECONDARY  @function.call.bash   #ffff4d -> #fffc57
+--   TERTIARY   YamlExprContext/Op    #9fefff -> #a9eef7
+--   TERTIARY   YamlExprProp          #d3869b -> #d38c9a
+--
+-- (base hex from lua/config/theme_baseline_saved.lua -> rendered after the
+-- knob pipeline; the links carry whatever the knobs make of them.)
+--
+-- Nothing here may point outside that roster. Two earlier links did --
+-- YamlExprBrace #ffd866 and @constant.macro.yaml #f76900 -- and both were
+-- off-palette colours that no yaml token in the left pane spends at that
+-- frequency. Numbers and booleans are the deliberate exception: they are the
+-- SAME tokens as their yaml counterparts, so they stay on @number.yaml /
+-- @boolean.yaml rather than being re-tiered.
+local HELM_ROLE_LINKS = {
+  -- TERTIARY #d38c9a: structural punctuation -- the {{ }} frame and the dots
+  -- inside .Values.image.tag. Frame, not content, so it sits below PRIMARY.
+  ["@punctuation.bracket"] = "YamlExprProp",
+  ["@punctuation.special"] = "YamlExprProp",
+  ["@punctuation.delimiter"] = "YamlExprProp",
+  -- Function names follow BASH, not YamlExprFunc: a called name should read the
+  -- same whether it is `terraform init` in a run: scalar or `include`/`toYaml`
+  -- in a chart. Linked to @function.call.bash rather than repeating its family
+  -- so the two can never drift -- move that one put() and Helm follows.
+  ["@function"] = "@function.call.bash",
+  ["@function.call"] = "@function.call.bash",
+  ["@function.builtin"] = "@function.call.bash",
+  ["@function.method.call"] = "@function.call.bash",
+  -- PRIMARY #f86932: `.Values.x` is the most frequent token in a chart, on
+  -- nearly every line, so it takes the colour the left pane spends on its own
+  -- most frequent token (yaml scalar values). Frequency decides the tier --
+  -- putting this on an accent is what made a Helm buffer read as a different
+  -- theme, whichever accent was chosen.
+  ["@variable"] = "@string.yaml",
+  ["@variable.member"] = "@string.yaml",
+  ["@property"] = "@string.yaml",
+  ["@constant"] = "@string.yaml",
+  ["@constant.builtin"] = "YamlExprContext",
+  -- CONTROL FLOW: @boolean.yaml #ffb8e6.
+  --
+  -- Keywords used to share YamlExprContext/Op #a9eef7 with the yaml key ramp's
+  -- top rung #75dff2 -- two light cyans separated mostly by saturation. In a
+  -- .tpl, where `define` / `if` / `end` sit on the same lines as the label keys,
+  -- that was 14% of the file in one blue wash. Measured on _helpers.tpl:
+  -- #a9eef7 8.3% + #75dff2 5.6%.
+  --
+  -- @operator (the `|` pipe) and @constant.builtin (nil) STAY on cyan: they are
+  -- rare, and they are punctuation-of-expression rather than control flow.
+  ["@keyword"] = "@boolean.yaml",
+  ["@keyword.conditional"] = "@boolean.yaml",
+  ["@keyword.repeat"] = "@boolean.yaml",
+  ["@keyword.directive"] = "@boolean.yaml",
+  ["@keyword.directive.define"] = "@boolean.yaml",
+  ["@keyword.operator"] = "@boolean.yaml",
+  ["@operator"] = "YamlExprOp",
+  ["@string"] = "YamlExprStr",
+  ["@string.escape"] = "YamlExprStr",
+  -- @number.yaml, NOT YamlExprNum: the latter rides the hot family (orange) and
+  -- would put a number inside {{ }} on a different colour from the identical
+  -- number one line above it in the yaml body.
+  ["@number"] = "@number.yaml",
+  ["@number.float"] = "@number.yaml",
+  ["@boolean"] = "@boolean.yaml",
+  ["@comment"] = "@comment.yaml",
+  ["@spell"] = "@comment.yaml",
+}
+
+-- kanagawa USED to be skipped here, on the reasoning that its own override table
+-- hand-tunes @variable.helm / @function.builtin.helm / the keyword and bracket
+-- groups, and a deliberate choice outranks a generic mapping. Audited against
+-- the favourites 2026-08-06 and that reasoning did not survive contact: on
+-- kanagawa-dragon those hand hexes measured value #78a59c, func #8ba19f, str
+-- #879779, var #919cb1 -- four desaturated greens within 25 of each other, plus
+-- comment #737c73 sitting on top of the string colour. The hand-tuning was not
+-- producing a distinct reading, it was producing the exact mush the roster
+-- exists to prevent. Dragon's yaml groups ARE hand-tuned and good, so linking
+-- inherits that tuning instead of discarding it.
+local function apply_helm_template_links()
+  for capture, target in pairs(HELM_ROLE_LINKS) do
+    for _, lang in ipairs({ "helm", "gotmpl" }) do
+      pcall(vim.api.nvim_set_hl, 0, capture .. "." .. lang, { link = target })
+    end
+  end
 end
 
 -- ── Main highlight post-processor ────────────────────────────────────────────
@@ -1540,8 +1663,15 @@ local function derive_yaml_baseline()
   put("@string.special.url.yaml", locators)
   put("@string.special.path.yaml", locators) -- exact share: one locator family
   put("@string.special.image.yaml", locators)
-  put("@number.yaml", hot)
-  put("@number.quantity.yaml", hot)
+  -- Numbers ride BOOLS, not HOT. A number and a boolean are the same thing to a
+  -- reader -- a literal, non-string scalar -- and the hot family is the warm
+  -- orange that yaml values already own, so numbers had no colour of their own:
+  -- `replicas: 2` and `containerPort: 5000` disappeared into the value wall.
+  -- Sharing the boolean family gives every literal one colour distinct from the
+  -- string/value orange, and does it per THEME rather than per hex, so it holds
+  -- wherever bools land in the theme currently loaded.
+  put("@number.yaml", bools)
+  put("@number.quantity.yaml", bools)
   put("@constant.macro.yaml", hot)
   put("@string.special.condition.yaml", hot)
   put("@string.special.version.yaml", versions)
@@ -1555,14 +1685,34 @@ local function derive_yaml_baseline()
   put("YamlExprDot", out["@punctuation.delimiter.yaml"])
   put("YamlExprFunc", versions)
   put("YamlExprOp", dashes)
-  put("YamlExprStr", strings)
+  -- Quoted literals inside a template: `locators`, not `strings`. Same reason as
+  -- @function.call.bash below -- @string.helm links here, @variable.member.helm
+  -- links to @string.yaml, and on one shared family a chart's `"core-api.name"`
+  -- and its `.Values.x` were the same colour in seven of the eight favourites.
+  -- locators is assign({url, pre, const}), already distinct from strings by the
+  -- worn dedup, and url/path/image are rare enough in a chart to share with.
+  put("YamlExprStr", locators)
   put("YamlExprNum", hot)
   -- Sigil: `$` marks the exit from string-land; keyword/constant if the theme
   -- has one, else the next unworn hierarchy tier.
   put("YamlExprSigil", assign({ kw, const }))
 
   -- Bash injected into run: scalars — values, never key-coloured.
-  put("@function.call.bash", strings)
+  --
+  -- FUNCTIONS TAKE `versions`, NOT `strings`. This group is no longer just bash:
+  -- the Helm mapping links every gotmpl function name to it (see
+  -- HELM_ROLE_LINKS), so on `strings` it landed on the same hex as @string.yaml
+  -- and YamlExprStr. On nvim-gruvbox that is invisible because three hand stamps
+  -- pull them apart, but nvim-gruvbox is the only favourite that HAS a hand
+  -- table. Audited 2026-08-06 across all eight: the other seven collapsed
+  -- value/str/func/var onto one colour, so a Helm buffer was a wall of it while
+  -- gruvbox looked fine -- the themes "not matching" is this, not the links.
+  --
+  -- `versions` is assign({func, typ}): the theme's own function colour first,
+  -- which is what a called name should be anyway, and it is picked through the
+  -- same `worn` dedup as every other family, so it does not steal a colour a
+  -- higher-traffic family already took.
+  put("@function.call.bash", versions)
   put("@variable.parameter.bash", enums)
 
   return out
@@ -1623,6 +1773,28 @@ local function apply_theme_baseline_colors(derived_only)
     end
   end
 
+  -- LITERALS SHARE ONE COLOUR: numbers follow booleans, after the hand tables.
+  --
+  -- derive_yaml_baseline puts numbers on the bools family, but that is the
+  -- DERIVED bools colour, and on a theme whose Number and Boolean are the same
+  -- hex (nvim-gruvbox: both #f76900) the family carries no distinction at all.
+  -- The pink that actually separates booleans there is a HAND stamp
+  -- (@boolean.yaml #ffb3ec in theme_baseline_saved.lua), applied above and
+  -- reaching only the group it names -- so numbers stayed in the value orange
+  -- however the derivation was rewritten.
+  --
+  -- Mirroring here, after the merge, is the only point where the final boolean
+  -- colour is known regardless of whether it came from derivation, the hand
+  -- table or :HlColorSave. A theme that names @number.yaml explicitly still
+  -- wins: the mirror only fills groups the tables left alone.
+  local final_bool = normalize_hex((vim.api.nvim_get_hl(0, { name = "@boolean.yaml", link = false }) or {}).fg)
+  if final_bool then
+    for _, g in ipairs({ "@number.yaml", "@number.quantity.yaml" }) do
+      if not (baseline and baseline[g]) then
+        stamp_fg(g, final_bool)
+      end
+    end
+  end
 end
 
 -- The yaml key brightness ramp: every key is LIFTED, then steps down 5% per
@@ -3527,7 +3699,10 @@ return {
           ["@property"] = { fg = kw },
           ["@punctuation.special.yaml"] = { fg = red },
           -- Soft white (#c5c9c5): neutral cool gray-white, dimmer than Normal fg #DCD7BA
-          ["@variable.helm"] = { fg = KANAGAWA_SOFT_WHITE },
+          -- @variable.helm removed with the rest of the .helm block below: it is
+          -- `.Values.x`, the highest-traffic token in a chart, and soft white
+          -- put it on the same reading as plain text. HELM_ROLE_LINKS gives it
+          -- the theme's value colour instead.
           ["@variable.gotmpl"] = { fg = KANAGAWA_SOFT_WHITE },
           ["@lsp.type.variable.dockerfile"] = { fg = KANAGAWA_SOFT_WHITE },
           ["@lsp.typemod.variable.declaration.dockerfile"] = { fg = KANAGAWA_SOFT_WHITE },
@@ -3536,20 +3711,17 @@ return {
           ["@markup.plain.markdown"] = { fg = KANAGAWA_SOFT_WHITE },
           ["@markup.strong.markdown_inline"] = { fg = KANAGAWA_SOFT_WHITE },
           ["@markup.italic.markdown_inline"] = { fg = KANAGAWA_SOFT_WHITE },
-          ["@function.builtin.helm"] = { fg = colors.theme.syn.type },
-          ["@function.builtin.gotmpl"] = { fg = colors.theme.syn.type },
-          ["@keyword.conditional.helm"] = { fg = red },
-          ["@keyword.repeat.helm"] = { fg = red },
-          ["@keyword.directive.helm"] = { fg = red },
-          ["@keyword.directive.define.helm"] = { fg = red },
-          ["@keyword.conditional.gotmpl"] = { fg = red },
-          ["@keyword.repeat.gotmpl"] = { fg = red },
-          ["@keyword.directive.gotmpl"] = { fg = red },
-          ["@keyword.directive.define.gotmpl"] = { fg = red },
-          ["@punctuation.bracket.helm"] = { fg = red },
-          ["@punctuation.bracket.gotmpl"] = { fg = red },
-          ["@punctuation.special.helm"] = { fg = red },
-          ["@punctuation.special.gotmpl"] = { fg = red },
+          -- The .helm / .gotmpl entries that used to live here (variable,
+          -- function.builtin, the keyword family, brackets) are GONE: those
+          -- groups are owned by HELM_ROLE_LINKS now, which links them into the
+          -- theme's own yaml palette. Two owners meant an ordering race the
+          -- links only sometimes won -- measured on dragon, @function.call.helm
+          -- came out linked (#7cb0c6) while @function.builtin.helm kept this
+          -- table's explicit fg (#8ba19f), so two spellings of "a called name"
+          -- rendered in different colours in the same buffer.
+          --
+          -- @variable.gotmpl and the dockerfile/markdown soft-white entries
+          -- above stay: nothing else claims those.
         }
       end,
     },
@@ -5419,6 +5591,12 @@ return {
           apply_onedark_dark_purple_overrides()
           apply_onedark_dark_helm_trim_matches()
           apply_retrobox_string_lightness()
+          -- Helm template tokens ride the per-theme YamlExpr* families. Stamped
+          -- twice: now, and again at 800ms behind the last deferred pipeline
+          -- pass (700ms), which otherwise re-derives YamlExpr* underneath the
+          -- links and leaves {{ }} on the previous theme's hues.
+          apply_helm_template_links()
+          vim.defer_fn(apply_helm_template_links, 800)
           -- Storm yaml fields/values: stamp the exact baseline hexes ONCE, here on
           -- the ColorScheme path only (startup / :ThemeReload / theme switch), at
           -- 800ms so it lands after the last deferred pipeline pass (700ms).
@@ -5435,6 +5613,7 @@ return {
           apply_onedark_dark_purple_overrides()
           apply_onedark_dark_helm_trim_matches()
           apply_retrobox_string_lightness()
+          apply_helm_template_links()
           apply_editor_interaction_highlights()
         end,
       })

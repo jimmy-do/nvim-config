@@ -16,10 +16,24 @@
 -- knobs keep transforming them like any other theme colour.
 return {
   ["base16-everforest-dark-hard"] = {
+    ["@boolean.yaml"] = "#e67e80",
+    ["@function.call.bash"] = "#d699b6",
     ["YamlExprOp"] = "#e69875",
+    ["YamlExprProp"] = "#7fbbb3",
+    ["YamlExprStr"] = "#dbbc7f",
+  },
+  ["base16-gruvbox-dark-medium-forest"] = {
+    ["@boolean.yaml"] = "#fb4934",
+    ["@function.call.bash"] = "#fabd2f",
+    ["YamlExprProp"] = "#96bda2",
+    ["YamlExprStr"] = "#d65d0e",
   },
   ["base16-gruvbox-material-dark-hard"] = {
+    ["@boolean.yaml"] = "#d3869b",
+    ["@function.call.bash"] = "#d8a657",
     ["@string.special.image.yaml"] = "#d28453",
+    ["YamlExprProp"] = "#bd6f3e",
+    ["YamlExprStr"] = "#7daea3",
   },
   ["base16-hardhacker"] = {
     ["@punctuation.special.yaml"] = "#ff3b3b",
@@ -41,11 +55,20 @@ return {
     ["YamlExprOp"] = "#9fefff",
   },
   ["base16-tokyo-night-storm"] = {
+    ["@boolean.yaml"] = "#0db9d7",
+    ["@function.call.bash"] = "#bb9af7",
     ["YamlExprOp"] = "#ff5b8a",
+    ["YamlExprProp"] = "#a9b1d6",
+    ["YamlExprStr"] = "#b4f9f8",
   },
   ["icyv2"] = {
     ["@variable.parameter.bash"] = "#03fc45",
     ["YamlExprProp"] = "#ff3b3b",
+  },
+  ["kanagawa-dragon"] = {
+    ["@boolean.yaml"] = "#e46876",
+    ["@function.call.bash"] = "#7fb4ca",
+    ["YamlExprProp"] = "#a292a3",
   },
   ["moonlightv4"] = {
     ["@string.special.image.yaml"] = "#ff8486",
@@ -88,18 +111,18 @@ return {
   },
   ["nvim-gruvbox"] = {
     ["@boolean.yaml"] = "#ffb3ec",
-    ["@function.call.bash"] = "#ffff4d",
-    ["@punctuation.delimiter.yaml"] = "#66fff2",
+    ["@function.call.bash"] = "#aaff00",
+    ["@punctuation.delimiter.yaml"] = "#f86932",
     ["@punctuation.special.yaml"] = "#66fff2",
     ["@string.special.image.yaml"] = "#96ff61",
-    ["@string.special.symbol.yaml"] = "#ffff4d",
+    ["@string.special.symbol.yaml"] = "#74aca4",
     ["@string.special.url.yaml"] = "#c98bff",
     ["@string.special.version.yaml"] = "#ff5e7a",
     ["@string.yaml"] = "#ff6329",
     ["@type.yaml"] = "#3390ff",
-    ["@variable.parameter.bash"] = "#96ff61",
+    ["@variable.parameter.bash"] = "#74aca4",
     ["PunctCurly"] = "#ffa852",
-    ["YamlExprContext"] = "#9fefff",
+    ["YamlExprContext"] = "#74aca4",
     ["YamlExprOp"] = "#9fefff",
     ["YamlExprProp"] = "#d3869b",
     ["YamlExprSigil"] = "#00ffff",

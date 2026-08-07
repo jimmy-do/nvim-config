@@ -290,3 +290,99 @@
    key: (flow_node (plain_scalar (string_scalar) @_prosekey))
    value: (flow_node (plain_scalar (string_scalar) @string)))
  (#any-of? @_prosekey "name" "description" "title" "summary" "displayName"))
+
+; ============================================================================
+; Value SHAPES, quoted — the same vocabulary, for `"…"` and `'…'`
+; ============================================================================
+;
+; Every shape rule above is written against (plain_scalar (string_scalar) …),
+; so QUOTING a value stripped its class and dropped it to flat @string. The
+; grammar makes quoted scalars a different node, not a wrapper, so none of
+; those patterns could ever reach one.
+;
+; On screen that meant identical values rendered in two colours depending on
+; whether someone had typed quotes:
+;
+;     version:    0.1.0        -> @string.special.version
+;     appVersion: "0.86.0"     -> @string          (flat)
+;     repository: "https://…"  -> @string          (flat)
+;
+; …which is the "why are strings also orange" read: a Chart.yaml is mostly
+; quoted, so the shape layer was effectively off for the whole file. Charts,
+; lockfiles and anything YAML-generated quote by default, so the rules that
+; make a manifest legible were missing exactly where they were needed most.
+;
+; The patterns are the unquoted ones with the delimiter folded in: the node
+; text INCLUDES its quotes, so `^` and `$` must account for them. [\"'] covers
+; both quote styles in one rule rather than duplicating every pattern.
+;
+; Order matches the unquoted section (general -> specific, image last) for the
+; same reason: equal priority, last match wins.
+
+; --- Paths -----------------------------------------------------------------
+(([(double_quote_scalar) (single_quote_scalar)] @string.special.path)
+  (#lua-match? @string.special.path "^[\"']%.?%.?/"))
+
+(([(double_quote_scalar) (single_quote_scalar)] @string.special.path)
+  (#lua-match? @string.special.path "^[\"'][%w_%-%.]+%.[%a][%a][%a]?[%a]?[\"']$"))
+
+; --- URLs ------------------------------------------------------------------
+(([(double_quote_scalar) (single_quote_scalar)] @string.special.url)
+  (#lua-match? @string.special.url "^[\"']%a[%w%+%-%.]*://"))
+
+; --- Quantities: "512Mi", "30s" --------------------------------------------
+(([(double_quote_scalar) (single_quote_scalar)] @number.quantity)
+  (#lua-match? @number.quantity "^[\"']%d+%.?%d*%a+[\"']$"))
+
+; --- Versions: "v1", "apps/v1", "0.86.0", "85.0.2" -------------------------
+(([(double_quote_scalar) (single_quote_scalar)] @string.special.version)
+  (#lua-match? @string.special.version "^[\"'][%w%.%-]*/?v%d+[%w]*[\"']$"))
+
+(([(double_quote_scalar) (single_quote_scalar)] @string.special.version)
+  (#lua-match? @string.special.version "^[\"']v?%d+%.%d+"))
+
+; --- Enum-like CamelCase: "Deployment", "Always" ---------------------------
+(([(double_quote_scalar) (single_quote_scalar)] @type)
+  (#lua-match? @type "^[\"']%u%l[%w]*[\"']$"))
+
+; --- Bare lowercase selectors: "plan", "main" ------------------------------
+; Value position only, exactly as the unquoted rule is anchored -- a quoted KEY
+; is still a key and must keep the key colour.
+((block_mapping_pair
+  value: (flow_node [(double_quote_scalar) (single_quote_scalar)] @string.special.symbol))
+  (#lua-match? @string.special.symbol "^[\"']%l[%l%-]*[\"']$"))
+((block_sequence_item
+  (flow_node [(double_quote_scalar) (single_quote_scalar)] @string.special.symbol))
+  (#lua-match? @string.special.symbol "^[\"']%l[%l%-]*[\"']$"))
+
+; --- CONSTANT_CASE: "LOG_LEVEL" --------------------------------------------
+(([(double_quote_scalar) (single_quote_scalar)] @constant.macro)
+  (#lua-match? @constant.macro "^[\"']%u[%u%d_]+[\"']$"))
+
+; --- Conditions ------------------------------------------------------------
+; Unanchored, so the quotes are irrelevant to these three.
+(([(double_quote_scalar) (single_quote_scalar)] @string.special.condition)
+  (#lua-match? @string.special.condition "[=!<>]="))
+
+(([(double_quote_scalar) (single_quote_scalar)] @string.special.condition)
+  (#lua-match? @string.special.condition "||"))
+
+(([(double_quote_scalar) (single_quote_scalar)] @string.special.condition)
+  (#lua-match? @string.special.condition "&&"))
+
+; --- Image refs: "nginx:1.25", "actions/checkout@v4" -----------------------
+; Last, for the same reason as the unquoted image rules: an image ref also
+; matches path and version, and this is the reading that should win.
+(([(double_quote_scalar) (single_quote_scalar)] @string.special.image)
+  (#lua-match? @string.special.image "^[\"'][%w%.%-_]+/?[%w%.%-_/]*:[%w%.%-_]+[\"']$"))
+
+(([(double_quote_scalar) (single_quote_scalar)] @string.special.image)
+  (#lua-match? @string.special.image "^[\"'][%w%-_%.]+/[%w%-_%.]+@[%w%.%-_]+[\"']$"))
+
+; --- Prose keys, quoted ----------------------------------------------------
+; Mirrors the unquoted prose-key rule and must stay after the shapes above, for
+; the same reason: it re-tags values the enum/symbol rules just claimed.
+((block_mapping_pair
+   key: (flow_node (plain_scalar (string_scalar) @_prosekeyq))
+   value: (flow_node [(double_quote_scalar) (single_quote_scalar)] @string))
+ (#any-of? @_prosekeyq "name" "description" "title" "summary" "displayName"))
