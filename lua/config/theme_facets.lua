@@ -9,7 +9,7 @@
 --          light schemes say nothing in their name at all.
 --   bg     the measured Normal background hex.
 --   key    the yaml KEY colour theme.lua derives for this theme
---          (@property.yaml.level2, i.e. the middle rung of the key ramp).
+--          (YamlKeyD2, i.e. the second rung of the eight-rung key ramp).
 --   class  what that key reads as: white / grey / tinted, or a hue family
 --          (red orange yellow green cyan blue purple magenta). "white" and
 --          "grey" are the answer to "are the keys just white".
@@ -22,6 +22,11 @@ return {
   ["adwaita"] = { light = false, bg = "#1d1d20", key = "#fdfdfd", class = "white" },
   ["arctic"] = { light = false, bg = "#1f1f1f", key = "#d9f2ff", class = "tinted" },
   ["ashen"] = { light = false, bg = "#121212", key = "#f5f5f5", class = "white" },
+  ["astrodark"] = { light = false, bg = "#1a1d23", key = "#ffbdc1", class = "red" },
+  ["astrojupiter"] = { light = true, bg = "#feeeee", key = "#b9483f", class = "red" },
+  ["astrolight"] = { light = true, bg = "#f7f8f8", key = "#b00000", class = "red" },
+  ["astromars"] = { light = false, bg = "#1e1517", key = "#eaaeb2", class = "red" },
+  ["astrotheme"] = { light = false, bg = "#1a1d23", key = "#ffbdc1", class = "red" },
   ["ayu"] = { light = false, bg = "#0b0e14", key = "#5fc7eb", class = "cyan" },
   ["ayu-dark"] = { light = false, bg = "#0b0e14", key = "#5fc7eb", class = "cyan" },
   ["ayu-light"] = { light = true, bg = "#f8f9fa", key = "#79c4dd", class = "cyan" },
@@ -213,6 +218,8 @@ return {
   ["base16-irblack"] = { light = false, bg = "#000000", key = "#ceccc6", class = "white" },
   ["base16-isotope"] = { light = false, bg = "#000000", key = "#efefef", class = "white" },
   ["base16-jabuti"] = { light = false, bg = "#292a37", key = "#eceff6", class = "white" },
+  -- yabuti is our copy of base16-jabuti; same palette, same facets.
+  ["yabuti"] = { light = false, bg = "#292a37", key = "#eceff6", class = "white" },
   ["base16-jellybeans"] = { light = false, bg = "#121212", key = "#f5f5f5", class = "white" },
   ["base16-kanagawa"] = { light = false, bg = "#1f1f28", key = "#f0eee2", class = "white" },
   ["base16-kanagawa-dragon"] = { light = false, bg = "#181616", key = "#e4e6e4", class = "white" },
@@ -410,12 +417,13 @@ return {
   ["elflord"] = { light = false, bg = "#000000", key = "#70ffff", class = "cyan" },
   ["embark"] = { light = false, bg = "#1e1c31", key = "#f8fbfc", class = "white" },
   ["evening"] = { light = false, bg = "#333333", key = "#26ffff", class = "cyan" },
+  ["ever-glow"] = { light = false, bg = "#2d353b", key = "#6574a3", class = "blue" },
   ["everforest"] = { light = false, bg = "#2d353b", key = "#9ecbc5", class = "cyan" },
   ["evergarden"] = { light = false, bg = "#232a2e", key = "#d7fff6", class = "tinted" },
-  ["evergarden-fall"] = { light = false, bg = "#232a2e", key = "#d7fff6", class = "tinted" },
-  ["evergarden-spring"] = { light = false, bg = "#2b3438", key = "#d7fff6", class = "tinted" },
+  ["evergarden-fall"] = { light = false, bg = "#20241f", key = "#caf7af", class = "green" },
+  ["evergarden-spring"] = { light = false, bg = "#1f2a22", key = "#c5fcce", class = "green" },
   ["evergarden-summer"] = { light = true, bg = "#f5efe6", key = "#3affd8", class = "cyan" },
-  ["evergarden-winter"] = { light = false, bg = "#1e2528", key = "#d7fff6", class = "tinted" },
+  ["evergarden-winter"] = { light = false, bg = "#1a2026", key = "#b3f9cc", class = "green" },
   ["flexoki"] = { light = false, bg = "#100f0f", key = "#6098c8", class = "blue" },
   ["flexoki-dark"] = { light = false, bg = "#100f0f", key = "#6098c8", class = "blue" },
   ["flexoki-light"] = { light = true, bg = "#fffcf0", key = "#256cbf", class = "blue" },
@@ -457,7 +465,7 @@ return {
   ["jellybeans-muted-light"] = { light = true, bg = "#f7f3eb", key = "#343330", class = "grey" },
   ["jellybeans-warm"] = { light = false, bg = "#1c1510", key = "#faf4ea", class = "white" },
   ["kanagawa"] = { light = false, bg = "#1f1f28", key = "#a988de", class = "purple" },
-  ["kanagawa-dragon"] = { light = false, bg = "#181616", key = "#e6ce9a", class = "orange" },
+  ["kanagawa-dragon"] = { light = false, bg = "#181616", key = "#d4b36e", class = "orange" },
   ["kanagawa-lotus"] = { light = true, bg = "#f2ecbc", key = "#6a35b9", class = "purple" },
   ["kanagawa-paper"] = { light = false, bg = "#1f1f28", key = "#d5c8ab", class = "tinted" },
   ["kanagawa-paper-canvas"] = { light = true, bg = "#e1e1de", key = "#9aa7c0", class = "tinted" },
@@ -486,6 +494,10 @@ return {
   ["modus"] = { light = false, bg = "#000000", key = "#00f3ef", class = "cyan" },
   ["modus_operandi"] = { light = true, bg = "#ffffff", key = "#006ca0", class = "cyan" },
   ["modus_vivendi"] = { light = false, bg = "#000000", key = "#00f3ef", class = "cyan" },
+  -- moonlit is a byte-for-byte copy of base16-moonlight, so its row is that
+  -- theme's row verbatim. Copied by hand 2026-08-02; the next measure run
+  -- reproduces it identically.
+  ["moonlit"] = { light = false, bg = "#212337", key = "#cfd4ef", class = "tinted" },
   ["monokai"] = { light = false, bg = "#26292c", key = "#ffffff", class = "white" },
   ["monokai-pro"] = { light = false, bg = "#2d2a2e", key = "#ffffff", class = "white" },
   ["monokai-pro-classic"] = { light = false, bg = "#272822", key = "#ffffff", class = "white" },
@@ -500,8 +512,9 @@ return {
   ["moon"] = { light = false, bg = "#151515", key = "#938b94", class = "grey" },
   ["moonfly"] = { light = false, bg = "#080808", key = "#e3e3fb", class = "white" },
   ["moonlightv2"] = { light = false, bg = "#212337", key = "#cfd4ef", class = "tinted" },
-  ["moonlightv3"] = { light = false, bg = "#212337", key = "#8896c6", class = "blue" },
-  ["moonlightv4"] = { light = false, bg = "#212337", key = "#8896c6", class = "blue" },
+  ["moonlightv4"] = { light = false, bg = "#212337", key = "#6574a3", class = "blue" },
+  ["moonlightv5"] = { light = false, bg = "#212337", key = "#6574a3", class = "blue" },
+  ["moonlightv7"] = { light = false, bg = "#212337", key = "#6574a3", class = "blue" },
   ["morning"] = { light = true, bg = "#e4e4e4", key = "#009b9b", class = "cyan" },
   ["murphy"] = { light = false, bg = "#000000", key = "#26ffff", class = "cyan" },
   ["neobones"] = { light = false, bg = "#0f191f", key = "#c3cbc8", class = "white" },
@@ -517,7 +530,7 @@ return {
   ["oh-lucy"] = { light = false, bg = "#1b1d26", key = "#ffffff", class = "white" },
   ["oh-lucy-evening"] = { light = false, bg = "#1e1d23", key = "#f9f7f6", class = "white" },
   ["oldworld"] = { light = false, bg = "#161617", key = "#e8e7ea", class = "white" },
-  ["onedark"] = { light = false, bg = "#282c34", key = "#e9959c", class = "red" },
+  ["onedark"] = { light = false, bg = "#232326", key = "#6cb6bf", class = "cyan" },
   ["onedark_dark"] = { light = false, bg = "#000000", key = "#f38696", class = "red" },
   ["onedark_vivid"] = { light = false, bg = "#282c34", key = "#f38696", class = "red" },
   ["onelight"] = { light = true, bg = "#fafafa", key = "#e77d86", class = "red" },
@@ -525,12 +538,13 @@ return {
   ["onenord-light"] = { light = true, bg = "#f7f8fa", key = "#548dcf", class = "blue" },
   ["oxocarbon"] = { light = false, bg = "#161616", key = "#f27fb1", class = "magenta" },
   ["pablo"] = { light = false, bg = "#000000", key = "#00dddd", class = "cyan" },
+  ["palenightv2"] = { light = false, bg = "#292d3e", key = "#b8bedc", class = "tinted" },
   ["peachpuff"] = { light = true, bg = "#ffdab9", key = "#00a0a0", class = "cyan" },
   ["poimandres"] = { light = false, bg = "#1b1e28", key = "#edf6ff", class = "white" },
   ["quiet"] = { light = false, bg = "#000000", key = "#fbfbfb", class = "white" },
-  ["randombones"] = { light = true, bg = "#f0f0ca", key = "#fefefe", class = "white" },
-  ["randombones_dark"] = { light = false, bg = "#191919", key = "#e1d2d1", class = "white" },
-  ["randombones_light"] = { light = false, bg = "#191919", key = "#b6b6b6", class = "grey" },
+  ["randombones"] = { light = true, bg = "#e2e2e2", key = "#5c5c5c", class = "grey" },
+  ["randombones_dark"] = { light = false, bg = "#191919", key = "#626262", class = "grey" },
+  ["randombones_light"] = { light = true, bg = "#fbf6f0", key = "#b6b6b6", class = "grey" },
   ["retrobox"] = { light = false, bg = "#1c1c1c", key = "#9db8ad", class = "tinted" },
   ["ron"] = { light = false, bg = "#000000", key = "#26ffff", class = "cyan" },
   ["rose-pine"] = { light = false, bg = "#191724", key = "#c4e2e8", class = "tinted" },

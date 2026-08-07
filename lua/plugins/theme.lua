@@ -14,7 +14,7 @@ local gruvbox_yellow_saturation = 100 -- gruvbox only: 100 = vivid GruvboxYellow
 local gruvbox_green_saturation = 100 -- gruvbox only: 100 = vivid GruvboxGreen (String / @string), lower = muted toward gray
 local gruvbox_fg1_lightness = 100 -- gruvbox only: white-font brightness. 100 = peak #ebdbb2, lower = dimmer cream (hue locked). Applied to Normal + GruvboxFg1.
 local kanagawa_dragon_bracket_lightness = 50 -- kanagawa-dragon only: HSL L of the bracket color. 50 = original (#ded3b4), <50 = darker, >50 = brighter (warm ceiling). :DragonBracketLightness
-local retrobox_string_lightness = 50 -- retrobox only: @string.yaml / @string.yaml.value.yaml / @string.helm lightness. 50 = original String.
+local retrobox_string_lightness = 50 -- retrobox only: @string.yaml / @string.helm lightness. 50 = original String.
 local comment_brightness = 50 -- 0-100, HSL L of comment groups ONLY. 50 = colorscheme-native, <50 = dimmer, >50 = brighter. The one knob allowed to touch comments. :CommentBrightness
 
 -- Chrome groups: tab bar (top), NeoTree title (side), status line (bottom).
@@ -323,6 +323,57 @@ local function adjust_fg_hsl(hex, lightness_level, saturation_level)
   return rgb_to_hex(hsl_to_rgb(h, s, l))
 end
 
+-- ── Perceptual colour distance (CIELAB ΔE) ───────────────────────────────────
+-- Euclidean distance in RGB is NOT perceived difference. The eye is far more
+-- sensitive to green than to blue, so 45 units of green separation reads as
+-- obviously different while 45 units of blue barely registers. The yaml palette
+-- solver below is an optimizer, and for a long time it optimized in the wrong
+-- space: it carefully maximized a number that did not correspond to what you
+-- can actually tell apart on screen.
+--
+-- CIELAB is designed so that Euclidean distance ~ perceived difference. The
+-- pipeline is the standard one: sRGB -> linear RGB -> CIEXYZ (D65) -> L*a*b*.
+--
+-- Reference points for the thresholds used below (ΔE, CIE76):
+--   ~1    just-noticeable difference under ideal conditions
+--   ~2-3  noticeable side by side
+--   ~10   clearly different colours
+--   ~20   unmistakably different, no context needed
+local function srgb_to_linear(c)
+  c = c / 255
+  if c <= 0.04045 then
+    return c / 12.92
+  end
+  return ((c + 0.055) / 1.055) ^ 2.4
+end
+
+local function hex_to_lab(hex)
+  local r, g, b = hex_to_rgb(hex)
+  r, g, b = srgb_to_linear(r), srgb_to_linear(g), srgb_to_linear(b)
+  -- sRGB D65 -> XYZ, then normalized by the D65 white point.
+  local x = (r * 0.4124564 + g * 0.3575761 + b * 0.1804375) / 0.95047
+  local y = (r * 0.2126729 + g * 0.7151522 + b * 0.0721750) / 1.00000
+  local z = (r * 0.0193339 + g * 0.1191920 + b * 0.9503041) / 1.08883
+  local function f(t)
+    if t > 0.008856 then
+      return t ^ (1 / 3)
+    end
+    return (7.787 * t) + (16 / 116)
+  end
+  local fx, fy, fz = f(x), f(y), f(z)
+  return (116 * fy) - 16, 500 * (fx - fy), 200 * (fy - fz)
+end
+
+-- ΔE (CIE76). Deliberately not CIEDE2000: this is used to RANK candidates and
+-- to test against a threshold, not to report a calibrated figure, and CIE76 is
+-- already the whole improvement over RGB. The extra machinery of 2000 buys
+-- accuracy in the blue region that nothing here depends on.
+local function color_delta_e(a, b)
+  local l1, a1, b1 = hex_to_lab(a)
+  local l2, a2, b2 = hex_to_lab(b)
+  return math.sqrt((l1 - l2) ^ 2 + (a1 - a2) ^ 2 + (b1 - b2) ^ 2)
+end
+
 -- Scale a color's HSL saturation by keep% (100 = unchanged, 0 = grayscale). Hue/Lightness preserved.
 local function desaturate_hex(hex, keep)
   local r, g, b = hex_to_rgb(hex)
@@ -348,6 +399,18 @@ local function scale_sat(hex, pct)
   local h, s, l = rgb_to_hsl(r, g, b)
   s = math.max(0, math.min(100, s * (math.max(0, pct) / 100)))
   return rgb_to_hex(hsl_to_rgb(h, s, l))
+end
+
+-- Rotate hue by signed degrees; S and L untouched. A grey (s == 0) has no hue
+-- to rotate, so it comes back unchanged rather than inventing one — the same
+-- rule scale_sat follows by being multiplicative.
+local function rotate_hue(hex, degrees)
+  local r, g, b = hex_to_rgb(hex)
+  local h, s, l = rgb_to_hsl(r, g, b)
+  if s == 0 or degrees == 0 then
+    return hex
+  end
+  return rgb_to_hex(hsl_to_rgb((h + degrees) % 360, s, l))
 end
 
 -- Lift fg's HSL Lightness to min_lightness if below that floor; H and S unchanged.
@@ -794,20 +857,20 @@ local retrobox_string_lightness_group_patterns = {
 }
 
 -- ...except the yaml value SHAPES, which are only nominally "@string.*".
--- @string.yaml.url / .image / .version / .path are separate token classes that
--- happen to live under the @string prefix, and "^@string" above swept all four
--- into retrobox's single yellow -- so retrobox was the one theme where a URL, an
--- image ref, a version and a path were indistinguishable from a plain value
--- (measured: 4 distinct value colours against 9 for every other scheme).
--- @string.yaml and @string.yaml.value are deliberately NOT listed here: those
--- ARE the plain string colour and should keep tracking the knob.
+-- @string.special.url / .image / .version / .path are separate token classes
+-- that happen to live under the @string prefix, and "^@string" above swept all
+-- four into retrobox's single yellow -- so retrobox was the one theme where a
+-- URL, an image ref, a version and a path were indistinguishable from a plain
+-- value (measured: 4 distinct value colours against 9 for every other scheme).
+-- @string.yaml is deliberately NOT listed here: that IS the plain string colour
+-- and should keep tracking the knob.
+--
+-- One pattern covers the lot now: every shape class is a leaf under
+-- @string.special, which is exactly the grouping this exemption wants. Under
+-- the old @string.yaml.* names each shape needed its own line and a new shape
+-- silently missed the exemption until someone remembered to add it.
 local retrobox_string_lightness_exempt_patterns = {
-  "^@string%.yaml%.url",
-  "^@string%.yaml%.image",
-  "^@string%.yaml%.version",
-  "^@string%.yaml%.path",
-  "^@string%.yaml%.condition",
-  "^@string%.yaml%.quoted",
+  "^@string%.special",
 }
 
 local function read_highlights()
@@ -825,15 +888,389 @@ end
 -- :ThemeReload takes effect without restarting nvim. See that file's header.
 local theme_baseline_path = vim.fn.stdpath("config") .. "/lua/config/theme_baseline.lua"
 
-local function load_theme_baseline_colors()
-  local ok, tbl = pcall(dofile, theme_baseline_path)
+-- The :HlColorSave store. Same dofile-fresh-every-apply contract as the hand
+-- table above, and stamped ON TOP of it: a saved edit is the newer deliberate
+-- decision, so it wins for the groups it names and leaves the rest untouched.
+local theme_saved_path = vim.fn.stdpath("config") .. "/lua/config/theme_baseline_saved.lua"
+
+local function load_saved_baseline_colors()
+  local ok, tbl = pcall(dofile, theme_saved_path)
   if ok and type(tbl) == "table" then
     return tbl
   end
-  -- dofile failed (mid-edit syntax error, missing file): fall back to the
-  -- already-loaded module copy so a bad save doesn't wipe the baseline.
-  local ok2, mod = pcall(require, "config.theme_baseline")
+  local ok2, mod = pcall(require, "config.theme_baseline_saved")
   return (ok2 and type(mod) == "table") and mod or {}
+end
+
+local function load_theme_baseline_colors()
+  local base
+  local ok, tbl = pcall(dofile, theme_baseline_path)
+  if ok and type(tbl) == "table" then
+    base = tbl
+  else
+    -- dofile failed (mid-edit syntax error, missing file): fall back to the
+    -- already-loaded module copy so a bad save doesn't wipe the baseline.
+    local ok2, mod = pcall(require, "config.theme_baseline")
+    base = (ok2 and type(mod) == "table") and mod or {}
+  end
+
+  -- Merge per theme, per group -- never table-level, or saving one group would
+  -- shadow the whole hand-tuned entry for that colorscheme.
+  local merged = {}
+  for key, groups in pairs(base) do
+    merged[key] = vim.tbl_extend("force", {}, groups)
+  end
+  for key, groups in pairs(load_saved_baseline_colors()) do
+    merged[key] = vim.tbl_extend("force", merged[key] or {}, groups)
+  end
+  return merged
+end
+
+-- Which table key the active colorscheme reads/writes. Mirrors the inline
+-- resolution at the three apply sites, including kanagawa's one-name-many-
+-- variants problem, so a save lands under the key the apply will look up.
+local function current_baseline_key()
+  local key = vim.g.colors_name or ""
+  if key == "kanagawa" then
+    local okk, kn = pcall(require, "kanagawa")
+    local variant = okk and (kn._CURRENT_THEME or (kn.config and kn.config.theme)) or "wave"
+    key = "kanagawa-" .. variant
+  end
+  return key
+end
+
+-- Rewrite theme_baseline_saved.lua from a table. Deterministic ordering (themes
+-- sorted, groups sorted) so the file diffs cleanly, and the header is re-emitted
+-- every time because the whole file is replaced, never patched.
+local SAVED_HEADER = [[
+-- GENERATED FILE -- do not hand-edit, :HlColorSave rewrites it wholesale.
+--
+-- This is the persistent half of the :HlColor workflow. :HlColor recolours a
+-- group in the live session only; :HlColorSave appends whatever is currently
+-- overridden into this file under the active colorscheme, so the edit survives
+-- restarts. :HlColorForget removes entries again.
+--
+-- Precedence, from load_theme_baseline_colors in plugins/theme.lua:
+--   derived yaml palette  ->  theme_baseline.lua (hand-tuned)  ->  THIS FILE
+-- i.e. a saved edit wins over the hand table for the same group, because it is
+-- by definition the more recent deliberate decision. Delete a group here and the
+-- hand-tuned value underneath comes straight back.
+--
+-- Everything in here is a pipeline INPUT, exactly like theme_baseline.lua: the
+-- hexes are stamped before the base capture, so :FgAdjust, :Sepia and the bg
+-- knobs keep transforming them like any other theme colour.
+]]
+
+-- SAVE HISTORY (:HlColorRewind). The saved file is rewritten wholesale, so
+-- before every rewrite the outgoing version is copied here -- "go back a few
+-- saves" is otherwise impossible (the config is not a git repo). Timestamped
+-- names sort chronologically; only the newest SAVED_HISTORY_KEEP survive.
+local saved_history_dir = vim.fn.stdpath("state") .. "/hl-color-history"
+local SAVED_HISTORY_KEEP = 30
+
+local function saved_history_list()
+  local hist = vim.fn.glob(saved_history_dir .. "/baseline-*.lua", true, true)
+  table.sort(hist)
+  return hist
+end
+
+local function snapshot_saved_baseline()
+  if vim.fn.filereadable(theme_saved_path) == 0 then
+    return
+  end
+  vim.fn.mkdir(saved_history_dir, "p")
+  local dest = string.format("%s/baseline-%s.lua", saved_history_dir, os.date("%Y%m%d-%H%M%S"))
+  if vim.fn.filereadable(dest) == 1 then
+    -- Two saves inside one second: keep both rather than clobber the first.
+    dest = dest:gsub("%.lua$", string.format("-%03d.lua", vim.uv.hrtime() % 1000))
+  end
+  pcall(vim.fn.writefile, vim.fn.readfile(theme_saved_path), dest)
+  local hist = saved_history_list()
+  for i = 1, #hist - SAVED_HISTORY_KEEP do
+    pcall(vim.fn.delete, hist[i])
+  end
+end
+
+local function write_saved_baseline_colors(tbl)
+  snapshot_saved_baseline()
+  local theme_keys = vim.tbl_keys(tbl)
+  table.sort(theme_keys)
+
+  -- One list entry per line: writefile() turns an embedded \n into a NUL byte,
+  -- which would fold the whole header into a single `--` comment and take the
+  -- `return` with it.
+  local lines = vim.split(vim.trim(SAVED_HEADER), "\n", { plain = true })
+  table.insert(lines, "return {")
+  for _, key in ipairs(theme_keys) do
+    local groups = vim.tbl_keys(tbl[key] or {})
+    if #groups > 0 then
+      table.sort(groups)
+      table.insert(lines, string.format('  ["%s"] = {', key))
+      for _, group in ipairs(groups) do
+        table.insert(lines, string.format('    ["%s"] = "%s",', group, tbl[key][group]))
+      end
+      table.insert(lines, "  },")
+    end
+  end
+  table.insert(lines, "}")
+  table.insert(lines, "")
+
+  -- Write to a temp file and rename: a half-written return table is a syntax
+  -- error, and load_saved_baseline_colors would silently fall back to the stale
+  -- require() copy while the file on disk stayed broken.
+  local tmp = theme_saved_path .. ".tmp"
+  local ok, err = pcall(vim.fn.writefile, lines, tmp)
+  if not ok then
+    return false, tostring(err)
+  end
+  if vim.uv.fs_rename(tmp, theme_saved_path) == nil then
+    pcall(vim.fn.delete, tmp)
+    return false, "could not replace " .. theme_saved_path
+  end
+  -- Drop the cached module so a later require() fallback isn't stale.
+  package.loaded["config.theme_baseline_saved"] = nil
+  return true
+end
+
+-- ===========================================================================
+-- FULL CONFIG persistence (:ThemeConfigSave) — the KNOB half of saving.
+-- ===========================================================================
+--
+-- theme_baseline_saved.lua stores COLOURS: "this group is this hex". That is
+-- only half of what a tuned theme is. The other half is the knobs -- sepia,
+-- the fg/bg HSL dials, the yaml key colour and bold state, the depth ladder's
+-- step and saturation descent -- and none of it survived a restart, because
+-- apply_knob_defaults re-stamps every knob from global_theme_defaults +
+-- colorscheme_defaults on each ColorScheme event.
+--
+-- So this file becomes the THIRD and last layer of that merge:
+--
+--   global_theme_defaults  ->  colorscheme_defaults[theme]  ->  THIS FILE
+--
+-- Same precedence logic as the colour side: a saved value is the most recent
+-- deliberate decision, so it wins. And because it lands in apply_knob_defaults
+-- rather than in a deferred re-apply, there is no 900ms race with the pipeline
+-- the way the session-only :XLock commands have -- the knobs are simply correct
+-- before the first pass runs.
+--
+-- Deleting a theme's entry here (or :ThemeConfigForget) restores whatever the
+-- hardcoded defaults say, exactly like deleting a group from the colour file.
+local theme_config_path = vim.fn.stdpath("config") .. "/lua/config/theme_config_saved.lua"
+
+local function load_saved_theme_config()
+  local ok, tbl = pcall(dofile, theme_config_path)
+  if ok and type(tbl) == "table" then
+    return tbl
+  end
+  local ok2, mod = pcall(require, "config.theme_config_saved")
+  return (ok2 and type(mod) == "table") and mod or {}
+end
+
+local CONFIG_HEADER = [[
+-- GENERATED FILE -- do not hand-edit, :ThemeConfigSave rewrites it wholesale.
+--
+-- The knob half of a saved theme, keyed by colorscheme. Its companion is
+-- theme_baseline_saved.lua, which stores the highlight-group COLOURS; between
+-- them a tuned theme is fully reproducible from disk.
+--
+-- Merged in apply_knob_defaults (plugins/theme.lua) as the last layer of:
+--   global_theme_defaults -> colorscheme_defaults[theme] -> THIS FILE
+-- so anything here overrides the hardcoded defaults for that colorscheme only.
+-- Remove a theme's entry and its knobs go back to the defaults; :ThemeConfigForget
+-- does the same thing without opening the file.
+]]
+
+-- Values are numbers, booleans and hex strings only -- no nested tables, so the
+-- serializer stays a one-liner per key and the file is trivially diffable.
+local function write_saved_theme_config(tbl)
+  local theme_keys = vim.tbl_keys(tbl)
+  table.sort(theme_keys)
+
+  local lines = vim.split(vim.trim(CONFIG_HEADER), "\n", { plain = true })
+  table.insert(lines, "return {")
+  for _, key in ipairs(theme_keys) do
+    local knobs = vim.tbl_keys(tbl[key] or {})
+    if #knobs > 0 then
+      table.sort(knobs)
+      table.insert(lines, string.format('  ["%s"] = {', key))
+      for _, knob in ipairs(knobs) do
+        local v = tbl[key][knob]
+        local rendered = type(v) == "string" and string.format("%q", v) or tostring(v)
+        table.insert(lines, string.format("    %s = %s,", knob, rendered))
+      end
+      table.insert(lines, "  },")
+    end
+  end
+  table.insert(lines, "}")
+  table.insert(lines, "")
+
+  -- Temp file + rename, same reason as the colour writer: a half-written return
+  -- table is a syntax error, and the loader would silently fall back to a stale
+  -- require() copy while the file on disk stayed broken.
+  local tmp = theme_config_path .. ".tmp"
+  local ok, err = pcall(vim.fn.writefile, lines, tmp)
+  if not ok then
+    return false, tostring(err)
+  end
+  if vim.uv.fs_rename(tmp, theme_config_path) == nil then
+    pcall(vim.fn.delete, tmp)
+    return false, "could not replace " .. theme_config_path
+  end
+  package.loaded["config.theme_config_saved"] = nil
+  return true
+end
+
+-- ---------------------------------------------------------------------------
+-- PINNED HEXES, still knob-reachable (pinned_knob_delta).
+-- ---------------------------------------------------------------------------
+-- A pinned colour is an exact hex somebody chose on purpose: a :HlColor save in
+-- theme_baseline_saved.lua, :YamlKeyTopColor, :YamlKeyColor, a discrete depth
+-- palette, YAML_KEY_DARK_BASE. Those used to be stamped raw, which is what made
+-- :Sepia and :FgAdjust look broken on nvim-gruvbox -- measured 2026-08-06, the
+-- knobs moved 346 of 408 fg groups and every single one they could NOT move was
+-- pinned: @string.yaml, @type.yaml, @boolean.yaml, YamlKeyD1..D8, YamlExpr*.
+-- In a yaml buffer that is nearly everything, so the only visible movement was
+-- the handful nobody had pinned (@property.yaml, brackets, numbers, operators).
+--
+-- Stamping them raw was right for the reason the pin exists (feeding a saved hex
+-- back through the pipeline as an INPUT meant it never rendered as typed), and
+-- feeding them through the ABSOLUTE knobs would resurrect exactly that bug --
+-- nvim-gruvbox sits at fg_saturation 99, so pinned hexes would shift the moment
+-- this ran, at rest, with no knob touched.
+--
+-- So the knobs are measured against a REFERENCE knob-state: the knob values the
+-- pinned hexes are the resting look AT. `:Sepia 40` means "40 away from rest",
+-- always, from the pinned colour itself rather than from some pre-pipeline
+-- ancestor. At the reference the offset is zero and this is the identity
+-- function -- the pin renders as typed, byte for byte.
+--
+-- The reference is REMEMBERED, in theme_pin_reference.lua, written once per
+-- theme and never rewritten. This is the whole point and it is why it is not
+-- read from theme_config_saved.lua: that file is rewritten by :ThemeConfigSave
+-- from the LIVE knobs, so the reference would follow them and the knobs would
+-- compound -- :Sepia 40, save, :Sepia 40 would land on 80 while still reading
+-- "40" on the dial. A reference that moves is not a reference.
+--
+-- Seeded, on first sight of a theme, from that theme's saved knobs (neutral if
+-- it has none), because those ARE the values its pinned hexes were chosen at.
+-- After that it is frozen; :PinReference is the only thing that rewrites it.
+local pin_reference_path = vim.fn.stdpath("config") .. "/lua/config/theme_pin_reference.lua"
+local PIN_REFERENCE_KNOBS = { "sepia_amount", "fg_lightness", "fg_saturation" }
+local pin_reference_cache = nil
+
+local function load_pin_reference()
+  if pin_reference_cache then
+    return pin_reference_cache
+  end
+  local ok, tbl = pcall(dofile, pin_reference_path)
+  pin_reference_cache = (ok and type(tbl) == "table") and tbl or {}
+  return pin_reference_cache
+end
+
+local PIN_REFERENCE_HEADER = [[
+-- GENERATED FILE -- written by the theme pipeline, rewritten only by
+-- :PinReference. Do not hand-edit.
+--
+-- The zero point for :Sepia and :FgAdjust on PINNED colours -- the hexes in
+-- theme_baseline_saved.lua, :YamlKeyTopColor, :YamlKeyColor, the discrete depth
+-- palette, YAML_KEY_DARK_BASE. Those are exact colours chosen on purpose, so the
+-- knobs move them RELATIVE to the look they already are, and this file records
+-- what "already are" means per colorscheme.
+--
+-- Deliberately NOT theme_config_saved.lua, even though a theme's first entry
+-- here is seeded from it. That file tracks the live knobs and :ThemeConfigSave
+-- rewrites it; a reference that moved with it would make every knob compound
+-- (:Sepia 40, save, :Sepia 40 = sepia 80 on a dial still reading 40). Written
+-- once per theme and then frozen -- that is the entire job.
+]]
+
+local function write_pin_reference(tbl)
+  local keys = vim.tbl_keys(tbl)
+  table.sort(keys)
+  local lines = vim.split(vim.trim(PIN_REFERENCE_HEADER), "\n", { plain = true })
+  table.insert(lines, "return {")
+  for _, key in ipairs(keys) do
+    table.insert(lines, string.format('  ["%s"] = {', key))
+    for _, knob in ipairs(PIN_REFERENCE_KNOBS) do
+      table.insert(lines, string.format("    %s = %s,", knob, tostring(tbl[key][knob])))
+    end
+    table.insert(lines, "  },")
+  end
+  table.insert(lines, "}")
+  table.insert(lines, "")
+  -- Temp + rename, same reason as the other two generated files: a half-written
+  -- return table is a syntax error and the loader would fall back to {}, which
+  -- silently resets every reference to neutral -- i.e. it would look exactly
+  -- like the compounding bug this file exists to prevent.
+  local tmp = pin_reference_path .. ".tmp"
+  local ok = pcall(vim.fn.writefile, lines, tmp)
+  if not ok then
+    return false
+  end
+  if vim.uv.fs_rename(tmp, pin_reference_path) == nil then
+    pcall(vim.fn.delete, tmp)
+    return false
+  end
+  pin_reference_cache = tbl
+  return true
+end
+
+local pinned_knob_delta
+do
+  -- Seeding writes to disk, and this runs from the highlight path (which is a
+  -- redraw path -- see the statuscolumn rule). So the write is scheduled, never
+  -- inline, and the cache is updated first so the very next stamp in the same
+  -- sweep already sees the seeded value instead of re-seeding eight more times.
+  local NEUTRAL_REFERENCE = { sepia_amount = 0, fg_lightness = 50, fg_saturation = 50 }
+
+  local function reference_for()
+    local theme = vim.g.colors_name or ""
+    -- Before any colorscheme has loaded there is no theme to key on. Return
+    -- neutral WITHOUT recording it: seeding here wrote a junk [""] entry to disk
+    -- that every later theme-less stamp then read back as its reference.
+    if theme == "" then
+      return NEUTRAL_REFERENCE
+    end
+    local all = load_pin_reference()
+    if all[theme] then
+      return all[theme]
+    end
+    local ok, cfg = pcall(load_saved_theme_config)
+    local saved = (ok and type(cfg) == "table" and type(cfg[theme]) == "table") and cfg[theme] or {}
+    local ref = {
+      sepia_amount = saved.sepia_amount or 0,
+      fg_lightness = saved.fg_lightness or 50,
+      fg_saturation = saved.fg_saturation or 50,
+    }
+    all[theme] = ref
+    vim.schedule(function()
+      write_pin_reference(load_pin_reference())
+    end)
+    return ref
+  end
+
+  -- adjust_fg_hsl takes 0-100 with 50 = neutral, so an offset of +30 is level 80.
+  local function level(current, reference)
+    return math.max(0, math.min(100, 50 + (current - reference)))
+  end
+
+  pinned_knob_delta = function(hex)
+    hex = normalize_hex(hex)
+    if not hex then
+      return hex
+    end
+    local ref = reference_for()
+    local d_sepia = sepia_amount - ref.sepia_amount
+    if d_sepia ~= 0 then
+      hex = sepia_hex(hex, d_sepia / 100)
+    end
+    local l = level(fg_lightness, ref.fg_lightness)
+    local s = level(fg_saturation, ref.fg_saturation)
+    if l ~= 50 or s ~= 50 then
+      hex = adjust_fg_hsl(hex, l, s)
+    end
+    return hex
+  end
 end
 
 -- ===========================================================================
@@ -887,13 +1324,15 @@ local function shift_l(hex, delta)
   return rgb_to_hex(hsl_to_rgb(h, s, l))
 end
 
+
 local function derive_yaml_baseline()
   -- REWRITTEN 2026-07-27. One assignment pass, one rule set:
   --   * colours come ONLY from the theme's own palette — no invented hues,
   --     no hue rotation (deleted), no shade-dimmed variants of other classes;
   --   * keys are claimed FIRST: no value class may take a key colour;
-  --   * families assign in traffic order, each maximizing on-screen (post-
-  --     knob) clearance from everything already placed;
+  --   * families assign in traffic order, semantic source VERBATIM first,
+  --     then down the theme's weighted colour hierarchy (see THEME HIERARCHY
+  --     below) — never a "maximum clearance" invention;
   --   * classes in one family share their colour EXACTLY (url=path=image).
   -- Hand tables in theme_baseline.lua stamp over all of this and always win.
   local out = {}
@@ -922,21 +1361,23 @@ local function derive_yaml_baseline()
   -- pipeline, off the level2 rung, so derived and hand-tuned themes get the
   -- identical treatment. Putting the same base in all three keeps that function's
   -- input predictable and stops the ramp being applied twice.
-  if key then
-    put("@property.yaml.toplevel", scale_sat(key, 115))
-    put("@property.yaml.level2", key)
-    put("@property.yaml", key)
-  end
+  -- ONE key colour. The eight depth rungs are generated from it by
+  -- apply_yaml_key_ramp (groups YamlKeyD1..D8) and painted by
+  -- yaml-key-depth.lua. The query no longer captures depth at all, so there is
+  -- a single mechanism for key depth instead of the old split where the .scm
+  -- owned depths 1-2 and the painter owned 4-8 with depth 3 as a deliberate
+  -- no-op seam between them.
+  put("@property.yaml", key)
 
   put("@punctuation.bracket.yaml", bracket)
-  put("@punctuation.special.doc", bracket)
+  put("@punctuation.special.document.yaml", bracket)
   -- Colons/commas recede below the dimmest key rung.
   if comment then
     local delim = shift_l(comment, 12)
     if key then
-      -- 110 = the dimmest key rung (see apply_yaml_key_ramp); delimiters sit
+      -- 85 = the dimmest key rung (see apply_yaml_key_ramp); delimiters sit
       -- below it so colons never compete with the deepest keys.
-      local floor_l = lightness_of(scale_l(key, 110)) - 6
+      local floor_l = lightness_of(scale_l(key, 85)) - 6
       if lightness_of(delim) > floor_l then
         delim = shift_l(delim, floor_l - lightness_of(delim))
       end
@@ -953,103 +1394,127 @@ local function derive_yaml_baseline()
     end
     return o or hex
   end
-  local function rgb_dist(a, b)
-    local r1, g1, b1 = hex_to_rgb(a)
-    local r2, g2, b2 = hex_to_rgb(b)
-    return math.sqrt((r1 - r2) ^ 2 + (g1 - g2) ^ 2 + (b1 - b2) ^ 2)
-  end
+  -- Perceptual, not RGB. See color_delta_e's header for why this matters:
+  -- an RGB metric does not track what the eye can separate, especially in the
+  -- blue/green region.
+  local rgb_dist = color_delta_e
 
-  -- The theme's own accent pool (greys excluded — a value in plain-text grey
-  -- reads as unstyled, which is what this file exists to prevent).
-  local pool = {}
-  do
-    local seen = {}
-    local cands = { str, typ, num, bool, const, func, pre, kw, special, bracket, url }
-    for _, name in ipairs({
-      "@string.special", "@character", "@attribute", "@tag", "@module",
-      "@operator", "@variable.builtin", "@type.builtin", "@keyword.function",
-      "@function.builtin", "@label",
-    }) do
-      cands[#cands + 1] = first_fg({ name })
-    end
-    for _, cand in ipairs(cands) do
-      if cand and not seen[cand] then
-        seen[cand] = true
-        local _, s2 = rgb_to_hsl(hex_to_rgb(cand))
-        if s2 >= 15 then
-          pool[#pool + 1] = cand
+  -- =========================================================================
+  -- THEME HIERARCHY (rewritten 2026-08-01). The old solver banned greys
+  -- (sat < 15) from its pool and, whenever a semantic source didn't clear a
+  -- ΔE bar, replaced it with the MAX-CLEARANCE pool colour. Both rules were
+  -- theme-agnostic: they turned every scheme — however muted — into the same
+  -- maximally-spread rainbow, in the same slots, in the same file positions.
+  -- That is why "all the themes look alike" in yaml (RCA 2026-08-01).
+  --
+  -- New rules, in order:
+  --   1. SEMANTIC FIDELITY. A yaml class wears its theme-native source colour
+  --      VERBATIM — strings wear the theme's string colour, numbers its number
+  --      colour — even when that colour is grey or close to a neighbour. If
+  --      the theme renders values quietly in go/py/js, yaml is quiet too;
+  --      sharing between classes is the theme's own character, not a bug.
+  --   2. HIERARCHY FALLBACK. A class with no native source (or one that would
+  --      collide with the key ramp) walks DOWN the theme's own colour
+  --      hierarchy — a weighted census of what the theme actually paints the
+  --      most screen area with — taking the heaviest tier not already worn.
+  --      Never a colour outside the theme, never "the loudest free hue".
+  --   3. The single surviving invariant: values never wear the key ramp.
+  -- =========================================================================
+
+  -- Weighted census. Weights approximate on-screen traffic in real code
+  -- buffers; colours within ΔE 12 merge into one tier whose weight is the sum.
+  -- Sorted by weight, this IS the theme's colour hierarchy: tier 1 is the
+  -- colour the theme leans on hardest, the tail is its rare accents.
+  local CENSUS = {
+    { w = 25, groups = { "@string", "String" } },
+    { w = 16, groups = { "@function", "Function" } },
+    { w = 14, groups = { "@keyword", "Keyword", "Statement" } },
+    { w = 12, groups = { "@variable", "Identifier" } },
+    { w = 8, groups = { "@type", "Type" } },
+    { w = 6, groups = { "@number", "Number" } },
+    { w = 5, groups = { "@constant", "Constant" } },
+    { w = 5, groups = { "@variable.member", "@property" } },
+    { w = 4, groups = { "@operator", "Operator" } },
+    { w = 3, groups = { "@punctuation.special", "Special" } },
+    { w = 2, groups = { "@boolean", "Boolean" } },
+    { w = 1, groups = { "@string.special.url", "Underlined" } },
+  }
+  local tiers = {}
+  for _, row in ipairs(CENSUS) do
+    local hex = first_fg(row.groups)
+    if hex then
+      local k = knobbed(hex)
+      local merged = false
+      for _, t in ipairs(tiers) do
+        if rgb_dist(k, t.k) < 12 then
+          t.w = t.w + row.w
+          merged = true
+          break
         end
+      end
+      if not merged then
+        tiers[#tiers + 1] = { hex = hex, k = k, w = row.w }
       end
     end
   end
+  table.sort(tiers, function(a, b)
+    return a.w > b.w
+  end)
 
-  local claimed = {}
-  local function claim(hex)
-    if hex then
-      claimed[#claimed + 1] = knobbed(hex)
+  -- The #1 invariant, unchanged from the old solver: values never sit near the
+  -- key ramp. The rungs are the base at 120%..85% lightness, so test the
+  -- extremes as well as the base.
+  local function near_ramp(hex)
+    local base = out["@property.yaml"]
+    if not base then
+      return false
     end
-  end
-  local function clearance(hex)
-    local worst = math.huge
     local k = knobbed(hex)
-    for _, c in ipairs(claimed) do
-      worst = math.min(worst, rgb_dist(k, c))
+    for _, r in ipairs({ base, scale_l(base, 120), scale_l(base, 85) }) do
+      if r and rgb_dist(k, knobbed(r)) < 16 then
+        return true
+      end
     end
-    return worst
+    return false
   end
-  -- Keys and comments are claimed before ANY value assigns: the invariant
-  -- "values never wear key colours" holds by construction.
-  claim(out["@property.yaml.toplevel"])
-  claim(out["@property.yaml.level2"])
-  claim(out["@property.yaml"])
-  claim(comment)
+  local function usable(hex)
+    return hex ~= nil and not near_ramp(hex)
+  end
 
-  local SEP = 45
-  -- Take the first preferred source that clears SEP on screen; otherwise the
-  -- pool colour with the best clearance. Never a colour outside the theme.
+  -- `worn` only steers the hierarchy fallback toward unused tiers; semantic
+  -- picks are free to coincide with each other — that sharing is the theme's.
+  local worn = {}
+  local function from_hierarchy()
+    for _, t in ipairs(tiers) do
+      if usable(t.hex) and not worn[t.hex] then
+        return t.hex
+      end
+    end
+    for _, t in ipairs(tiers) do
+      if usable(t.hex) then
+        return t.hex
+      end
+    end
+    return tiers[1] and tiers[1].hex or nil
+  end
   local function assign(preferred)
     for _, cand in ipairs(preferred) do
-      if cand and clearance(cand) >= SEP then
-        claim(cand)
+      if usable(cand) then
+        worn[cand] = true
         return cand
       end
     end
-    -- Fallback: best-clearance pool colour, but colours near the KEY RAMP are
-    -- hard-filtered first — at the margin, sitting near another value is
-    -- tolerable; sitting near a key never is (the #1 invariant).
-    local function near_ramp(hex)
-      local k = knobbed(hex)
-      for _, r in ipairs({ out["@property.yaml.toplevel"], out["@property.yaml.level2"], out["@property.yaml"] }) do
-        if r and rgb_dist(k, knobbed(r)) < 40 then
-          return true
-        end
-      end
-      return false
+    local pick = from_hierarchy()
+    if pick then
+      worn[pick] = true
+      return pick
     end
-    local best, best_d = nil, -1
-    for _, cand in ipairs(pool) do
-      if not near_ramp(cand) then
-        local d = clearance(cand)
-        if d > best_d then
-          best, best_d = cand, d
-        end
-      end
-    end
-    if not best then
-      for _, cand in ipairs(pool) do
-        local d = clearance(cand)
-        if d > best_d then
-          best, best_d = cand, d
-        end
-      end
-    end
-    best = best or preferred[1]
-    claim(best)
-    return best
+    return preferred[1]
   end
 
-  -- Families, highest traffic first — earlier families get first pick of the
-  -- theme's semantically-matching slot.
+  -- Families, highest traffic first. The preferred lists are semantic-adjacent
+  -- sources tried verbatim; only when none exist (or all sit on the key ramp)
+  -- does the theme hierarchy decide.
   local strings = assign({ str })
   local dashes = assign({ special, kw })
   local words = assign({ kw, const })
@@ -1059,25 +1524,29 @@ local function derive_yaml_baseline()
   local versions = assign({ func, typ })
   local bools = assign({ bool, num })
 
-  put("@string.yaml", strings)
-  put("@string.yaml.value", strings)
-  put("@string.yaml.quoted", strings) -- exact share: same kind, same colour
+  -- STANDARD capture names, language-suffixed for styling. See the header of
+  -- after/queries/yaml/highlights.scm: the query captures @string.special.url,
+  -- and the group styled here is @string.special.url.yaml, which is exactly the
+  -- ".lang goes last" rule from :help treesitter-highlight-groups. This is what
+  -- keeps the yaml palette off python/go/js instead of the old private
+  -- @string.yaml.* namespace, which only worked by accident and produced the
+  -- doubled `.yaml.yaml` keys in theme_baseline_saved.lua.
+  put("@string.yaml", strings) -- plain AND quoted values: one class, one colour
   put("@punctuation.special.yaml", dashes)
-  put("@punctuation.special.merge", dashes)
+  put("@operator.yaml", dashes) -- the `<<` merge key
   put("@label.yaml", dashes)
-  put("@label", dashes)
-  put("@string.yaml.word", words)
-  put("@type.yaml.enum", enums)
-  put("@string.yaml.url", locators)
-  put("@string.yaml.path", locators) -- exact share: one locator family
-  put("@string.yaml.image", locators)
-  put("@number.yaml.kdragon", hot)
-  put("@number.yaml.quantity", hot)
-  put("@constant.yaml.env", hot)
-  put("@string.yaml.condition", hot)
-  put("@string.yaml.version", versions)
-  put("@boolean.yaml.kdragon", bools)
-  put("@constant.builtin.yaml.kdragon", comment) -- null/~ is absence: muted
+  put("@string.special.symbol.yaml", words)
+  put("@type.yaml", enums)
+  put("@string.special.url.yaml", locators)
+  put("@string.special.path.yaml", locators) -- exact share: one locator family
+  put("@string.special.image.yaml", locators)
+  put("@number.yaml", hot)
+  put("@number.quantity.yaml", hot)
+  put("@constant.macro.yaml", hot)
+  put("@string.special.condition.yaml", hot)
+  put("@string.special.version.yaml", versions)
+  put("@boolean.yaml", bools)
+  put("@constant.builtin.yaml", comment) -- null/~ is absence: muted
 
   -- ${{ }} tokens ride the same families (painted by yaml-expr.lua).
   put("YamlExprBrace", bracket)
@@ -1088,8 +1557,8 @@ local function derive_yaml_baseline()
   put("YamlExprOp", dashes)
   put("YamlExprStr", strings)
   put("YamlExprNum", hot)
-  -- Sigil: `$` marks the exit from string-land; it takes whatever slot has
-  -- the most on-screen clearance from everything placed so far.
+  -- Sigil: `$` marks the exit from string-land; keyword/constant if the theme
+  -- has one, else the next unworn hierarchy tier.
   put("YamlExprSigil", assign({ kw, const }))
 
   -- Bash injected into run: scalars — values, never key-coloured.
@@ -1204,26 +1673,300 @@ end
 -- never compounding. Session-only; reset by apply_knob_defaults on theme switch.
 local yaml_key_brightness = 50 -- 0-100 HSL L of the key rungs, applied AFTER the ramp. 50 = ramp output as-is.
 local yaml_key_color = nil -- #rrggbb override for the ramp's base colour, or nil = theme-native level2 fg
-local yaml_key_bold = nil -- nil = ramp default (toplevel bold only), true = all rungs bold, false = none bold
+-- The colors_name the override was set under. The override applies ONLY while
+-- that theme is current: apply_knob_defaults resets it on the normal pipeline
+-- path, but the raw branch (:ThemeRaw / :ThemeRawLock) returns before the
+-- reset, and without this guard a colour set while testing one theme leaks
+-- onto every theme the picker previews.
+local yaml_key_color_theme = nil
+-- true = every rung bold. Jimmy turned :YamlKeyBold on during the 2026-08-01
+-- tuning session and kept it ("looks better"), so bold-everywhere is the default
+-- now rather than the ramp's toplevel-only. nil = ramp default, false = none.
+local yaml_key_bold = true
+
+-- The DEPTH LADDER knobs (:YamlKeyDepth / :YamlKeyDepthStep / :YamlKeyDepthSat).
+-- These decide how much colour separates one nesting level from the next; the
+-- three above decide what the keys look like overall. Kept apart on purpose --
+-- brightness/colour/bold are per-theme taste, the ladder is a readability
+-- mechanism you either want or don't.
+local yaml_key_depth_enabled = true -- false = every rung on one colour (pre-ladder rendering)
+local yaml_key_depth_step = 5 -- ABSOLUTE lightness points between consecutive rungs
+local yaml_key_depth_sat = 0 -- saturation points ADDED per rung as depth grows. 0 = off (lightness-only ladder)
+
+-- DARK KEY MODE (:YamlKeyDark). 2026-07-31: the ladder used to be free to take
+-- whatever base the theme gave it, which on a base16 scheme meant a near-white
+-- base05 reseeded to the scheme's most saturated ACCENT -- so yaml keys came out
+-- bright and, worse, a different loud colour on every scheme. Jimmy's verdict
+-- after living with it: keys are structure, not data, and structure should
+-- recede. Values glow, keys do not.
+--
+-- On (the default) the ramp ignores the theme's key colour entirely and anchors
+-- on YAML_KEY_DARK_BASE, so every theme renders keys in the same dark blue band.
+-- That uniformity is the POINT -- "yaml keys look the same everywhere" is the
+-- request, not a side effect of not bothering to theme them.
+--
+-- THE BAND IS A FLOOR, NOT A MIDPOINT (corrected 2026-08-01). The first cut used
+-- #516296 as the ramp BASE, so D1 climbed 20% above it and D8 fell to #485786 --
+-- BELOW the darkest blue Jimmy picked. A manifest spends most of its lines at
+-- depth 3-6, i.e. exactly in that too-dark tail, and it read as "purply black".
+-- The default step is now 1.3, which is (top - base) / 7: D1 lands on #6879ad and
+-- D8 lands on #516296 itself. The named colour is the BOTTOM of the ladder and
+-- nothing renders darker than it. Raise the whole band with :YamlKeyBrightness,
+-- widen or narrow it with :YamlKeyDepthStep (fractional values are fine).
+--
+-- A theme opts out with `yaml_key_dark = false` in colorscheme_defaults; the
+-- evergarden seasons do, because their green key ramp is deliberate and parked
+-- in the shader's green dead band (see the evergarden-seasons memory).
+local yaml_key_dark = true
+-- The anchor. L 45.3 -- chosen so the ramp's 120% D1 lands on #717fab, the top
+-- of the range Jimmy picked. Change this and you move every theme's keys.
+local YAML_KEY_DARK_BASE = "#b3c1cc"
+
+-- Depth-1 keys take this instead of the ramp's top rung: the section names
+-- (`on:`, `jobs:`, `permissions:`) read as landmarks in their own colour, and the
+-- ladder below them descends through the blue band as before. Near-white was the
+-- approved baseline for a few hours; Jimmy replaced it with cyan 2026-08-01.
+-- :YamlKeyTopColor <#hex | native> retunes it; `native` puts depth 1 back on the
+-- ramp with everything else.
+local yaml_key_top_color = "#66def9"
+
+-- DISCRETE PER-DEPTH PALETTE. When set, each rung takes a hand-picked hex instead
+-- of a computed rung: colours[1] for depth 1, [2] for depth 2, and the last entry
+-- for everything deeper. Set per theme in colorscheme_defaults; nil = the normal
+-- computed ramp.
+--
+-- Why this exists: a computed ramp has to pick a top and descend, so a landmark
+-- colour at depth 1 always leaves depth 2 holding the ramp's brightest rung --
+-- which is what made cyan-then-near-white look like a drop-off. A hand-picked
+-- list has no top to inherit; every tier is chosen against the one above it.
+local yaml_key_depth_colors = nil
+
+-- HUE WALK (:YamlKeyDepthHue / :YamlKeyDepthHueMode). Signed degrees of hue
+-- rotation as depth grows; 0 = off, the historical lightness-only ladder.
+-- Rebuilt 2026-07-31 (an earlier YamlKeyDepthHue died to the missing-redraw bug
+-- ladder_knob now solves — see the comment above ladder_knob). This rotates KEY
+-- FOREGROUNDS only; it is unrelated to the deleted focus-fx bg hue tint, which
+-- stays dead. Two modes:
+--   "spiral" — every rung steps `hue` degrees further: D3 sits 2*hue from D1.
+--     The classic depth spiral; with a sat descent it corkscrews toward vivid.
+--   "anchor" — D1 keeps the theme's native key hue (the landmark), every deeper
+--     rung takes ONE fixed jump of `hue` degrees and then only fades by the
+--     lightness ladder. Depth reads from contrast, hue only marks "not root".
+--   "crest" — same total sweep as spiral (7*hue by D8) but spent SHALLOW: the
+--     jumps are biggest at depths 2-3 where a manifest actually lives, and taper
+--     toward the bottom. The cure for "the spiral only shows where files are
+--     thinnest".
+--   "plunge" — the mirror of crest: barely moves until depth 4, then
+--     accelerates. Surface stays calm and on-theme, deep structure gets loud.
+--   "pendulum" — rungs alternate -hue/+hue around the native hue, growing one
+--     half-step per level. Adjacent depths sit on OPPOSITE sides of the wheel
+--     (2*hue apart), so neighbouring levels separate harder than any monotonic
+--     walk at the same setting — at the cost of hue no longer encoding "deeper",
+--     only "different".
+--
+-- DEFAULT IS 0 (off) as of 2026-07-31. The walk shipped at -15/plunge and was
+-- rejected outright: rotating hue per depth is exactly the "colour everywhere"
+-- that made yaml unreadable for Jimmy. The mechanism stays -- it is sound and
+-- :YamlKeyDepthHue still drives it -- but nothing turns it on by default, and
+-- dark key mode above pins the base so a walk is opt-in per theme.
+local yaml_key_depth_hue = 0 -- signed degrees per rung (spiral) / for the one jump (anchor)
+local yaml_key_depth_hue_mode = "plunge"
+
+-- Degrees a rung sits from the theme's native key hue. depth is 2..8 here —
+-- depth 1 never rotates in any mode. Every mode is normalized so D8 lands
+-- 7*hue from native (except anchor and pendulum, whose whole point is not
+-- sweeping), which keeps `:YamlKeyDepthHue 35` comparable across modes.
+local function yaml_key_hue_degrees(depth)
+  local hue, mode = yaml_key_depth_hue, yaml_key_depth_hue_mode
+  local t = (depth - 1) / 7 -- 0..1 across the ladder
+  if mode == "anchor" then
+    return hue
+  elseif mode == "crest" then
+    return 7 * hue * math.sqrt(t)
+  elseif mode == "plunge" then
+    return 7 * hue * t * t
+  elseif mode == "pendulum" then
+    local swing = hue * math.ceil((depth - 1) / 2)
+    return (depth % 2 == 0) and swing or -swing
+  end
+  return (depth - 1) * hue -- spiral
+end
+-- What the step COMPRESSED to on the last run. A theme only has so much room
+-- between its key colour and its background, and past that point a bigger step
+-- silently does nothing -- which is indistinguishable from a broken knob. The
+-- ramp records the real number here so :YamlKeyDepth can report it.
+local yaml_key_depth_effective_step = nil
+
+-- The full ladder state as one line. Every yaml key tuning command echoes this
+-- after it applies, so a knob never reports only its own value -- the knobs
+-- interact (step compresses against the theme's headroom, sat and hue compose
+-- with it), and seeing one number change while the rest stay hidden is how a
+-- setting gets confirmed that is not what is on screen.
+local function yaml_key_depth_status()
+  local eff = yaml_key_depth_effective_step
+  local capped = (eff and math.abs(eff - yaml_key_depth_step) > 0.05) and (" -> capped to %.1f, this theme has no more room"):format(eff)
+    or ""
+  return ("YamlKeyDepth: %s (step %s%s, sat %s, hue %s°/%s, fit %s)"):format(
+    yaml_key_depth_enabled and "on" or "off",
+    tostring(yaml_key_depth_step),
+    capped,
+    tostring(yaml_key_depth_sat),
+    tostring(yaml_key_depth_hue),
+    yaml_key_depth_hue_mode,
+    vim.g.yaml_key_depth_fit and "on" or "off"
+  )
+end
+-- Global because :YamlKeyDepthFit lives in yaml-key-depth.lua (it owns the
+-- per-buffer measurement) and has to echo the same line as the knobs here.
+_G.__yaml_key_depth_status = yaml_key_depth_status
+function _G.__yaml_key_depth_report()
+  vim.notify(yaml_key_depth_status())
+end
+
+-- Forward declaration: the ladder-off branch below returns through it before it
+-- is defined, and a global would leak a name onto _G for no reason.
+local apply_yaml_key_rungs
+
+-- ---------------------------------------------------------------------------
+-- BASE16 KEY SEED.
+-- ---------------------------------------------------------------------------
+-- Every base16 scheme renders yaml keys as plain body text: base16-colorscheme.lua
+-- sets TSProperty = base05 (the default foreground) and links @property to it.
+-- base05 is white/near-white on most of the 343 schemes, and white has no hue --
+-- rotate_hue's `s == 0` guard returns it unchanged, so the whole depth ladder
+-- (spiral/crest/plunge/pendulum) is a no-op and the sat multiply has nothing to
+-- multiply. Keys render as eight greys.
+--
+-- So the key gets a hue from the scheme's OWN accent slots, which base16 defines
+-- per theme and the plugin simply never uses for properties. base0D is the base16
+-- spec's functions/headings slot and is the conventional key accent; if a scheme
+-- cuts it too grey to rotate, we take the most saturated of the remaining accents
+-- instead. Each of the 343 schemes therefore gets a different key colour, drawn
+-- from its own palette -- nothing invented, nothing shared between themes.
+--
+-- The accent is used at its own lightness, not base05's: base16 accents are
+-- designed to be legible on base00, and that holds on light and dark schemes
+-- alike, so this needs no separate light-background branch.
+local YAML_KEY_SEED_MIN_SAT = 20 -- below this a hue is too weak for the ladder to walk
+
+-- The live base00-base0F of the active base16 scheme, or nil for non-base16
+-- themes. base16-colorscheme.lua stores it on M.colors at setup() time, so this
+-- is the same data the upstream tinted-theming scheme files carry.
+local function base16_palette()
+  local ok, mod = pcall(require, "base16-colorscheme")
+  if not ok or type(mod) ~= "table" or type(mod.colors) ~= "table" then
+    return nil
+  end
+  return mod.colors
+end
+
+local function saturation_of(hex)
+  local r, g, b = hex_to_rgb(hex)
+  local _, s = rgb_to_hsl(r, g, b)
+  return s
+end
+
+-- Returns a hued replacement for a neutral key colour, or nil to leave it alone.
+local function base16_key_seed(base)
+  if saturation_of(base) >= YAML_KEY_SEED_MIN_SAT then
+    return nil -- the theme already gave keys a hue; never override that
+  end
+  local p = base16_palette()
+  if not p then
+    return nil
+  end
+  local preferred = p.base0D and normalize_hex(p.base0D)
+  if preferred and saturation_of(preferred) >= YAML_KEY_SEED_MIN_SAT then
+    return preferred
+  end
+  -- base0D too grey on this scheme: fall back to its most saturated accent.
+  local best, best_sat = nil, YAML_KEY_SEED_MIN_SAT
+  for _, slot in ipairs({ "base0C", "base0E", "base0A", "base0B", "base09", "base08" }) do
+    local hex = p[slot] and normalize_hex(p[slot])
+    if hex then
+      local s = saturation_of(hex)
+      if s > best_sat then
+        best, best_sat = hex, s
+      end
+    end
+  end
+  return best
+end
 
 local function apply_yaml_key_ramp()
-  local ok, hl = pcall(vim.api.nvim_get_hl, 0, { name = "@property.yaml.level2", link = false })
+  local ok, hl = pcall(vim.api.nvim_get_hl, 0, { name = "@property.yaml", link = false })
   -- A colour override replaces the ramp BASE (so the 120/115/110 rungs still
   -- separate depths); without one the theme's own level2 fg is the base.
-  local base = yaml_key_color or (ok and type(hl) == "table" and normalize_hex(hl.fg) or nil)
+  local override = yaml_key_color
+  if override and yaml_key_color_theme ~= vim.g.colors_name then
+    override = nil -- set under a different theme; this one renders native
+  end
+  -- `override` is a pinned hex, so it takes the knob delta; the @property.yaml
+  -- fallback already came through the fg pipeline and must NOT be adjusted twice.
+  local base = (override and pinned_knob_delta(override))
+    or (ok and type(hl) == "table" and normalize_hex(hl.fg) or nil)
   if not base then
     return
   end
+  -- Neutral base16 key (base05) -> reseed from the scheme's own accent so the
+  -- hue ladder has something to rotate. Skipped when :YamlKeyColor set the base
+  -- by hand, and skipped for any theme whose keys already carry a hue.
+  if not override then
+    if yaml_key_dark then
+      -- DARK KEY MODE wins over both the theme's key colour and the base16
+      -- accent reseed. Deliberately unconditional rather than "snap only if too
+      -- bright": a conditional leaves each theme on a slightly different blue,
+      -- which is the inconsistency this is here to remove. :YamlKeyColor still
+      -- overrides (it is checked above), so a per-theme choice is one command
+      -- away without reintroducing per-theme drift by default.
+      base = pinned_knob_delta(YAML_KEY_DARK_BASE)
+    else
+      base = base16_key_seed(base) or base
+    end
+  end
 
-  local rungs = {
-    { group = "@property.yaml.toplevel", pct = 120, bold = true },
-    { group = "@property.yaml.level2", pct = 115 },
-    { group = "@property.yaml", pct = 110 },
-  }
+  -- Depth 1 and 2 used to be query captures (@property.yaml.toplevel /
+  -- .level2) while 4-8 were extmarks, with depth 3 a deliberate no-op seam so
+  -- the two halves met without a visible step. That split is gone: every rung
+  -- is a YamlKeyD* group and yaml-key-depth.lua paints all eight, so there is
+  -- one mechanism and no seam to keep in sync.
+  --
+  -- YamlKeyD* is a plain highlight group, not an @capture, and deliberately so:
+  -- nesting depth is not a treesitter concept and there is no standard capture
+  -- for it, so inventing @property.yaml.d4 would be exactly the kind of fake
+  -- namespace this migration removed. Custom UI groups are CamelCase by
+  -- convention -- the same convention YamlExpr* already follows.
+  local rungs = {}
 
-  -- Depth 3..8 as their own groups. d3 is 110 -- the same value bare
-  -- @property.yaml already carries -- so depth 3 renders identically whether or
-  -- not the painter is running, and the visible change starts at depth 4.
+  -- :YamlKeyDepth off -- every rung lands on bare @property.yaml's 110%, which
+  -- is exactly what depth 3 already renders, so all eight depths collapse onto
+  -- ONE colour and yaml keys look the way they did before the ladder existed.
+  -- Switching the painter off instead would leave depths 1-2 on their own
+  -- groups' last values and read as a half-off ladder.
+  if not yaml_key_depth_enabled then
+    for depth = 1, 8 do
+      table.insert(rungs, { group = "YamlKeyD" .. depth, pct = 110, depth = depth, bold = depth == 1 })
+    end
+    apply_yaml_key_rungs(rungs, base)
+    return
+  end
+
+  -- ONE ladder across all eight rungs, evenly spaced by `step`.
+  --
+  -- 2026-07-30: depths 1-3 used to be pinned at 120/115/110% while only 4-8 were
+  -- spaced by the step, which made :YamlKeyDepthStep look broken. Measured on
+  -- base16-apathy, D1/D2/D3 sat on L73/L70/L67 for EVERY step value -- and a
+  -- manifest spends most of its lines at depth 1-3, so the knob was invisible in
+  -- exactly the place you were looking. The three pinned rungs also swallowed a
+  -- third of the available lightness range in a fixed 6 points, leaving the step
+  -- to fight over what was left.
+  --
+  -- The pins existed to keep depth 1-3 rendering identically to the pre-ladder
+  -- look while depths 4-8 were new ground. That was the right call when the
+  -- deeper rungs were unproven; it is the wrong one now that the ladder IS the
+  -- feature. Depth 1 still anchors at 120% (the brightest rung, and still the
+  -- bold one), so the top of the ladder is where it always was -- everything
+  -- below it is now spaced by the knob instead of by a constant.
   --
   -- Steps are ABSOLUTE lightness points, not percentages of the base. A 5%
   -- relative step is ~3 points off a dim base and ~4 off a bright one, and the
@@ -1237,32 +1980,140 @@ local function apply_yaml_key_ramp()
   -- only compresses when there genuinely is not room for six rungs -- so the
   -- ladder is always monotonic and always six distinct colours.
   local _, _, base_l = rgb_to_hsl(hex_to_rgb(base))
-  local top_l = base_l * 1.10 -- d3 == bare @property.yaml's 110%, unchanged
-  local min_l = 30
+  local top_l = base_l * 1.20 -- D1, the brightest rung -- the old 120% anchor
+  -- Floor was bg_l + 18 / hard 30. Both were set when only six rungs had to fit
+  -- below a 110% top; with eight rungs descending from 120% that ceiling made
+  -- step >8 a measurable no-op (step 8, 12 and 20 produced byte-identical
+  -- rungs on base16-apathy). bg_l + 14 keeps the deepest rung clear of the
+  -- background by more than a Comment's worth of contrast while giving the
+  -- ladder room to actually be a ladder.
+  local min_l = 26
   local bg = normal_bg()
   if bg then
     local _, _, bg_l = rgb_to_hsl(hex_to_rgb(bg))
-    min_l = math.max(bg_l + 18, 30)
+    min_l = math.max(bg_l + 14, 26)
   end
-  local step = 5
-  if top_l - (step * 5) < min_l then
-    step = math.max((top_l - min_l) / 5, 0)
+  -- Seven gaps between eight rungs. Compression is still automatic, so a large
+  -- step degrades to "as wide as this theme can go" rather than burying deep
+  -- keys in the background -- but the ceiling is now high enough that the knob
+  -- has usable range before it binds.
+  local step = yaml_key_depth_step
+  if top_l - (step * 7) < min_l then
+    step = math.max((top_l - min_l) / 7, 0)
   end
-  for depth = 3, 8 do
-    local target_l = top_l - (depth - 3) * step
-    -- Back to percent so every rung goes through the same scale_l the first
-    -- three use; no second code path for lightness.
-    local pct = base_l > 0 and (target_l / base_l) * 100 or 100
-    table.insert(rungs, { group = "@property.yaml.d" .. depth, pct = pct })
+  yaml_key_depth_effective_step = step
+
+  -- PERCEPTUAL SPACING. The ladder still spans exactly top_l -> bottom_l (so
+  -- `step`, the compression clamp and the cap report all keep their meaning),
+  -- but the six interior rungs are placed at equal PERCEIVED distance instead of
+  -- equal HSL lightness.
+  --
+  -- Equal L steps are not equal steps to the eye: on the measured base16-apathy
+  -- ladder the L73->L66 gap read far wider than L33->L26, which is why the deep
+  -- end went mushy while the top looked fine. HSL L is a coordinate, not a
+  -- perceptual scale. Lab is, and hex_to_lab/color_delta_e were already here for
+  -- the picker's colour classification.
+  --
+  -- Method: walk the lightness span densely, accumulate ΔE along the path, then
+  -- place rung d at the lightness where the cumulative ΔE crosses (d-1)/7 of the
+  -- total. Sampling rather than solving because the path is monotonic and 120
+  -- samples put the placement error well under one L point -- an analytic
+  -- inverse of ΔE through the HSL->Lab round trip is not worth the code.
+  local bottom_l = math.max(top_l - step * 7, min_l)
+  local function l_to_hex(l)
+    return scale_l(base, base_l > 0 and (l / base_l) * 100 or 100)
   end
 
+  local SAMPLES = 120
+  local path_l, path_cum = {}, { 0 }
+  for i = 0, SAMPLES do
+    path_l[i + 1] = top_l + (bottom_l - top_l) * (i / SAMPLES)
+  end
+  for i = 2, #path_l do
+    path_cum[i] = path_cum[i - 1] + color_delta_e(l_to_hex(path_l[i - 1]), l_to_hex(path_l[i]))
+  end
+  local total_de = path_cum[#path_cum]
+
+  -- Lightness at a given fraction of the total perceptual distance. Falls back
+  -- to linear when the span carries no measurable ΔE at all (a fully clamped
+  -- ladder, or a base with nowhere to go), which keeps the rungs monotonic
+  -- instead of collapsing them all onto bottom_l.
+  local function l_at(fraction)
+    if total_de <= 0 then
+      return top_l + (bottom_l - top_l) * fraction
+    end
+    local want = total_de * fraction
+    for i = 2, #path_cum do
+      if path_cum[i] >= want then
+        local span = path_cum[i] - path_cum[i - 1]
+        local t = span > 0 and (want - path_cum[i - 1]) / span or 0
+        return path_l[i - 1] + (path_l[i] - path_l[i - 1]) * t
+      end
+    end
+    return bottom_l
+  end
+
+  for depth = 1, 8 do
+    local target_l = l_at((depth - 1) / 7)
+    -- Expressed as percent so every rung goes through the same scale_l; no
+    -- second code path for lightness.
+    local pct = base_l > 0 and (target_l / base_l) * 100 or 100
+    table.insert(rungs, { group = "YamlKeyD" .. depth, pct = pct, depth = depth, bold = depth == 1 })
+  end
+
+  apply_yaml_key_rungs(rungs, base)
+end
+
+-- Stamp a computed rung list. Split out of apply_yaml_key_ramp so the ladder-off
+-- branch stamps through exactly the same code -- bold, the brightness knob and
+-- nocombine are decided here and only here, whatever produced the pct values.
+apply_yaml_key_rungs = function(rungs, base)
   for _, rung in ipairs(rungs) do
     local ok_g, cur = pcall(vim.api.nvim_get_hl, 0, { name = rung.group, link = false })
     local adj = (ok_g and type(cur) == "table") and vim.deepcopy(cur) or {}
     adj.fg = scale_l(base, rung.pct)
+    -- HUE WALK (:YamlKeyDepthHue, 0 = off). Deliberate rotation via rotate_hue,
+    -- NOT a saturation push — S and L stay exactly where the ladder put them, so
+    -- this composes with the step and sat knobs instead of fighting them. Depth 1
+    -- never rotates in either mode: the theme's own key colour stays the anchor
+    -- every deeper hue is read against.
+    if yaml_key_depth_hue ~= 0 and yaml_key_depth_enabled and (rung.depth or 1) > 1 then
+      adj.fg = rotate_hue(adj.fg, yaml_key_hue_degrees(rung.depth))
+    end
+    -- SATURATION DESCENT (:YamlKeyDepthSat, 0 = off). The lightness ladder alone
+    -- makes deep keys dimmer; this makes them more COLOURED as well, which is
+    -- what turns a white-to-green fade into one that intensifies instead of just
+    -- fading out. Depth 1 is always 100% (unscaled) so the ramp still starts from
+    -- the theme's own key colour and only ever climbs from there.
+    --
+    -- Applied through scale_sat, i.e. multiplicative on S, so a nearly grey base
+    -- stays nearly grey -- a knob that ADDED S points would invent a hue the
+    -- theme never chose. It is off by default for the same reason: pushing
+    -- saturation is exactly the move that drags perceived hue.
+    if yaml_key_depth_sat > 0 and yaml_key_depth_enabled and (rung.depth or 1) > 1 then
+      adj.fg = scale_sat(adj.fg, 100 + ((rung.depth - 1) * yaml_key_depth_sat))
+    end
     if yaml_key_brightness ~= 50 then
       -- Saturation pinned at 50 (neutral): only lightness moves, hue stays put.
       adj.fg = adjust_fg_hsl(adj.fg, yaml_key_brightness, 50)
+    end
+    -- Discrete palette wins over the computed ramp: it IS the answer, not a
+    -- modifier on a computed one. Deeper than the list clamps to its last entry.
+    if type(yaml_key_depth_colors) == "table" and #yaml_key_depth_colors > 0 and yaml_key_depth_enabled then
+      local d = math.min(rung.depth or 1, #yaml_key_depth_colors)
+      adj.fg = pinned_knob_delta(yaml_key_depth_colors[d])
+    end
+    -- TOP-LEVEL OVERRIDE (:YamlKeyTopColor). Depth 1 is a landmark, not a rung:
+    -- it names the section and gets a colour of its own, while depths 2-8 stay on
+    -- the ladder derived from the base. Stamped LAST -- after the ramp, the
+    -- brightness knob AND the discrete palette (it used to sit before the
+    -- palette, which made the command silently dead on any palette theme) -- so
+    -- this exact hex reaches the screen no matter how the ladder was built.
+    --
+    -- Applies only while the ladder is on; with :YamlKeyDepth off every rung is
+    -- one colour by definition and singling out depth 1 would contradict that.
+    if yaml_key_top_color and yaml_key_depth_enabled and (rung.depth or 1) == 1 then
+      adj.fg = pinned_knob_delta(yaml_key_top_color)
     end
     if yaml_key_bold ~= nil then
       -- Explicit false, not "leave alone": the pristine cache re-stamp already
@@ -1299,20 +2150,18 @@ end
 -- keep the bold it was just given until the next :colorscheme.
 local yaml_value_groups = {
   "@string.yaml",
-  "@string.yaml.value",
-  "@string.yaml.quoted",
-  "@string.yaml.word",
-  "@string.yaml.url",
-  "@string.yaml.path",
-  "@string.yaml.image",
-  "@string.yaml.version",
-  "@string.yaml.condition",
-  "@type.yaml.enum",
-  "@number.yaml.kdragon",
-  "@number.yaml.quantity",
-  "@constant.yaml.env",
-  "@boolean.yaml.kdragon",
-  "@constant.builtin.yaml.kdragon",
+  "@string.special.symbol.yaml",
+  "@string.special.url.yaml",
+  "@string.special.path.yaml",
+  "@string.special.image.yaml",
+  "@string.special.version.yaml",
+  "@string.special.condition.yaml",
+  "@type.yaml",
+  "@number.yaml",
+  "@number.quantity.yaml",
+  "@constant.macro.yaml",
+  "@boolean.yaml",
+  "@constant.builtin.yaml",
 }
 
 local yaml_value_bold = false
@@ -1390,23 +2239,23 @@ local function fix_sigil_collision()
     return
   end
   local avoid = {
-    fg_of("@string.yaml.image"),
+    fg_of("@string.special.image.yaml"),
     fg_of("@string.yaml"),
     fg_of("YamlExprBrace"),
     fg_of("YamlExprContext"),
   }
   local function min_dist(hex)
-    local r1, g1, b1 = hex_to_rgb(hex)
     local worst = math.huge
     for _, o in ipairs(avoid) do
       if o then
-        local r2, g2, b2 = hex_to_rgb(o)
-        worst = math.min(worst, math.sqrt((r1 - r2) ^ 2 + (g1 - g2) ^ 2 + (b1 - b2) ^ 2))
+        worst = math.min(worst, color_delta_e(hex, o))
       end
     end
     return worst
   end
-  if min_dist(sigil) >= 60 then
+  -- ΔE 24: a single character has less area to carry a colour than a whole
+  -- token, so the sigil is held to a stricter bar than SEP's 18.
+  if min_dist(sigil) >= 24 then
     return
   end
   -- Keep the scheme's lightness so it still belongs; floor the saturation
@@ -1581,10 +2430,17 @@ end
 -- the storm bg. Pin them a step darker so the lit SnacksIndentScope cyan is the
 -- only thing that carries. Scope/chunk groups are untouched — they are handled
 -- by apply_active_indent_scope_highlights above.
-local STORM_DIM_INDENT_GUIDE = "#282d45"
+-- Superseded 2026-07-30: a dark hex is still a visible line. Storm now takes the
+-- same "bg" rule as every other theme. Kept only as a record of what it was.
+local STORM_DIM_INDENT_GUIDE = "bg"
 
--- Per-theme dim-guide pins. Any theme NOT listed here leaves SnacksIndent alone,
--- which is the pre-existing behaviour.
+-- Dim-guide pins. The DEFAULT for every theme is "bg" -- invisible. There are no
+-- dim guides, anywhere, on any theme. This table exists only for a future
+-- per-theme override; an empty/absent entry falls through to DEFAULT_DIM_INDENT_GUIDE.
+--
+-- 2026-07-30: this used to be an opt-IN table with a single moonlightv3 entry, so
+-- every other theme (palenightv2, storm, ...) still drew dim rungs -- the exact
+-- thing that was supposed to be gone. Opt-out, not opt-in.
 --
 -- The string "bg" means INVISIBLE: the group is painted in the theme's own
 -- Normal background, so the dim guide is not a faint line, it is not there.
@@ -1601,9 +2457,9 @@ local STORM_DIM_INDENT_GUIDE = "#282d45"
 -- This reads the background, it does not set it: normal_bg() is resolved fresh
 -- on every apply, so the bg knobs (:BgBrightness and friends) stay in charge of
 -- what that colour actually is.
-local THEME_DIM_INDENT_GUIDE = {
-  ["moonlightv3"] = "bg",
-}
+local DEFAULT_DIM_INDENT_GUIDE = "bg"
+
+local THEME_DIM_INDENT_GUIDE = {}
 
 local dim_indent_guide_groups = {
   "SnacksIndent",
@@ -1619,9 +2475,7 @@ local function apply_dim_indent_guide_highlights()
   if not guide and is_storm_family() then
     guide = STORM_DIM_INDENT_GUIDE
   end
-  if not guide then
-    return
-  end
+  guide = guide or DEFAULT_DIM_INDENT_GUIDE
   if guide == "bg" then
     guide = normal_bg()
   end
@@ -1659,18 +2513,17 @@ end
 local STORM_YAML_STARTUP_GROUPS = {
   "@property.yaml",
   "@string.yaml",
-  "@string.yaml.value",
   -- Value-shape groups: same deal as the two above -- they carry exact hexes in
   -- theme_baseline.lua, so they need the same re-stamp or fg_lightness=60 moves
   -- them off the typed value before it is ever seen.
-  "@property.yaml.toplevel",
-  "@type.yaml.enum",
-  "@constant.yaml.env",
-  "@string.yaml.image",
-  "@string.yaml.version",
-  "@string.yaml.url",
-  "@string.yaml.condition",
-  "@string.yaml.path",
+  "@type.yaml",
+  "@constant.macro.yaml",
+  "@string.special.image.yaml",
+  "@string.special.version.yaml",
+  "@string.special.url.yaml",
+  "@string.special.condition.yaml",
+  "@string.special.path.yaml",
+  "@string.special.symbol.yaml",
   -- Plain ()[]{} only. The {{ }} overlay is a separate mechanism (STORM_BRACKET).
   "@punctuation.bracket",
   -- Not a yaml group, but it is what colours shell flags in `run:` blocks.
@@ -1693,7 +2546,7 @@ local function apply_storm_yaml_startup_colors()
   end
   local baseline = load_theme_baseline_colors()[baseline_key] or {}
   for _, group in ipairs(STORM_YAML_STARTUP_GROUPS) do
-    -- @string.yaml.value has no baseline entry of its own; it follows @string.yaml.
+    -- Shape classes with no baseline entry of their own follow @string.yaml.
     local fg = baseline[group] or baseline["@string.yaml"]
     if fg then
       local ok, hl = pcall(vim.api.nvim_get_hl, 0, { name = group, link = false })
@@ -1764,7 +2617,6 @@ local function apply_retrobox_string_lightness()
   for _, group in ipairs({
     "@string.helm",
     "@string.yaml",
-    "@string.yaml.value.yaml",
     "@string.terraform",
     "@lsp.type.string.terraform",
     "@string.python",
@@ -1801,6 +2653,94 @@ local function apply_onedark_dark_purple_overrides()
         pcall(vim.api.nvim_set_hl, 0, group, adj)
       end
     end
+  end
+end
+
+-- ── Ad-hoc per-group fg overrides (:HlColor) ─────────────────────────────────
+-- A scratchpad for "make THIS token that hex, right now" without editing
+-- theme_baseline.lua and reloading. Keyed by highlight group; fg only, so bold /
+-- italic / nocombine and every bg knob are left exactly as the pipeline set
+-- them.
+--
+-- Why a table re-stamped at the END of the pipeline instead of a bare `:hi`: a
+-- bare `:hi` loses the next time anything re-runs adjust_all_highlights (which
+-- fires at 0/50/200ms after every theme touch, plus on ColorScheme), so a hex
+-- you just typed silently reverts a fifth of a second later and reads as "the
+-- command did not work". Overrides here win because they land last.
+--
+-- Session-scoped AND theme-scoped: keyed by current_baseline_key(), so a hex
+-- poked while editing one theme belongs to that theme only. Switching themes
+-- shows that theme's own overrides (usually none) and switching back restores
+-- yours -- nothing bleeds across, which is the whole point of poking at a theme
+-- in isolation. They survive :ThemeReload until :HlColorClear, and are NEVER
+-- written to disk -- :HlColorList prints them as paste-ready theme_baseline.lua
+-- lines, which is how a keeper gets made permanent.
+local hl_overrides_by_theme = {}
+
+-- The live override table for the theme on screen, created on demand.
+local function hl_overrides_for(key)
+  key = key or current_baseline_key()
+  if key == "" then
+    key = "__none__"
+  end
+  hl_overrides_by_theme[key] = hl_overrides_by_theme[key] or {}
+  return hl_overrides_by_theme[key]
+end
+
+-- theme_baseline_saved.lua, stamped VERBATIM at the end of the pipeline.
+--
+-- This is the one place the saved file and the hand-tuned theme_baseline.lua
+-- deliberately differ. Hand-tuned entries are pipeline INPUTS -- you type a hex
+-- knowing :FgAdjust and :Sepia will move it. A :HlColorSave entry is the exact
+-- opposite: it was produced by :HlColor, which stamps a flat fg AFTER every
+-- knob has run, so the hex in that file IS the pixel that was on screen when it
+-- was saved. Feeding it back in as an input meant it never rendered as typed on
+-- any theme with non-neutral knobs -- on base16-gruvbox-dark-medium-forest
+-- (sepia -90, FgAdjust 60/99) a saved #9cff29 drew as #61ed00, and #ff6329 as
+-- #ff4511. Every save looked like it silently failed.
+--
+-- So saved colours are PINNED: what :HlColor showed is what the next restart
+-- draws, on every theme, for any hex. The knobs no longer move these specific
+-- groups -- that is the trade, and it is the right one, because a saved entry is
+-- by definition a deliberate choice of one exact colour. :HlColorForget drops
+-- the pin and the group falls back to the hand table and the knobs.
+--
+-- Placement is load-bearing, same rule as fix_sigil_collision: this MUST run at
+-- the very end of adjust_all_highlights. Anything stamped earlier is overwritten
+-- by the re-stamp loop above.
+local function apply_saved_baseline_pins()
+  local saved = load_saved_baseline_colors()[current_baseline_key()]
+  if not saved then
+    return
+  end
+  local live = hl_overrides_for()
+  for group, hex in pairs(saved) do
+    -- A live :HlColor on the same group is the newer decision; let the override
+    -- pass below win rather than stamping twice.
+    if not live[group] then
+      local ok, cur = pcall(vim.api.nvim_get_hl, 0, { name = group, link = false })
+      local adj = (ok and type(cur) == "table") and vim.deepcopy(cur) or {}
+      adj.link = nil
+      adj.fg = pinned_knob_delta(hex)
+      pcall(vim.api.nvim_set_hl, 0, group, adj)
+    end
+  end
+end
+
+local function apply_hl_overrides()
+  for group, hex in pairs(hl_overrides_for()) do
+    local ok, cur = pcall(vim.api.nvim_get_hl, 0, { name = group, link = false })
+    local adj = (ok and type(cur) == "table") and vim.deepcopy(cur) or {}
+    -- A linked group has to be unlinked or the fg is ignored.
+    adj.link = nil
+    -- Deliberately NOT through pinned_knob_delta, unlike the disk-saved pins in
+    -- apply_saved_baseline_pins. A live :HlColor hex was typed under whatever
+    -- the knobs are RIGHT NOW, so those knobs are already its reference and its
+    -- delta is zero by definition. Running it through anyway would shift the
+    -- colour you just typed the instant you typed it -- the exact "every save
+    -- looks like it silently failed" bug the pins were introduced to kill.
+    adj.fg = hex
+    pcall(vim.api.nvim_set_hl, 0, group, adj)
   end
 end
 
@@ -1908,7 +2848,9 @@ local function adjust_all_highlights()
       -- milliseconds later -- which looks exactly like "the italic never
       -- applied". This is the ONLY place italics are turned off.
       local theme_name = vim.g.colors_name or ""
-      local preserve_italics = theme_name:match("^base16%-gruvbox%-material%-dark") or theme_name == "evergarden"
+      -- `^evergarden` covers the seasonal copies (evergarden-fall/-spring/
+      -- -winter, lua/config/evergarden_seasons.lua) as well as stock.
+      local preserve_italics = theme_name:match("^base16%-gruvbox%-material%-dark") or theme_name:match("^evergarden")
       if adj.italic and not (native_text_theme or preserve_italics) then
         adj.italic = false
         changed = true
@@ -2004,6 +2946,12 @@ local function adjust_all_highlights()
   fix_sigil_collision()
   apply_yaml_key_ramp()
   apply_yaml_value_style()
+  -- Dead last, after the key ramp and the value styler: a saved colour and a
+  -- live :HlColor are both manual choices of an exact hex, and must beat
+  -- everything the pipeline just computed. Pins first, live overrides after --
+  -- the live poke is always the newer decision.
+  apply_saved_baseline_pins()
+  apply_hl_overrides()
 end
 
 -- ── Habamax-specific overrides ───────────────────────────────────────────────
@@ -2190,8 +3138,21 @@ local EVERGARDEN_COMMENT_GROUPS = {
   "@lsp.type.comment",
 }
 
+-- The seasonal copies each carry their own comment hex (bark / shaded leaf /
+-- shadow-on-snow) in lua/config/evergarden_seasons.lua. Same constant rule as
+-- above: a fixed hex per season, never derived from the live fg.
+local function evergarden_comment_fg()
+  local name = vim.g.colors_name or ""
+  if name == "evergarden" then
+    return EVERGARDEN_COMMENT_FG
+  end
+  local ok, seasons = pcall(require, "config.evergarden_seasons")
+  return ok and seasons.comment_fg(name) or nil
+end
+
 local function apply_evergarden_comment_style()
-  if (vim.g.colors_name or "") ~= "evergarden" then
+  local fg = evergarden_comment_fg()
+  if not fg then
     return
   end
   for _, group in ipairs(EVERGARDEN_COMMENT_GROUPS) do
@@ -2201,7 +3162,7 @@ local function apply_evergarden_comment_style()
       for k, v in pairs(hl) do
         adj[k] = v
       end
-      adj.fg = EVERGARDEN_COMMENT_FG
+      adj.fg = fg
       adj.italic = true
       pcall(vim.api.nvim_set_hl, 0, group, adj)
     end
@@ -2338,7 +3299,25 @@ end
 -- Multiple deferred passes (immediate → schedule → 50ms → 200ms) intentionally
 -- catch highlights set late by plugins (bufferline, lualine, neo-tree, etc.).
 -- This is verbose but necessary — do NOT collapse to a single call.
+--
+-- GENERATION GUARD (2026-07-31). Every pass below is deferred out to 800ms, and
+-- the picker previews a new theme every ~120ms while you scroll. Without a
+-- guard, cascades OVERLAP: passes started under theme N keep firing after theme
+-- N+1 is loaded, and they re-derive colours from the stale capture_base() —
+-- which is why scrolling the picker left yaml in one flat colour that only
+-- "healed" seconds later, once the last cascade finally won. Each call bumps
+-- the generation; a deferred pass from an older generation is dropped.
+local theme_generation = 0
 local function apply_theme_adjustments(refresh_base)
+  theme_generation = theme_generation + 1
+  local gen = theme_generation
+  local function later(fn, ms)
+    local function guarded()
+      if gen ~= theme_generation then return end
+      fn()
+    end
+    if ms then vim.defer_fn(guarded, ms) else vim.schedule(guarded) end
+  end
   apply_global_punct_highlights()
   if refresh_base or adjust_base_name ~= (vim.g.colors_name or "") then
     capture_base()
@@ -2365,36 +3344,162 @@ local function apply_theme_adjustments(refresh_base)
     end
   end
   run_adjust_all_highlights()
-  vim.schedule(run_adjust_all_highlights)
-  vim.defer_fn(run_adjust_all_highlights, 50)
-  vim.defer_fn(run_adjust_all_highlights, 200)
-  vim.defer_fn(apply_fzf_opaque_highlights, 250)
-  vim.defer_fn(apply_habamax_overrides, 250)
+  later(run_adjust_all_highlights)
+  later(run_adjust_all_highlights, 50)
+  later(run_adjust_all_highlights, 200)
+  later(apply_fzf_opaque_highlights, 250)
+  later(apply_habamax_overrides, 250)
   -- Must run after apply_habamax_overrides (250) -- that one pins WinSeparator
   -- to black, and the cyan divider has to win.
   apply_win_divider_highlight()
-  vim.defer_fn(apply_win_divider_highlight, 260)
-  vim.defer_fn(apply_win_divider_highlight, 700)
-  vim.defer_fn(apply_soft_white_overrides, 300)
-  vim.defer_fn(apply_kanagawa_dragon_fixed_fg, 300)
-  vim.defer_fn(apply_kanagawa_dragon_fixed_fg, 600)
-  vim.defer_fn(apply_evergarden_comment_style, 300)
-  vim.defer_fn(apply_evergarden_comment_style, 600)
-  vim.defer_fn(apply_chrome_readability_fix, 350)
-  vim.defer_fn(apply_chrome_readability_fix, 600)
-  vim.defer_fn(apply_gruvbox_accent_adjust, 300)
+  later(apply_win_divider_highlight, 260)
+  later(apply_win_divider_highlight, 700)
+  later(apply_soft_white_overrides, 300)
+  later(apply_kanagawa_dragon_fixed_fg, 300)
+  later(apply_kanagawa_dragon_fixed_fg, 600)
+  later(apply_evergarden_comment_style, 300)
+  later(apply_evergarden_comment_style, 600)
+  later(apply_chrome_readability_fix, 350)
+  later(apply_chrome_readability_fix, 600)
+  later(apply_gruvbox_accent_adjust, 300)
   apply_onedark_dark_purple_overrides()
-  vim.defer_fn(apply_onedark_dark_purple_overrides, 300)
-  vim.defer_fn(apply_onedark_dark_purple_overrides, 650)
-  vim.defer_fn(apply_editor_static_colors, 325)
-  vim.defer_fn(apply_editor_static_colors, 650)
-  vim.defer_fn(apply_active_indent_scope_highlights, 330)
-  vim.defer_fn(apply_active_indent_scope_highlights, 655)
-  vim.defer_fn(apply_retrobox_string_lightness, 325)
-  vim.defer_fn(apply_retrobox_string_lightness, 650)
-  vim.defer_fn(apply_retrobox_variable_white, 325)
-  vim.defer_fn(apply_retrobox_variable_white, 650)
-  vim.defer_fn(apply_editor_interaction_highlights, 700)
+  later(apply_onedark_dark_purple_overrides, 300)
+  later(apply_onedark_dark_purple_overrides, 650)
+  later(apply_editor_static_colors, 325)
+  later(apply_editor_static_colors, 650)
+  later(apply_active_indent_scope_highlights, 330)
+  later(apply_active_indent_scope_highlights, 655)
+  later(apply_retrobox_string_lightness, 325)
+  later(apply_retrobox_string_lightness, 650)
+  later(apply_retrobox_variable_white, 325)
+  later(apply_retrobox_variable_white, 650)
+  later(apply_editor_interaction_highlights, 700)
+  -- run_adjust_all_highlights already ends in apply_hl_overrides, but the
+  -- per-theme patches above (soft white, habamax, dragon fg, onedark, chrome)
+  -- stamp groups directly at 250-700ms and would clobber an override that
+  -- happens to land on one of them. Two late passes cover that tail.
+  later(apply_hl_overrides, 400)
+  later(apply_hl_overrides, 750)
+  -- TINT RE-SNAPSHOT — without this, none of the above is visible when
+  -- focus-fx's dim is on. tint.nvim renders every window through a per-window
+  -- highlight NAMESPACE (_tint_norm for the active one) holding a copy of every
+  -- group taken at its last refresh; global re-stamps land in namespace 0 and
+  -- never reach the glass. tint refreshes itself on ColorScheme, which is why
+  -- theme SWITCHES always looked right while every knob looked dead
+  -- (frame-verified 2026-07-31: knob message fired, ns-0 groups changed,
+  -- window ns 37 kept the old colours). Refresh only re-copies ns-0 into the
+  -- tint namespaces — it fires no ColorScheme event, so no self-trigger loop.
+  -- Once immediately for the common case, once after the last deferred pass
+  -- above (750ms) so the final colours are what gets snapshotted.
+  local function refresh_tint()
+    local ok, tint = pcall(require, "tint")
+    if ok and tint.refresh then
+      pcall(tint.refresh)
+    end
+  end
+  later(refresh_tint)
+  later(refresh_tint, 800)
+end
+
+-- :PinReference        — report this theme's zero point for pinned colours
+-- :PinReference reset   — rebase it onto the CURRENT live knobs
+--
+-- The only thing that moves the reference, and it is a command rather than
+-- a side effect of :ThemeConfigSave on purpose: rebasing says "the pinned
+-- hexes are now the resting look at these knob values", which is a claim
+-- about the colours, not about the knobs. Doing it implicitly is what makes
+-- knobs compound. Reset when you have re-saved the pinned hexes themselves
+-- (:HlColorSave) at a new look and want that to read as rest.
+vim.api.nvim_create_user_command("PinReference", function(opts)
+  local theme = vim.g.colors_name or ""
+  local arg = vim.trim(opts.args):lower()
+  local all = load_pin_reference()
+  if arg == "" then
+    local ref = all[theme]
+    if not ref then
+      vim.notify("PinReference: " .. theme .. " not seeded yet (renders at rest)")
+      return
+    end
+    vim.notify(
+      ("PinReference [%s]: sepia %s, fg %s/%s  (live: sepia %s, fg %s/%s)"):format(
+        theme,
+        ref.sepia_amount,
+        ref.fg_lightness,
+        ref.fg_saturation,
+        sepia_amount,
+        fg_lightness,
+        fg_saturation
+      )
+    )
+    return
+  end
+  if arg ~= "reset" then
+    vim.notify("PinReference: expected no argument, or `reset`", vim.log.levels.ERROR)
+    return
+  end
+  all[theme] = {
+    sepia_amount = sepia_amount,
+    fg_lightness = fg_lightness,
+    fg_saturation = fg_saturation,
+  }
+  if write_pin_reference(all) then
+    apply_theme_adjustments()
+    vim.notify(
+      ("PinReference [%s] reset: sepia %s, fg %s/%s is now rest"):format(
+        theme,
+        sepia_amount,
+        fg_lightness,
+        fg_saturation
+      )
+    )
+  else
+    vim.notify("PinReference: could not write " .. pin_reference_path, vim.log.levels.ERROR)
+  end
+end, {
+  nargs = "?",
+  complete = function()
+    return { "reset" }
+  end,
+  desc = "Report or rebase the zero point the knobs move pinned colours from",
+})
+
+-- ── Cheap preview path (vim.g.theme_preview) ─────────────────────────────────
+-- The picker previews a new theme every time the cursor lands on a row. Running
+-- the full pipeline there costs ~4 synchronous sweeps plus ~30 deferred passes
+-- plus a tint re-snapshot PER ROW, which is what made scrolling feel like the
+-- theme "loaded late". Preview mode runs three things instead:
+--   * the derived yaml baseline + key ramp -- NOT optional. Our after/queries
+--     emit token classes no colorscheme defines, so skipping this flattens
+--     every yaml value to one colour (the exact symptom we are fixing).
+--   * this bg remap, so the owned background survives the preview.
+-- Everything else -- knobs, fg tuning, sepia, transparency, per-theme patches,
+-- overrides -- is deliberately skipped, so a preview shows the theme's stock
+-- foreground. The full pipeline runs once, on the theme you actually pick.
+--
+-- The remap keys off Normal's bg rather than rewriting every bg it finds: only
+-- groups that share the theme's page background are page background. Groups
+-- with a deliberately different bg (Visual, DiffAdd, pills) keep theirs.
+local function apply_preview_background()
+  local target = apply_background_pipeline(bg_base)
+  local all = read_highlights()
+  local normal = all.Normal
+  local theme_bg = normal and normal.bg
+  -- A theme with a transparent Normal gives us nothing to match on; rewriting
+  -- every bg-carrying group there would repaint Visual, diffs and floats too.
+  if theme_bg then
+    for group, hl in pairs(all) do
+      if not hl.link and hl.bg == theme_bg then
+        local adj = {}
+        for k, v in pairs(hl) do
+          adj[k] = v
+        end
+        adj.bg = target
+        pcall(vim.api.nvim_set_hl, 0, group, adj)
+      end
+    end
+  else
+    pcall(vim.api.nvim_set_hl, 0, "Normal", { fg = normal and normal.fg, bg = target })
+  end
 end
 
 -- ── Plugin specs ─────────────────────────────────────────────────────────────
@@ -2608,6 +3713,7 @@ return {
         sepia_amount = v
       end, -100, 100)
 
+
       -- :YamlValueBrightness <0-100> — 50 = pipeline output as-is, <50 dimmer,
       -- >50 brighter. Hue and saturation are pinned; only lightness moves. This
       -- is the VALUE half of the pair -- :YamlKeyBrightness is the field half,
@@ -2720,32 +3826,14 @@ return {
       -- any earlier and the re-apply is overwritten, which reads as "the lock
       -- didn't work"). `:XLock <args>` sets, `:XLock off` releases, bare `:XLock`
       -- reports. Nothing is written to disk; restarting nvim clears every lock.
+      -- opts_decl.persist = true stores the locked value under stdpath("state")
+      -- and restores it at startup, so the lock outlives the session.
       local function make_knob_lock(lock_name, knob_cmd, validate, opts_decl)
         local locked = nil
+        local state = opts_decl.persist and require("config.colorscheme_state") or nil
         local group = vim.api.nvim_create_augroup("Theme" .. lock_name, { clear = true })
-        vim.api.nvim_create_user_command(lock_name, function(opts)
-          local arg = vim.trim(opts.args)
 
-          if arg == "" then
-            vim.notify(locked and (lock_name .. ": " .. locked) or (lock_name .. ": off"))
-            return
-          end
-
-          vim.api.nvim_clear_autocmds({ group = group })
-
-          if arg == "off" then
-            locked = nil
-            vim.notify(lock_name .. ": off (knob resets with the theme again)")
-            return
-          end
-
-          local canonical = validate(arg)
-          if not canonical then
-            vim.notify(lock_name .. ": " .. opts_decl.usage, vim.log.levels.ERROR)
-            return
-          end
-
-          locked = canonical
+        local function arm()
           vim.api.nvim_create_autocmd("ColorScheme", {
             group = group,
             pattern = "*",
@@ -2758,11 +3846,68 @@ return {
               end, 900)
             end,
           })
+        end
+
+        vim.api.nvim_create_user_command(lock_name, function(opts)
+          local arg = vim.trim(opts.args)
+
+          if arg == "" then
+            vim.notify(locked and (lock_name .. ": " .. locked) or (lock_name .. ": off"))
+            return
+          end
+
+          vim.api.nvim_clear_autocmds({ group = group })
+
+          if arg == "off" then
+            locked = nil
+            if state then
+              state.write_knob_lock(lock_name, nil)
+            end
+            vim.notify(lock_name .. ": off (knob resets with the theme again)")
+            return
+          end
+
+          local canonical = validate(arg)
+          if not canonical then
+            vim.notify(lock_name .. ": " .. opts_decl.usage, vim.log.levels.ERROR)
+            return
+          end
+
+          locked = canonical
+          if state then
+            state.write_knob_lock(lock_name, canonical)
+          end
+          arm()
 
           -- Apply to the CURRENT theme too, not just the next one switched to.
           pcall(vim.cmd, knob_cmd .. " " .. canonical)
-          vim.notify(lock_name .. ": " .. canonical .. " (persists across theme switches this session)")
+          vim.notify(
+            lock_name
+              .. ": "
+              .. canonical
+              .. (state and " (persists across theme switches AND restarts)" or " (persists across theme switches this session)")
+          )
         end, { nargs = "?", desc = opts_decl.desc })
+
+        -- Restore a persisted lock at startup. The boot colorscheme is already
+        -- applied by the time this runs, so re-apply on the same 900ms delay the
+        -- ColorScheme path uses -- earlier and the deferred startup passes win.
+        if state then
+          local saved = validate(state.read_knob_lock(lock_name) or "")
+          if saved then
+            locked = saved
+            arm()
+            -- Immediately as well as deferred: the deferred pass is what makes
+            -- the value stick, but waiting 900ms for it means booting with the
+            -- unlocked value visible, which for transparency is a black flash.
+            pcall(vim.cmd, knob_cmd .. " " .. saved)
+            vim.defer_fn(function()
+              if locked and not vim.g.theme_raw then
+                pcall(vim.cmd, knob_cmd .. " " .. locked)
+              end
+            end, 900)
+          end
+        end
       end
 
       -- :CommentBrightnessLock <0-100> | off | (report)
@@ -2788,7 +3933,7 @@ return {
 
       -- ── Yaml KEY knobs ──────────────────────────────────────────────────────
       -- All three ride apply_yaml_key_ramp (end of the pipeline), so they only
-      -- touch @property.yaml.toplevel / .level2 / bare — values, punctuation and
+      -- touch the YamlKeyD1..D8 rungs — values, punctuation and
       -- comments are untouched. On storm the 800ms startup re-stamp overwrites
       -- key fg, but every command here routes through apply_theme_adjustments
       -- which runs the ramp again afterwards — same story as :FgAdjust.
@@ -2798,7 +3943,214 @@ return {
         return yaml_key_brightness
       end, function(v)
         yaml_key_brightness = v
+        -- Every yaml KEY tuning echoes the whole ladder afterwards: brightness
+        -- rides the same ramp, so it changes what the step is measured against.
+        -- Deferred past the 700ms restamp for the same reason as ladder_knob.
+        vim.defer_fn(_G.__yaml_key_depth_report, 900)
       end)
+
+      -- In raw mode, re-render through the raw path (stock + yaml wiring), NOT
+      -- apply_theme_adjustments — the full pipeline would stamp knobs onto a
+      -- render that is supposed to stay stock. Declared up here because both the
+      -- depth-ladder commands below and :YamlKeyColor further down go through it;
+      -- a `local function` defined after its callers is a nil global at call time.
+      local function yaml_key_color_rerender()
+        if vim.g.theme_raw then
+          pcall(apply_theme_baseline_colors, true)
+          pcall(apply_yaml_key_ramp)
+        else
+          apply_theme_adjustments()
+        end
+      end
+
+      -- ── The depth LADDER (how much colour separates one nesting level from
+      -- the next). Separate from the three knobs above, which decide what keys
+      -- look like overall rather than how depth is expressed. ────────────────
+
+      -- :YamlKeyDark [on|off|toggle] — anchor the key ramp on the dark blue
+      -- instead of the theme's own key colour. On everywhere by default; the
+      -- evergarden seasons opt out in colorscheme_defaults. Off restores the
+      -- per-theme behaviour (including the base16 accent reseed), which is worth
+      -- keeping reachable for a theme whose keys are genuinely well chosen.
+      vim.api.nvim_create_user_command("YamlKeyDark", function(opts)
+        local arg = vim.trim(opts.args):lower()
+        if arg == "" then
+          vim.notify(
+            "YamlKeyDark: " .. (yaml_key_dark and ("on (base " .. YAML_KEY_DARK_BASE .. ")") or "off (theme's own key colour)")
+          )
+          return
+        end
+        if arg == "on" then
+          yaml_key_dark = true
+        elseif arg == "off" then
+          yaml_key_dark = false
+        elseif arg == "toggle" then
+          yaml_key_dark = not yaml_key_dark
+        else
+          vim.notify("YamlKeyDark: expected on, off or toggle", vim.log.levels.ERROR)
+          return
+        end
+        yaml_key_color_rerender()
+        vim.cmd("redraw!") -- rung colours change; extmarks do not repaint on their own
+      end, {
+        nargs = "?",
+        complete = function()
+          return { "on", "off", "toggle" }
+        end,
+        desc = "Yaml keys anchored on the dark blue base (on) or the theme's own key colour (off)",
+      })
+
+      -- :YamlKeyDepth [on|off|toggle] — the master switch. Off collapses all
+      -- eight rungs onto one colour, i.e. yaml keys render the way they did
+      -- before the ladder existed. No argument reports the state.
+      vim.api.nvim_create_user_command("YamlKeyDepth", function(opts)
+        local arg = vim.trim(opts.args):lower()
+        if arg == "" then
+          -- Report what the theme ACTUALLY got, not just what was asked for. A
+          -- step above the theme's headroom compresses silently, and reading
+          -- back the requested number would confirm a setting that is not what
+          -- is on screen.
+          _G.__yaml_key_depth_report()
+          return
+        end
+        if arg == "on" then
+          yaml_key_depth_enabled = true
+        elseif arg == "off" then
+          yaml_key_depth_enabled = false
+        elseif arg == "toggle" then
+          yaml_key_depth_enabled = not yaml_key_depth_enabled
+        else
+          vim.notify("YamlKeyDepth: expected on, off or toggle", vim.log.levels.ERROR)
+          return
+        end
+        yaml_key_color_rerender()
+        vim.cmd("redraw!") -- see ladder_knob: rung colours change, extmarks do not repaint on their own
+        _G.__yaml_key_depth_report()
+      end, {
+        nargs = "?",
+        complete = function()
+          return { "on", "off", "toggle" }
+        end,
+        desc = "Yaml key depth ladder on/off (no argument reports state + step + sat)",
+      })
+
+      -- :YamlKeyDepthStep <0-100> — ABSOLUTE lightness points between rungs.
+      -- 5 = the original ladder, higher = wider spread between depths.
+      --
+      -- The bound is 0-100 to match every other knob, NOT because 100 is
+      -- reachable -- it is not. Seven gaps means a step of 15 already asks for
+      -- more lightness than the 0-100 scale has, so in practice this clamps to
+      -- the theme's own headroom (measured: ~7 on a dark theme with a
+      -- mid-lightness key colour) and bare :YamlKeyDepth reports what it really
+      -- got. An arbitrary tighter cap here would just be a second, wronger
+      -- answer to a question the clamp already answers exactly.
+      -- Every ladder knob has to force a redraw after it applies.
+      --
+      -- The rung COLOURS live in highlight groups, but which key gets which rung
+      -- is decided by ephemeral extmarks in yaml-key-depth.lua, rebuilt only
+      -- during a redraw. Restamping a highlight group does not schedule one, so
+      -- the knob would land correctly and the screen would keep showing the
+      -- previous colours until something unrelated (a scroll, a keypress that
+      -- moves the cursor) happened to repaint.
+      --
+      -- That is the whole reason :YamlKeyDepthHue looked dead for an entire
+      -- session while :hi YamlKeyD3 showed the new value, and why
+      -- :YamlKeyDepthFit was the one knob that visibly worked -- it already
+      -- called redraw! for its own reasons. Frame-measured 2026-07-31: hue 0 and
+      -- hue -120 produced identical pixels with different highlight groups.
+      local function ladder_knob(name, get, set, lo, hi)
+        define_numeric_knob(name, get, function(v)
+          set(v)
+          -- TWO redraws, and the second one is the load-bearing one.
+          --
+          -- apply_theme_adjustments does not finish synchronously: it re-stamps
+          -- highlights again on deferred passes at 700ms (the same timing the
+          -- *Lock commands have to schedule around). An immediate redraw paints
+          -- the intermediate state and nothing repaints after the real colours
+          -- land, so the screen keeps the OLD rungs indefinitely -- measured
+          -- 2026-07-31, and it survived even a cursor move, because unchanged
+          -- lines are not repainted.
+          --
+          -- 900ms clears the last deferred pass, matching make_knob_lock. The
+          -- immediate one is kept so the common case (no deferred restamp
+          -- pending) feels instant rather than waiting a second.
+          vim.schedule(function()
+            vim.cmd("redraw!")
+          end)
+          vim.defer_fn(function()
+            vim.cmd("redraw!")
+            -- Reported HERE, not next to set(), because the effective step is
+            -- only known once the deferred restamp has run the ramp again.
+            _G.__yaml_key_depth_report()
+          end, 900)
+        end, lo, hi)
+      end
+
+      ladder_knob("YamlKeyDepthStep", function()
+        return yaml_key_depth_step
+      end, function(v)
+        yaml_key_depth_step = v
+      end, 0, 100)
+
+      -- :YamlKeyDepthSat <0-100> — saturation descent, in percent of S added per
+      -- depth. 0 = off (the ladder moves lightness only, which is the historical
+      -- behaviour). Multiplicative, so a low-saturation theme stays low.
+      --
+      -- Same 0-100 bound as the step knob, and for the same reason: a different
+      -- UNIT (percent-of-S, not lightness points) reaching its ceiling at a
+      -- different place is not a reason for the two commands to accept
+      -- different ranges. S clamps at 100 on its own, so the top of this range
+      -- self-limits per theme -- on a saturated base it runs out by depth 3, on
+      -- a desaturated one it stays useful the whole way down.
+      ladder_knob("YamlKeyDepthSat", function()
+        return yaml_key_depth_sat
+      end, function(v)
+        yaml_key_depth_sat = v
+      end, 0, 100)
+
+      -- :YamlKeyDepthHue <-60..60> — signed degrees of hue walk per rung. The
+      -- bound is ±60, not ±180: past ~60°/rung adjacent depths stop reading as
+      -- siblings (8 rungs at 61° laps most of the wheel and D8 lands back next
+      -- to D1, so "deeper" stops being monotonic in hue). Negative walks the
+      -- other way round the wheel. Goes through ladder_knob for the same
+      -- two-redraw reason as step/sat — this exact knob is the one that
+      -- previously looked dead without it.
+      ladder_knob("YamlKeyDepthHue", function()
+        return yaml_key_depth_hue
+      end, function(v)
+        yaml_key_depth_hue = v
+      end, -60, 60)
+
+      -- :YamlKeyDepthHueMode spiral|anchor — how the degrees are spent. Not a
+      -- numeric knob, so it gets its own command; still needs the ladder's
+      -- redraw dance, so it applies through the same machinery by hand.
+      vim.api.nvim_create_user_command("YamlKeyDepthHueMode", function(opts)
+        local arg = vim.trim(opts.args):lower()
+        if arg == "" then
+          _G.__yaml_key_depth_report()
+          return
+        end
+        if not vim.tbl_contains({ "spiral", "anchor", "crest", "plunge", "pendulum" }, arg) then
+          vim.notify("YamlKeyDepthHueMode: expected spiral, anchor, crest, plunge or pendulum", vim.log.levels.ERROR)
+          return
+        end
+        yaml_key_depth_hue_mode = arg
+        apply_theme_adjustments()
+        vim.schedule(function()
+          vim.cmd("redraw!")
+        end)
+        vim.defer_fn(function()
+          vim.cmd("redraw!")
+          _G.__yaml_key_depth_report()
+        end, 900)
+      end, {
+        nargs = "?",
+        complete = function()
+          return { "spiral", "anchor", "crest", "plunge", "pendulum" }
+        end,
+        desc = "spiral = linear walk; anchor = one jump; crest = shallow-loaded sweep; plunge = deep-loaded; pendulum = alternating sides",
+      })
+
 
       -- :YamlKeyColor <#rrggbb | r g b | native> — replace the ramp's BASE colour
       -- (the depth rungs still apply on top). 'native' returns to the theme's own
@@ -2817,12 +4169,15 @@ return {
       vim.api.nvim_create_user_command("YamlKeyColor", function(opts)
         local arg = vim.trim(opts.args):lower()
         if arg == "" then
-          vim.notify("YamlKeyColor: " .. (yaml_key_color or "native"))
+          local scope = yaml_key_color and (" (theme: " .. (yaml_key_color_theme or "?") .. ")") or ""
+          vim.notify("YamlKeyColor: " .. (yaml_key_color or "native") .. scope)
           return
         end
         if arg == "native" or arg == "off" then
           yaml_key_color = nil
-          apply_theme_adjustments()
+          yaml_key_color_theme = nil
+          yaml_key_color_rerender()
+          vim.defer_fn(_G.__yaml_key_depth_report, 900)
           return
         end
         local hex = parse_color_fargs(opts.fargs)
@@ -2831,8 +4186,415 @@ return {
           return
         end
         yaml_key_color = hex
-        apply_theme_adjustments()
+        yaml_key_color_theme = vim.g.colors_name
+        yaml_key_color_rerender()
+        -- The base colour is what the whole ladder is derived from, so report
+        -- the rungs it produced rather than only the hex that was asked for.
+        vim.defer_fn(_G.__yaml_key_depth_report, 900)
       end, { nargs = "*", desc = "YamlKeyColor <#rrggbb | r g b | native> (no argument reports the current value)" })
+
+      -- :YamlKeyTopColor <#rrggbb | r g b | native> — the depth-1 landmark colour.
+      -- `native` drops depth 1 back onto the ramp's top rung.
+      vim.api.nvim_create_user_command("YamlKeyTopColor", function(opts)
+        local arg = vim.trim(table.concat(opts.fargs, " ")):lower()
+        if arg == "" then
+          vim.notify("YamlKeyTopColor: " .. (yaml_key_top_color or "native"))
+          return
+        end
+        if arg == "native" or arg == "off" then
+          yaml_key_top_color = nil
+        else
+          local hex = parse_color_fargs(opts.fargs)
+          if not hex then
+            vim.notify("YamlKeyTopColor: expected #rrggbb, three RGB numbers, or 'native'", vim.log.levels.ERROR)
+            return
+          end
+          yaml_key_top_color = hex
+        end
+        yaml_key_color_rerender()
+        vim.cmd("redraw!") -- rung colours change; extmarks do not repaint on their own
+        vim.notify("YamlKeyTopColor: " .. (yaml_key_top_color or "native"))
+      end, { nargs = "*", desc = "YamlKeyTopColor <#rrggbb | r g b | native> (no argument reports)" })
+
+
+      -- ── :HlColor — recolour whatever the cursor is sitting on ───────────────
+      -- The point of this one: you should never have to know or type
+      -- `@punctuation.delimiter.yaml`. Park the cursor on the character, run
+      -- `:HlColor #29cccc`, and the group that actually paints that cell takes
+      -- the hex immediately. Bare `:HlColor` reports without changing anything.
+      --
+      -- Resolution order matches what Neovim actually draws, which is why this is
+      -- not simply "the first group inspect_pos returns": treesitter captures come
+      -- back outermost-first (@string.yaml before @string.special.url), so
+      -- the LAST one wins; LSP semantic tokens outrank treesitter (priority 125 vs
+      -- 100) so they go after it; and legacy `syntax` groups are consulted only
+      -- when neither is present, since treesitter suppresses them when active.
+      local function group_candidates()
+        local pos = vim.api.nvim_win_get_cursor(0)
+        local row, col = pos[1] - 1, pos[2]
+        local ok, info = pcall(vim.inspect_pos, 0, row, col)
+        if not ok or type(info) ~= "table" then
+          return {}
+        end
+        local out = {}
+        local function add(group)
+          if type(group) == "string" and group ~= "" then
+            table.insert(out, group)
+          end
+        end
+        for _, item in ipairs(info.treesitter or {}) do
+          add(item.hl_group)
+        end
+        for _, item in ipairs(info.semantic_tokens or {}) do
+          add(item.opts and item.opts.hl_group)
+        end
+        if #out == 0 then
+          for _, item in ipairs(info.syntax or {}) do
+            add(item.hl_group)
+          end
+        end
+        -- Extmark groups go LAST because they WIN: yaml-key-depth paints at
+        -- priority 200 and yaml-expr at 220, both above treesitter's 100, and
+        -- "last in this list" is what the caller treats as the drawn group.
+        --
+        -- Without this, :HlColor on a yaml key reported @property.yaml and on a
+        -- token inside ${{ }} reported @string.yaml -- in both cases a group
+        -- that is genuinely underneath the cell but is NOT what you can see.
+        -- Recolouring it appeared to do nothing, because the extmark on top
+        -- kept drawing. That is the whole "HlColor grabs the wrong thing" bug.
+        local marks = {}
+        for _, item in ipairs(info.extmarks or {}) do
+          local grp = item.opts and item.opts.hl_group
+          if grp then
+            table.insert(marks, { group = grp, priority = tonumber(item.opts.priority) or 0 })
+          end
+        end
+        table.sort(marks, function(a, b)
+          return a.priority < b.priority
+        end)
+        for _, m in ipairs(marks) do
+          add(m.group)
+        end
+
+        -- Yaml key rungs are ephemeral extmarks, so the loop above never sees
+        -- them -- vim.inspect_pos reports no extmarks at all on a key. Ask the
+        -- painter directly. Ranked here, above the captures and below matchadd,
+        -- which is exactly where a priority-200 extmark belongs.
+        if type(_G.__yaml_key_depth_group_at) == "function" then
+          local ok_rung, rung = pcall(_G.__yaml_key_depth_group_at, 0, row, col)
+          if ok_rung then
+            add(rung)
+          end
+        end
+
+        -- matchadd() groups go LAST OF ALL, because they beat every decoration
+        -- layer regardless of the numbers -- see the RANKING notes in hi-here.lua
+        -- ("the match wins at a lower number"). Without this the resolver topped
+        -- out at the extmark: :HlColor on a `${{ }}` brace targeted YamlExprBrace
+        -- and appeared to do nothing, because punct-split's PunctCurly overlay was
+        -- the thing actually drawing that cell. Same trap for `[ ]` and `.`.
+        --
+        -- vim.inspect_pos does not report matches, so they are recovered by
+        -- re-running each window match's pattern over the current line and
+        -- keeping the ones whose span covers the cursor column.
+        local ok_line, line = pcall(vim.api.nvim_buf_get_lines, 0, row, row + 1, false)
+        if ok_line and line and line[1] then
+          local text = line[1]
+          local matches = vim.fn.getmatches()
+          table.sort(matches, function(a, b)
+            return (tonumber(a.priority) or 0) < (tonumber(b.priority) or 0)
+          end)
+          for _, m in ipairs(matches) do
+            if type(m.group) == "string" and type(m.pattern) == "string" then
+              local from = 0
+              -- Bounded: every iteration must advance `from`, so a zero-width or
+              -- non-advancing pattern cannot spin here.
+              while from <= #text do
+                local ok_m, res = pcall(vim.fn.matchstrpos, text, m.pattern, from)
+                if not ok_m or type(res) ~= "table" or (res[2] or -1) < 0 then
+                  break
+                end
+                local s, e = res[2], res[3]
+                if col >= s and col < e then
+                  add(m.group)
+                  break
+                end
+                from = e > from and e or from + 1
+              end
+            end
+          end
+        end
+        return out
+      end
+
+      local function group_fg(group)
+        local ok, hl = pcall(vim.api.nvim_get_hl, 0, { name = group, link = false })
+        if ok and type(hl) == "table" and hl.fg then
+          return normalize_hex(hl.fg)
+        end
+      end
+
+      local function hl_color_report(target, stack)
+        local lines = {
+          "HlColor target: " .. target,
+          "  drawn fg: " .. (group_fg(target) or "unset"),
+          "  override: " .. (hl_overrides_for()[target] or "none"),
+        }
+        if stack and #stack > 1 then
+          table.insert(lines, "  stack (last wins): " .. table.concat(stack, "  <  "))
+        end
+        vim.notify(table.concat(lines, "\n"))
+      end
+
+      -- Shared body for :HlColor, :HlColorGroup and :YamlDelimColor.
+      local function hl_color_apply(target, fargs, stack)
+        local arg = vim.trim(table.concat(fargs, " ")):lower()
+        if arg == "" then
+          hl_color_report(target, stack)
+          return
+        end
+        if arg == "native" or arg == "off" then
+          hl_overrides_for()[target] = nil
+          -- Only a full re-run can rebuild what the override was covering: the
+          -- baseline stamp, the fg pipeline, and (for key rungs) the ramp.
+          apply_theme_adjustments()
+          vim.notify("HlColor: " .. target .. " released back to the theme")
+          return
+        end
+        local hex = parse_color_fargs(fargs)
+        if not hex then
+          vim.notify("HlColor: expected #rrggbb, three RGB numbers, or 'native'", vim.log.levels.ERROR)
+          return
+        end
+        hl_overrides_for()[target] = hex
+        -- No apply_theme_adjustments here on purpose: this must feel instant, and
+        -- an fg-only stamp cannot desync anything the pipeline owns.
+        apply_hl_overrides()
+        vim.notify('HlColor  ["' .. target .. '"] = "' .. hex .. '",')
+      end
+
+      vim.api.nvim_create_user_command("HlColor", function(opts)
+        local stack = group_candidates()
+        local target = stack[#stack]
+        if not target then
+          vim.notify("HlColor: no highlight group under the cursor", vim.log.levels.ERROR)
+          return
+        end
+        hl_color_apply(target, opts.fargs, stack)
+      end, {
+        nargs = "*",
+        desc = "HlColor <#rrggbb | r g b | native> — recolour the group under the cursor (bare = report)",
+      })
+
+      -- :HlColorGroup <group> <hex> — same thing when you already know the group
+      -- and the token is not on screen to park on. Tab-completes group names.
+      vim.api.nvim_create_user_command("HlColorGroup", function(opts)
+        local target = opts.fargs[1]
+        hl_color_apply(target, vim.list_slice(opts.fargs, 2))
+      end, {
+        nargs = "+",
+        complete = "highlight",
+        desc = "HlColorGroup <group> <#rrggbb | r g b | native>",
+      })
+
+      -- :YamlDelimColor — the specific knob asked for before :HlColor existed.
+      -- Kept because `-` and `:` are the two marks retuned most often here.
+      vim.api.nvim_create_user_command("YamlDelimColor", function(opts)
+        hl_color_apply("@punctuation.delimiter.yaml", opts.fargs)
+      end, { nargs = "*", desc = "YamlDelimColor <#rrggbb | r g b | native> — yaml colons" })
+
+      vim.api.nvim_create_user_command("YamlDashColor", function(opts)
+        hl_color_apply("@punctuation.special.yaml", opts.fargs)
+      end, { nargs = "*", desc = "YamlDashColor <#rrggbb | r g b | native> — yaml list dashes" })
+
+      -- :HlColorList — prints every live override as a paste-ready
+      -- theme_baseline.lua line, which is the whole handoff from "poking at it"
+      -- to "committed". Nothing here is ever written to disk automatically.
+      vim.api.nvim_create_user_command("HlColorList", function()
+        local live = hl_overrides_for()
+        local groups = vim.tbl_keys(live)
+        if #groups == 0 then
+          vim.notify("HlColor: no overrides for " .. (vim.g.colors_name or "?"))
+          return
+        end
+        table.sort(groups)
+        local lines = { "HlColor overrides (" .. (vim.g.colors_name or "?") .. "):" }
+        for _, group in ipairs(groups) do
+          table.insert(lines, string.format('  ["%s"] = "%s",', group, live[group]))
+        end
+        vim.notify(table.concat(lines, "\n"))
+      end, { desc = "List :HlColor overrides as theme_baseline.lua lines" })
+
+      -- :HlColorSave — the one command that makes a session's poking permanent.
+      -- Every live :HlColor override is written into theme_baseline_saved.lua
+      -- under the active colorscheme, then dropped from hl_overrides and the
+      -- pipeline re-run, so what you keep looking at is now coming through the
+      -- BASELINE path (bg knobs, :FgAdjust and :Sepia transform it again) rather
+      -- than the flat fg stamp. If the two ever looked different, that difference
+      -- shows up here at save time instead of after the next restart.
+      vim.api.nvim_create_user_command("HlColorSave", function()
+        local key = current_baseline_key()
+        if key == "" then
+          vim.notify("HlColorSave: no colorscheme loaded", vim.log.levels.ERROR)
+          return
+        end
+        local live = hl_overrides_for(key)
+        local groups = vim.tbl_keys(live)
+        if #groups == 0 then
+          vim.notify("HlColorSave: no overrides to save for " .. key)
+          return
+        end
+
+        local saved = load_saved_baseline_colors()
+        saved[key] = saved[key] or {}
+        for group, hex in pairs(live) do
+          saved[key][group] = hex
+        end
+
+        local ok, err = write_saved_baseline_colors(saved)
+        if not ok then
+          vim.notify("HlColorSave failed: " .. err, vim.log.levels.ERROR)
+          return
+        end
+
+        table.sort(groups)
+        hl_overrides_by_theme[key] = {}
+        apply_theme_adjustments()
+        vim.notify(
+          string.format("HlColorSave: %d group(s) persisted for %s\n  %s", #groups, key, table.concat(groups, "\n  "))
+        )
+      end, { desc = "Persist every :HlColor override for this theme to theme_baseline_saved.lua" })
+
+      -- :HlColorRewind [n] — restore the nth-most-recent snapshot of the saved
+      -- file (1 = the state before the last save). Every rewrite (and every
+      -- rewind) snapshots what it replaces first, so nothing is ever lost:
+      -- rewinding "too far" is undone by rewinding 1 again. The restored file
+      -- is ALL themes' saves as of that moment -- the file is rewritten
+      -- wholesale, so its history is whole-file too, not per-theme.
+      vim.api.nvim_create_user_command("HlColorRewind", function(opts)
+        local hist = saved_history_list()
+        if #hist == 0 then
+          vim.notify("HlColorRewind: no snapshots yet (they accumulate from each :HlColorSave)", vim.log.levels.ERROR)
+          return
+        end
+        local n = tonumber(vim.trim(opts.args))
+        if opts.args ~= "" and (not n or n < 1 or n % 1 ~= 0) then
+          vim.notify("HlColorRewind: expected a positive count, got " .. opts.args, vim.log.levels.ERROR)
+          return
+        end
+        n = n or 1
+        if n > #hist then
+          vim.notify(("HlColorRewind: only %d snapshot(s) exist"):format(#hist), vim.log.levels.ERROR)
+          return
+        end
+        local target = hist[#hist - n + 1]
+        local lines = vim.fn.readfile(target)
+        -- Preserve the outgoing state as the newest snapshot, THEN replace.
+        -- Note the index shift this causes: after a rewind, the state you just
+        -- left is snapshot 1, and "one further back" from where you landed is
+        -- n + 2 (its position in the now-longer list), not n + 1.
+        snapshot_saved_baseline()
+        local tmp = theme_saved_path .. ".tmp"
+        local ok = pcall(vim.fn.writefile, lines, tmp)
+        if not ok or vim.uv.fs_rename(tmp, theme_saved_path) == nil then
+          pcall(vim.fn.delete, tmp)
+          vim.notify("HlColorRewind: could not replace " .. theme_saved_path, vim.log.levels.ERROR)
+          return
+        end
+        package.loaded["config.theme_baseline_saved"] = nil
+        -- Re-derive everything from the restored file, same as clear_color():
+        -- re-running the colorscheme is the one path that recomputes every
+        -- downstream consumer instead of guessing which ones are stale.
+        if vim.g.colors_name and vim.g.colors_name ~= "" then
+          pcall(vim.cmd.colorscheme, vim.g.colors_name)
+        end
+        vim.notify(
+          ("HlColorRewind: restored %s (%d of %d snapshots back)"):format(vim.fn.fnamemodify(target, ":t"), n, #hist)
+        )
+      end, {
+        nargs = "?",
+        desc = "Restore the nth-most-recent :HlColorSave snapshot (default 1 = before the last save)",
+      })
+
+      -- :HlColorSaved — what is on disk for this theme, as opposed to
+      -- :HlColorList's live-and-unsaved set.
+      vim.api.nvim_create_user_command("HlColorSaved", function()
+        local key = current_baseline_key()
+        local saved = load_saved_baseline_colors()[key] or {}
+        local groups = vim.tbl_keys(saved)
+        if #groups == 0 then
+          vim.notify("HlColorSaved: nothing saved for " .. (key ~= "" and key or "?"))
+          return
+        end
+        table.sort(groups)
+        local lines = { "HlColor saved (" .. key .. "):" }
+        for _, group in ipairs(groups) do
+          table.insert(lines, string.format('  ["%s"] = "%s",', group, saved[group]))
+        end
+        vim.notify(table.concat(lines, "\n"))
+      end, { desc = "List the saved (on-disk) :HlColor entries for this theme" })
+
+      -- :HlColorForget <group> | all — undo a save. Bare uses the group under the
+      -- cursor, same targeting as :HlColor itself.
+      vim.api.nvim_create_user_command("HlColorForget", function(opts)
+        local key = current_baseline_key()
+        local saved = load_saved_baseline_colors()
+        if not saved[key] or vim.tbl_isempty(saved[key]) then
+          vim.notify("HlColorForget: nothing saved for " .. (key ~= "" and key or "?"))
+          return
+        end
+
+        local target = opts.fargs[1]
+        if not target then
+          local stack = group_candidates()
+          target = stack[#stack]
+          if not target then
+            vim.notify("HlColorForget: no highlight group under the cursor", vim.log.levels.ERROR)
+            return
+          end
+        end
+
+        local dropped
+        if target == "all" then
+          dropped = vim.tbl_keys(saved[key])
+          saved[key] = nil
+        else
+          if not saved[key][target] then
+            vim.notify("HlColorForget: " .. target .. " is not saved for " .. key, vim.log.levels.WARN)
+            return
+          end
+          dropped = { target }
+          saved[key][target] = nil
+        end
+
+        local ok, err = write_saved_baseline_colors(saved)
+        if not ok then
+          vim.notify("HlColorForget failed: " .. err, vim.log.levels.ERROR)
+          return
+        end
+        table.sort(dropped)
+        apply_theme_adjustments()
+        vim.notify("HlColorForget (" .. key .. "): " .. table.concat(dropped, ", "))
+      end, {
+        nargs = "?",
+        complete = "highlight",
+        desc = "HlColorForget [<group> | all] — drop a saved entry (bare = group under the cursor)",
+      })
+
+      -- Bare clears only the theme on screen (overrides are per-theme now);
+      -- `all` wipes every theme's live overrides in this session.
+      vim.api.nvim_create_user_command("HlColorClear", function(opts)
+        if vim.trim(opts.args):lower() == "all" then
+          hl_overrides_by_theme = {}
+          apply_theme_adjustments()
+          vim.notify("HlColor: overrides cleared for every theme")
+          return
+        end
+        local key = current_baseline_key()
+        hl_overrides_by_theme[key == "" and "__none__" or key] = {}
+        apply_theme_adjustments()
+        vim.notify("HlColor: overrides cleared for " .. (vim.g.colors_name or "?"))
+      end, { nargs = "?", desc = "Drop this theme's :HlColor overrides (all = every theme)" })
 
       -- :YamlKeyBold on|none|default — on = every rung bold, none = no rung bold,
       -- default = the ramp's own weighting (toplevel bold only). Bare reports.
@@ -2855,6 +4617,7 @@ return {
           return
         end
         apply_theme_adjustments()
+        vim.defer_fn(_G.__yaml_key_depth_report, 900)
       end, {
         nargs = "?",
         complete = function()
@@ -3033,6 +4796,18 @@ return {
         bg_transparency = v
       end)
 
+      -- :BgTransparencyLock <0-100> | off | (report)
+      make_knob_lock("BgTransparencyLock", "BgTransparency", function(arg)
+        local v = tonumber(arg)
+        return (v and v >= 0 and v <= 100) and tostring(v) or nil
+      end, {
+        usage = "expected 0..100 or 'off', e.g. :BgTransparencyLock 100",
+        desc = "Lock background transparency across theme switches and restarts",
+        -- Persisted: an unlocked boot under a transparent terminal flashes the
+        -- opaque bg on every theme switch until you re-lock by hand.
+        persist = true,
+      })
+
       -- :BgBrightness <0-100> — live sepia-aware bg brightness tuning.
       -- 0 = fully dark, 50 = original sepia-adjusted bg, 100 = brighter ceiling.
       local function bg_brightness_get()
@@ -3118,7 +4893,18 @@ return {
         retrobox_string_lightness = 50,
         comment_brightness = 50,
         yaml_key_brightness = 50,
+        -- Values carry the colour now that keys do not: brighter than pipeline
+        -- output, and bold, against a dark receding key. Keys dim, values glowing,
+        -- punctuation at max contrast is the whole look.
         yaml_value_brightness = 50,
+        yaml_value_bold = false,
+        yaml_key_dark = true,
+        yaml_key_depth_enabled = true,
+        yaml_key_depth_step = 5,
+        yaml_key_depth_sat = 0,
+        yaml_key_depth_hue = 0,
+        yaml_key_depth_hue_mode = "plunge",
+        yaml_key_depth_fit = true,
       }
 
       local function apply_knob_defaults(defaults)
@@ -3141,13 +4927,52 @@ return {
         comment_brightness = defaults.comment_brightness or 50
         yaml_key_brightness = defaults.yaml_key_brightness or 50
         yaml_value_brightness = defaults.yaml_value_brightness or 50
-        -- nil-valued knobs can't live in the defaults tables; reset explicitly.
-        yaml_key_color = nil
-        yaml_key_bold = nil
+        yaml_key_depth_step = defaults.yaml_key_depth_step or 5
+        yaml_key_depth_sat = defaults.yaml_key_depth_sat or 0
+        -- `or` is safe for hue: negatives AND 0 are truthy in Lua, so an
+        -- explicitly-saved 0 (hue off) survives and only an absent key falls
+        -- through to the default -- which is itself 0 now.
+        yaml_key_depth_hue = defaults.yaml_key_depth_hue or 0
+        -- Boolean knob, so the nil test rather than `or true`: a theme that
+        -- opts out with false must not fall through to the global default.
+        yaml_key_dark = defaults.yaml_key_dark ~= false
+        yaml_key_depth_hue_mode = defaults.yaml_key_depth_hue_mode or "plunge"
+        -- Lives on vim.g because the painter in yaml-key-depth.lua reads it.
+        vim.g.yaml_key_depth_fit = defaults.yaml_key_depth_fit ~= false
+        -- `or true` would make false unsettable; a boolean knob needs the nil test.
+        yaml_key_depth_enabled = defaults.yaml_key_depth_enabled ~= false
+
+        -- Knobs whose OFF state is nil. They cannot be expressed in the
+        -- global/per-theme defaults tables (a nil value is an absent key), so
+        -- they reset to nil unless a saved config supplies one -- which is the
+        -- whole reason :ThemeConfigSave passes its table through here.
+        yaml_key_color = defaults.yaml_key_color
+        -- The override is theme-scoped, so restoring one has to stamp the theme
+        -- it belongs to as well or the very next ramp discards it as foreign.
+        yaml_key_color_theme = defaults.yaml_key_color and (vim.g.colors_name or "") or nil
+        -- Absent key means "not saved", which for this knob now resolves to the
+        -- approved default (all rungs bold) rather than nil/ramp-default. An
+        -- explicit false still survives, so :YamlKeyBold none is settable.
+        if defaults.yaml_key_bold == nil then
+          yaml_key_bold = true
+        else
+          yaml_key_bold = defaults.yaml_key_bold
+        end
+        yaml_key_top_color = defaults.yaml_key_top_color or "#66def9"
+        yaml_key_depth_colors = defaults.yaml_key_depth_colors
+        -- Assigned only when a saved config names it: :YamlValueBold is
+        -- documented as surviving theme switches, and defaulting it here would
+        -- quietly turn that into "resets on every switch".
+        if defaults.yaml_value_bold ~= nil then
+          yaml_value_bold = defaults.yaml_value_bold
+        end
       end
 
       -- To preserve manual values across theme switches, remove the relevant entry below.
       local colorscheme_defaults = {
+        ["base16-ayu-mirage"] = {
+          bg_transparency = 100,
+        },
         ["base16-tokyo-night-terminal-storm"] = {
           bg_base = "#0f0f0f",
           bg_transparency = 100,
@@ -3187,6 +5012,78 @@ return {
           fg_lightness = 50,
           fg_saturation = 100,
           normalize_background = 0,
+        },
+        -- The three seasonal evergardens (colors/evergarden-<season>.lua).
+        -- Stock ["evergarden"] above is deliberately left exactly as it was.
+        --
+        -- bg_base #13130f is the near-black warm charcoal Jimmy runs these on;
+        -- with it pinned, upstream's per-season background is overwritten, which
+        -- is why the seasons had to become foreground palettes to mean anything.
+        -- yaml_key/value_brightness 40 is the pair that makes the design work:
+        -- both sides pulled down 10 points, so the moss/leaf/pine key ramp sits
+        -- back and the boosted value families carry the line.
+        ["evergarden-fall"] = {
+          bg_base = "#13130f",
+          bg_transparency = 0,
+          bg_brightness = 50,
+          bg_contrast = 50,
+          chrome_darken = 50,
+          sepia_amount = 0,
+          fg_lightness = 50,
+          fg_saturation = 50, -- neutral: the seasonal palettes are authored at their final saturation
+          -- (stock evergarden runs 100 because ITS palette is pastel; these are not)
+          normalize_background = 0,
+          yaml_key_brightness = 50, -- keys at full ramp: the 40 the values use crushes
+          -- the top rung off near-white, which IS the stock-evergarden move
+          yaml_value_brightness = 40,
+          -- OPT OUT of dark key mode. These three are the one place a bright,
+          -- hued key ramp is deliberate: the moss/leaf/pine base is parked in the
+          -- shader's green dead band so it does not bloom, and the near-white D1
+          -- falling to vivid IS the stock-evergarden look Jimmy asked for. Every
+          -- other theme takes the dark blue keys.
+          yaml_key_dark = false,
+        },
+        ["evergarden-spring"] = {
+          bg_base = "#13130f",
+          bg_transparency = 0,
+          bg_brightness = 50,
+          bg_contrast = 50,
+          chrome_darken = 50,
+          sepia_amount = 0,
+          fg_lightness = 50,
+          fg_saturation = 50, -- neutral: the seasonal palettes are authored at their final saturation
+          -- (stock evergarden runs 100 because ITS palette is pastel; these are not)
+          normalize_background = 0,
+          yaml_key_brightness = 50, -- keys at full ramp: the 40 the values use crushes
+          -- the top rung off near-white, which IS the stock-evergarden move
+          yaml_value_brightness = 40,
+          -- OPT OUT of dark key mode. These three are the one place a bright,
+          -- hued key ramp is deliberate: the moss/leaf/pine base is parked in the
+          -- shader's green dead band so it does not bloom, and the near-white D1
+          -- falling to vivid IS the stock-evergarden look Jimmy asked for. Every
+          -- other theme takes the dark blue keys.
+          yaml_key_dark = false,
+        },
+        ["evergarden-winter"] = {
+          bg_base = "#13130f",
+          bg_transparency = 0,
+          bg_brightness = 50,
+          bg_contrast = 50,
+          chrome_darken = 50,
+          sepia_amount = 0,
+          fg_lightness = 50,
+          fg_saturation = 50, -- neutral: the seasonal palettes are authored at their final saturation
+          -- (stock evergarden runs 100 because ITS palette is pastel; these are not)
+          normalize_background = 0,
+          yaml_key_brightness = 50, -- keys at full ramp: the 40 the values use crushes
+          -- the top rung off near-white, which IS the stock-evergarden move
+          yaml_value_brightness = 40,
+          -- OPT OUT of dark key mode. These three are the one place a bright,
+          -- hued key ramp is deliberate: the moss/leaf/pine base is parked in the
+          -- shader's green dead band so it does not bloom, and the near-white D1
+          -- falling to vivid IS the stock-evergarden look Jimmy asked for. Every
+          -- other theme takes the dark blue keys.
+          yaml_key_dark = false,
         },
         ["gruvbox"] = {
           bg_base = "#0f0f0f",
@@ -3229,6 +5126,151 @@ return {
           kanagawa_dragon_bracket_lightness = 50,
         },
       }
+
+      -- ── FULL CONFIG save (:ThemeConfigSave) ────────────────────────────────
+      -- :HlColorSave persists COLOURS. This persists the knobs -- everything a
+      -- session of tuning changes that a hex cannot express. The two are
+      -- complementary and :ThemeConfigSave runs both, so one command makes the
+      -- whole look permanent.
+
+      -- Every knob that is worth reproducing on the next start. Deliberately not
+      -- generated by reflection: the list IS the contract with
+      -- theme_config_saved.lua, and a knob has to be added here on purpose so a
+      -- transient/debug local never silently starts getting written to disk.
+      local function current_knob_snapshot()
+        local snap = {
+          bg_base = bg_base,
+          bg_transparency = bg_transparency,
+          bg_brightness = bg_brightness,
+          bg_contrast = bg_contrast,
+          chrome_darken = chrome_darken,
+          fg_lightness = fg_lightness,
+          fg_saturation = fg_saturation,
+          sepia_amount = sepia_amount,
+          normalize_background = normalize_background,
+          gruvbox_red_saturation = gruvbox_red_saturation,
+          gruvbox_orange_saturation = gruvbox_orange_saturation,
+          gruvbox_yellow_saturation = gruvbox_yellow_saturation,
+          gruvbox_green_saturation = gruvbox_green_saturation,
+          gruvbox_fg1_lightness = gruvbox_fg1_lightness,
+          kanagawa_dragon_bracket_lightness = kanagawa_dragon_bracket_lightness,
+          retrobox_string_lightness = retrobox_string_lightness,
+          comment_brightness = comment_brightness,
+          yaml_key_brightness = yaml_key_brightness,
+          yaml_value_brightness = yaml_value_brightness,
+          yaml_value_bold = yaml_value_bold,
+          yaml_key_depth_enabled = yaml_key_depth_enabled,
+          yaml_key_depth_step = yaml_key_depth_step,
+          yaml_key_depth_sat = yaml_key_depth_sat,
+          yaml_key_depth_hue = yaml_key_depth_hue,
+          yaml_key_depth_hue_mode = yaml_key_depth_hue_mode,
+          yaml_key_dark = yaml_key_dark,
+          yaml_key_depth_fit = vim.g.yaml_key_depth_fit == true,
+        }
+        -- nil-valued knobs are simply absent from the file, which is exactly how
+        -- apply_knob_defaults reads "not set" -- no sentinel needed.
+        snap.yaml_key_color = yaml_key_color
+        snap.yaml_key_bold = yaml_key_bold
+        snap.yaml_key_top_color = yaml_key_top_color
+        return snap
+      end
+
+      -- :ThemeConfigSave — persist the FULL look of the current theme: every knob
+      -- above, plus every live :HlColor override (same write :HlColorSave does).
+      -- Both halves are keyed by the same current_baseline_key(), so a theme is
+      -- restored from the two files as a unit.
+      vim.api.nvim_create_user_command("ThemeConfigSave", function()
+        local key = current_baseline_key()
+        if key == "" then
+          vim.notify("ThemeConfigSave: no colorscheme loaded", vim.log.levels.ERROR)
+          return
+        end
+        if vim.g.theme_raw then
+          -- In raw mode the knobs are not being applied at all, so what is on
+          -- screen is not what would be saved. Refusing beats writing a config
+          -- that reproduces something you were not looking at.
+          vim.notify("ThemeConfigSave: :ThemeRaw is on -- knobs are not live, nothing saved", vim.log.levels.ERROR)
+          return
+        end
+
+        local saved = load_saved_theme_config()
+        saved[key] = current_knob_snapshot()
+        local ok, err = write_saved_theme_config(saved)
+        if not ok then
+          vim.notify("ThemeConfigSave failed: " .. err, vim.log.levels.ERROR)
+          return
+        end
+
+        -- The colour half, inlined rather than :HlColorSave'd so a theme with no
+        -- pending overrides still reports success for the knobs it did save.
+        local colors_saved = 0
+        local live = hl_overrides_for(key)
+        if not vim.tbl_isempty(live) then
+          local saved_colors = load_saved_baseline_colors()
+          saved_colors[key] = saved_colors[key] or {}
+          for group, hex in pairs(live) do
+            saved_colors[key][group] = hex
+            colors_saved = colors_saved + 1
+          end
+          local ok_c, err_c = write_saved_baseline_colors(saved_colors)
+          if not ok_c then
+            vim.notify("ThemeConfigSave: knobs saved, colours FAILED: " .. err_c, vim.log.levels.ERROR)
+            return
+          end
+          -- Same handoff as :HlColorSave: drop the live overrides so what stays
+          -- on screen is now coming through the baseline path, not the flat fg
+          -- stamp. Any difference between the two shows up now, not next restart.
+          hl_overrides_by_theme[key] = {}
+          apply_theme_adjustments()
+        end
+
+        vim.notify(
+          ("ThemeConfigSave: %s saved (%d knobs, %d colour group(s))"):format(
+            key,
+            vim.tbl_count(saved[key]),
+            colors_saved
+          )
+        )
+      end, { desc = "Persist the full look of this theme: all knobs + every :HlColor override" })
+
+      -- :ThemeConfigSaved — what is on disk for this theme, knob by knob, next to
+      -- what is live. A knob that drifted since the save is marked.
+      vim.api.nvim_create_user_command("ThemeConfigSaved", function()
+        local key = current_baseline_key()
+        local saved = load_saved_theme_config()[key]
+        if not saved or vim.tbl_isempty(saved) then
+          vim.notify("ThemeConfigSaved: nothing saved for " .. (key ~= "" and key or "?"))
+          return
+        end
+        local live = current_knob_snapshot()
+        local names = vim.tbl_keys(saved)
+        table.sort(names)
+        local lines = { "ThemeConfig saved (" .. key .. "):" }
+        for _, name in ipairs(names) do
+          local drift = live[name] ~= saved[name] and ("   <- live: " .. tostring(live[name])) or ""
+          table.insert(lines, string.format("  %s = %s%s", name, tostring(saved[name]), drift))
+        end
+        vim.notify(table.concat(lines, "\n"))
+      end, { desc = "Show the saved knob config for this theme, flagging anything that drifted" })
+
+      -- :ThemeConfigForget — drop this theme's saved knobs. The colour half is
+      -- left alone on purpose; :HlColorForget owns that side, and wiping both
+      -- from one command makes an accidental invocation unrecoverable.
+      vim.api.nvim_create_user_command("ThemeConfigForget", function()
+        local key = current_baseline_key()
+        local saved = load_saved_theme_config()
+        if not saved[key] then
+          vim.notify("ThemeConfigForget: nothing saved for " .. (key ~= "" and key or "?"))
+          return
+        end
+        saved[key] = nil
+        local ok, err = write_saved_theme_config(saved)
+        if not ok then
+          vim.notify("ThemeConfigForget failed: " .. err, vim.log.levels.ERROR)
+          return
+        end
+        vim.notify("ThemeConfigForget: " .. key .. " dropped (reload the theme to see defaults)")
+      end, { desc = "Drop this theme's saved knob config (colours are left alone)" })
 
       -- :ThemeRaw — session-wide bypass of the ENTIRE pipeline. While on, every
       -- theme renders bone-stock: its own background, its own palette, no bg_base
@@ -3316,6 +5358,29 @@ return {
         group = vim.api.nvim_create_augroup("ThemePipelineColorScheme", { clear = true }),
         pattern = "*",
         callback = function()
+          -- Cheap preview: yaml wiring + owned bg only, no knobs, no deferred
+          -- passes. The picker sets this while you scroll and clears it before
+          -- applying whatever you land on. See apply_preview_background.
+          if vim.g.theme_preview then
+            -- Drop any deferred passes still in flight from the theme that was
+            -- loaded before the picker opened: they would repaint foregrounds
+            -- from the previous theme's capture over this preview.
+            theme_generation = theme_generation + 1
+            -- FULL baseline, not derived_only. derived_only is the :ThemeRaw
+            -- contract (stock palette only, so raw stays raw); a preview wants
+            -- the real yaml treatment -- the hand-tuned per-token table in
+            -- theme_baseline.lua plus whatever :HlColorSave wrote. Same two
+            -- calls the normal path makes (capture_base -> baseline, then the
+            -- ramp at the tail of adjust_all_highlights), just without the
+            -- ~35 sweeps in between.
+            pcall(apply_theme_baseline_colors)
+            pcall(apply_yaml_key_ramp)
+            if is_storm_family() then
+              pcall(apply_storm_yaml_startup_colors)
+            end
+            pcall(apply_preview_background)
+            return
+          end
           if vim.g.theme_raw then
             -- :ThemeRaw is on: leave the theme's own colours exactly as they
             -- loaded -- no bg stamp, no knobs, no overlays. The ONE thing that
@@ -3341,7 +5406,14 @@ return {
             key = "catppuccin-mocha"
           end
           local defaults = colorscheme_defaults[key]
-          apply_knob_defaults(vim.tbl_extend("force", global_theme_defaults, defaults or {}))
+          -- Three layers, last one wins: hardcoded global -> hardcoded per-theme
+          -- -> whatever :ThemeConfigSave wrote for this theme. Merging HERE rather
+          -- than re-applying knobs on a timer is what makes a saved config exact:
+          -- the values are right before the first pipeline pass runs, so there is
+          -- nothing for the 700/800ms deferred passes to overwrite.
+          apply_knob_defaults(
+            vim.tbl_extend("force", global_theme_defaults, defaults or {}, load_saved_theme_config()[key] or {})
+          )
           apply_theme_adjustments(true)
           apply_global_punct_matches()
           apply_onedark_dark_purple_overrides()
@@ -3622,7 +5694,18 @@ return {
   { "nyoom-engineering/oxocarbon.nvim", lazy = true },
   { "AlexvZyl/nordic.nvim", lazy = true },
   { "vague2k/vague.nvim", lazy = true },
-  { "ribru17/bamboo.nvim", lazy = true },
+  -- opts = {} is LOAD-BEARING, not boilerplate. It is what makes lazy.nvim call
+  -- bamboo's setup(), and setup() is the only thing that creates the
+  -- vim.g.bamboo_config global. colors/bamboo-{multiplex,vulgaris,light}.lua
+  -- open by calling set_options(), which indexes that global unconditionally --
+  -- so cold-loading any VARIANT without setup() throws
+  -- "attempt to index local 'cfg' (a nil value)" at bamboo/init.lua:11.
+  -- Plain `bamboo` was fine (its own colors file initialises the global), which
+  -- is why a batch scan in alphabetical order never caught this: `bamboo` ran
+  -- first and set the global up for the other three. Only a COLD load fails --
+  -- i.e. booting straight into a saved variant, exactly the picker's use case.
+  -- Same class as the flow / astrotheme `M.config = {}` breakage.
+  { "ribru17/bamboo.nvim", lazy = true, opts = {} },
   { "olivercederborg/poimandres.nvim", lazy = true },
   { "eldritch-theme/eldritch.nvim", lazy = true },
   { "sainnhe/gruvbox-material", lazy = true },

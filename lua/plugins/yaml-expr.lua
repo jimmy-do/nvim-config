@@ -182,6 +182,62 @@ function M.highlight(buf)
     local row = idx - 1
     -- Skip full-line comments outright; a `${{` inside a comment is prose.
     if not line:match("^%s*#") then
+      -- ── Bare expression keys: `if:` and `when:` ──────────────────────────
+      -- GitHub Actions treats the body of `if:` as an expression WITHOUT
+      -- requiring ${{ }} -- the braces are optional there and almost nobody
+      -- writes them. The braced branch below cannot see those lines at all
+      -- (its gate needs a literal `${{`), so they fell through to the .scm's
+      -- @string.special.condition capture, which paints the WHOLE scalar one
+      -- colour.
+      --
+      -- That was the single most visible inconsistency in the system:
+      --   name: Terraform ${{ inputs.action }}   ->  inputs / action, 2 colours
+      --   if: inputs.action == 'plan'            ->  one flat colour
+      -- Identical syntax, identical semantics, different rendering, purely
+      -- because of punctuation the platform does not require.
+      --
+      -- scan_expression already handles every token in these bodies (==, ||,
+      -- 'quoted', dotted access, calls) -- it was simply never invoked. Argo's
+      -- `when:` gets the same treatment for the same reason.
+      local key, body = line:match("^%s*%-?%s*([%w_]+):%s*(.*)$")
+      if key == "if" or key == "when" then
+        -- A block scalar indicator (`>`, `|`, `>-`, `|+2`, ...) means the
+        -- expression is on the FOLLOWING lines, not this one. Two measured bugs
+        -- if it is not special-cased: the indicator itself matches
+        -- scan_expression's operator rule and gets painted as an operator, and
+        -- the real expression underneath is never scanned at all.
+        if body:match("^[>|][-+]?%d*$") then
+          -- Continuation lines are the ones indented PAST THE KEY. Comparing
+          -- against the line's own leading whitespace instead is wrong for a
+          -- sequence item: in `      - if: >` the dash pushes the key out to
+          -- column 8 while a sibling `run:` also sits at 8, so a leading-space
+          -- test would swallow the sibling into the block.
+          local kcol = (line:find(key .. ":", 1, true) or 1) - 1
+          for j = idx + 1, #lines do
+            local nl = lines[j]
+            if not nl:match("^%s*$") then -- blank lines belong to the block
+              local ind = #nl:match("^(%s*)")
+              if ind <= kcol then
+                break
+              end
+              if not nl:match("^%s*#") then
+                local code = nl:match("^(.-)%s+#") or nl
+                scan_expression(buf, j - 1, code:sub(ind + 1), ind)
+              end
+            end
+          end
+        elseif body ~= "" and not body:find("${{", 1, true) then
+          -- Bail on a braced body: the loop below owns those, and running both
+          -- would double-mark the interior.
+          -- Trailing comment is prose, not expression.
+          local code = body:match("^(.-)%s+#") or body
+          -- Anchor to the real byte column: the key match is anchored at the
+          -- line start, so the body begins wherever the line stops matching.
+          local base = #line - #body
+          scan_expression(buf, row, code, base)
+        end
+      end
+
       local search_from = 1
       while true do
         -- Plain find for the opener, then the matching closer. `%$` and the
@@ -211,7 +267,11 @@ function M.highlight(buf)
 end
 
 local function attach()
-  if vim.bo.filetype ~= "yaml" and vim.bo.filetype ~= "helm" then
+  -- Root-filetype test, not equality: see lua/config/yaml_ft.lua. `yaml.github`
+  -- is the case that matters here -- workflows are where ${{ }} actually lives,
+  -- so an equality check is guaranteed to fail on exactly the files this
+  -- feature exists for, the moment a compound filetype is introduced.
+  if not require("config.yaml_ft").is_yaml() then
     return
   end
   M.highlight(vim.api.nvim_get_current_buf())

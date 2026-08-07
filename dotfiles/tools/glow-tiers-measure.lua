@@ -11,9 +11,7 @@ end
 
 -- Value tokens only. Field/property/label groups are deliberately absent.
 local value_groups = {
-  "@string.yaml.value",
   "@string.yaml",
-  "@string.yaml.quoted",
   "@string",
   "String",
   "@number.yaml",
@@ -22,11 +20,11 @@ local value_groups = {
   "@boolean.yaml",
   "@boolean",
   "Boolean",
-  "@type.yaml.enum",
-  "@constant.yaml.env",
-  "@string.yaml.image",
-  "@string.yaml.version",
-  "@string.yaml.url",
+  "@type.yaml",
+  "@constant.macro.yaml",
+  "@string.special.image.yaml",
+  "@string.special.version.yaml",
+  "@string.special.url.yaml",
 }
 
 local colors = vim.fn.getcompletion("", "color")

@@ -207,6 +207,16 @@ local function describe(group)
   return table.concat(parts, " "), fg
 end
 
+-- setreg("+") alone is not enough: inside tmux the clipboard provider falls back
+-- to OSC 52, which the float swallows. pbcopy is the only thing that reliably
+-- lands in the system clipboard, so do both.
+local function clip(text)
+  vim.fn.setreg("+", text)
+  if vim.fn.executable("pbcopy") == 1 then
+    vim.system({ "pbcopy" }, { stdin = text })
+  end
+end
+
 local function hi_here(opts)
   local list = candidates_at_cursor()
   if #list == 0 then
@@ -223,6 +233,11 @@ local function hi_here(opts)
         string.format("%-10s %4d  %-34s %s", c.source, c.priority, c.group, (describe(c.group)))
       )
     end
+    -- Still copy the winner's hex — the stack is where you are hunting for it.
+    local _, wfg = describe(list[#list].group)
+    if wfg then
+      clip(wfg)
+    end
     vim.notify(table.concat(lines, "\n"))
     return
   end
@@ -230,15 +245,29 @@ local function hi_here(opts)
   local winner = list[#list]
   local attrs, fg = describe(winner.group)
   if fg then
-    vim.fn.setreg("+", fg)
+    clip(fg)
   end
-  vim.notify(string.format("%s  %s  [%s]", winner.group, attrs, winner.source))
+  vim.notify(string.format("%s  %s  [%s]%s", winner.group, attrs, winner.source, fg and "  → clipboard" or ""))
 end
 
 vim.api.nvim_create_user_command("HiHere", hi_here, {
   bang = true,
   desc = "Winning highlight group + hex at the cursor (! for the full stack)",
 })
+
+-- Lowercase aliases. User commands are required to start with a capital, so the
+-- only way to type `:inspect` / `:hihere` is a cmdline abbreviation. Guard on
+-- getcmdtype() == ":" and getcmdline() being nothing but the word itself, so the
+-- expansion cannot fire inside `:%s/inspect/x/` or an argument.
+local function cmd_alias(short, long)
+  vim.keymap.set("ca", short, function()
+    local at_start = vim.fn.getcmdtype() == ":" and vim.fn.getcmdline():match("^%s*" .. short .. "$")
+    return at_start and long or short
+  end, { expr = true })
+end
+
+cmd_alias("inspect", "Inspect")
+cmd_alias("hihere", "HiHere")
 
 -- Nothing to install; this file is here for the user command only.
 return {}

@@ -8,7 +8,7 @@
 --
 --   * theme.lua DERIVES the yaml key colour per theme (derive_yaml_baseline ->
 --     apply_yaml_key_ramp) on deferred passes out to ~900ms after ColorScheme.
---     Reading @property.yaml.level2 any earlier gets the previous theme's key,
+--     Reading @amlKeyD2 any earlier gets the previous theme's key,
 --     or nothing. So each theme gets a full settle wait.
 --   * 'background' has to be set to match the theme before loading it, same as
 --     the picker's apply_scheme, or half the base16 family resolves against the
@@ -179,7 +179,7 @@ local function write_file()
 --          light schemes say nothing in their name at all.
 --   bg     the measured Normal background hex.
 --   key    the yaml KEY colour theme.lua derives for this theme
---          (@property.yaml.level2, i.e. the middle rung of the key ramp).
+--          (YamlKeyD2, i.e. the second rung of the eight-rung key ramp).
 --   class  what that key reads as: white / grey / tinted, or a hue family
 --          (red orange yellow green cyan blue purple magenta). "white" and
 --          "grey" are the answer to "are the keys just white".
@@ -237,7 +237,7 @@ local function step()
 
   vim.defer_fn(function()
     local normal_fg = fg_of("Normal")
-    local key = fg_of("@property.yaml.level2", "@property.yaml", "@property", "@variable.member", "Identifier")
+    local key = fg_of("YamlKeyD2", "@property.yaml", "@property", "@variable.member", "Identifier")
 
     -- Then a `noautocmd` reload for the NATIVE background. theme.lua pins Normal
     -- bg to Jimmy's own colour synchronously inside its ColorScheme handler, so

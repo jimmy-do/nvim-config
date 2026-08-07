@@ -1,4 +1,4 @@
--- <leader>uC / <leader>th — colorscheme picker. Scroll the list; typing jumps,
+-- <leader>uc / <leader>th — colorscheme picker. Scroll the list; typing jumps,
 -- never filters.
 --
 -- LazyVim's fzf extra binds this to `FzfLua.colorschemes`, which is a fuzzy
@@ -32,6 +32,11 @@
 --                                    and yaml-value glow. "dark only + keys with
 --                                    a colour + values that burn" is three of them
 --                                    at once, which is the point.
+--                                    Above those sits `v` FAVORITES ONLY, which
+--                                    does not stack — it drops the whole "all
+--                                    colorschemes" section and leaves the
+--                                    favorites block as the entire list, so the
+--                                    other four have nothing left to narrow.
 --                                    j/k + <CR>, or press the digit / letter shown
 --                                    on the row. None of those letters is j or k.
 --                                    Grouping and filters PERSIST across restarts
@@ -51,9 +56,14 @@
 -- `{}`: persist_favorite() below finds this block by matching `local favorites =
 -- {` on its own line and a bare `}`, so collapsing it breaks every toggle.
 local favorites = {
-  "base16-hardhacker",
-  "moonlightv3",
-  "moonlightv4",
+  "moonlit",
+  "kanagawa-dragon",
+  "base16-gruvbox-material-dark-hard",
+  "base16-everforest-dark-hard",
+  "dracula-soft",
+  "base16-tokyo-night-storm",
+  "base16-gruvbox-dark-medium-forest",
+  "nvim-gruvbox",
 }
 
 -- This file's own path, captured at load time so `f` can rewrite the block above.
@@ -134,6 +144,10 @@ local footer_hint = " m categories · s jump · f fav "
 
 local favorites_header = "── favorites ──"
 local others_header = "── all colorschemes ──"
+-- Stands in for others_header while the favorites-only filter is on: same slot,
+-- but worded as a statement of what is being withheld rather than as a heading
+-- for a section that has no rows under it.
+local others_only_header = "── everything else ──"
 
 -- Glow tiers. Every scheme is pre-scored by how hard its YAML VALUES (strings,
 -- numbers, booleans, enums, images, urls -- NOT the field/property names) glow
@@ -327,6 +341,12 @@ local bg_filter = saved_view.bg_filter or "all" -- all | dark | light
 local base16_filter = saved_view.base16_filter or "all" -- all | only | never
 local colored_keys_only = saved_view.colored_keys_only or false
 local glow_filter = saved_view.glow_filter or "all" -- all | loud (neon+bright) | neon
+-- Favorites only. Unlike the four above this one does not narrow the "all
+-- colorschemes" section, it removes it: the favorites block IS the whole list.
+-- So it short-circuits the other filters rather than stacking with them --
+-- intersecting "favorites only" with "light only" is a way to get an empty
+-- picker, and the favorites block has never been filtered by anything.
+local favorites_only = saved_view.favorites_only or false
 
 local function save_view()
   if view_state then
@@ -336,6 +356,7 @@ local function save_view()
       base16_filter = base16_filter,
       colored_keys_only = colored_keys_only,
       glow_filter = glow_filter,
+      favorites_only = favorites_only,
     })
   end
 end
@@ -349,22 +370,49 @@ local loud_glow = { neon = true, bright = true }
 -- retrobox and the base16 family all key off &background. `noautocmd` matters:
 -- a bare `set background=` makes Vim re-source the CURRENT scheme first, which
 -- would fire theme.lua's full deferred pipeline a second time per preview step.
-local function apply_scheme(name)
+-- Several plugins collapse their variants onto one colors_name: kanagawa-*,
+-- kanso-*, flexoki-*, modus_*, cyberdream-light, catppuccin-*, zenburn. So
+-- vim.g.colors_name alone cannot answer "which row is showing". Remember what
+-- we asked for, keyed by what the load reported back, and unalias with it.
+local applied_alias = {}
+
+-- True while the visible theme was applied by a CHEAP preview (vim.g.theme_preview
+-- -- stock foreground, yaml ramp and owned bg only). close() has to force a full
+-- re-apply in that state even when the name already matches, because the name
+-- matching does not mean the pipeline has run.
+local preview_dirty = false
+
+local function apply_scheme(name, cheap)
   local bg = is_light(name) and "light" or "dark"
   if vim.o.background ~= bg then
     pcall(vim.cmd, "noautocmd set background=" .. bg)
   end
+  vim.g.theme_preview = cheap or nil
   pcall(vim.cmd.colorscheme, name)
+  vim.g.theme_preview = nil
+  preview_dirty = cheap or false
+  local reported = vim.g.colors_name or ""
+  if reported ~= "" then
+    applied_alias[reported] = name
+  end
 end
 
--- kanagawa.nvim sets colors_name = "kanagawa" for every variant; resolve the
--- real one so cancel doesn't silently drop you back to wave.
+-- The scheme NAME currently showing, not the plugin's self-report. Getting this
+-- wrong is not cosmetic: preview() skips rows it thinks are already applied, and
+-- the picker persists this string, so an alias means light variants boot dark.
 local function current_colorscheme()
   local name = vim.g.colors_name or ""
+  if applied_alias[name] then
+    return applied_alias[name]
+  end
   if name == "kanagawa" then
+    -- Startup path, before this picker has applied anything. _CURRENT_THEME is
+    -- the variant :colorscheme actually loaded; config.theme is only what
+    -- setup() was called with and never moves.
     local ok, kanagawa = pcall(require, "kanagawa")
-    if ok and kanagawa.config and kanagawa.config.theme then
-      return "kanagawa-" .. kanagawa.config.theme
+    local variant = ok and (kanagawa._CURRENT_THEME or (kanagawa.config and kanagawa.config.theme))
+    if variant then
+      return "kanagawa-" .. variant
     end
   end
   return name
@@ -449,6 +497,12 @@ local function pick_colorscheme()
   -- and the cursorline already show the selection. Released in close().
   local hidden_cursor = require("config.hidden_cursor")
   hidden_cursor.acquire()
+
+  -- tint dims every window that is not the focused one, and the picker float
+  -- IS the focus for its whole life -- so opening it greys out the code you are
+  -- trying to judge the theme against. Suspend dim while the picker is up and
+  -- restore it in close(), unless focus-fx has dim turned off anyway.
+  pcall(function() require("tint").disable() end)
 
   local buf = vim.api.nvim_create_buf(false, true)
   vim.bo[buf].bufhidden = "wipe"
@@ -547,21 +601,28 @@ local function pick_colorscheme()
     -- Every active filter has to be visible somewhere permanent: a shortened list
     -- with nothing saying why is how a theme goes "missing".
     local flags = {}
-    if bg_filter ~= "all" then
-      table.insert(flags, bg_filter .. " only")
-    end
-    if base16_filter == "only" then
-      table.insert(flags, "base16 only")
-    elseif base16_filter == "never" then
-      table.insert(flags, "no base16")
-    end
-    if colored_keys_only then
-      table.insert(flags, have_facets and "coloured keys" or "coloured keys: NO DATA")
-    end
-    if glow_filter == "neon" then
-      table.insert(flags, "neon glow")
-    elseif glow_filter == "loud" then
-      table.insert(flags, "loud glow")
+    if favorites_only then
+      -- Alone, not appended: with the others section gone the other four are
+      -- inert, and a title reading "[favorites only, dark only]" would claim a
+      -- narrowing that is not happening.
+      flags = { "favorites only" }
+    else
+      if bg_filter ~= "all" then
+        table.insert(flags, bg_filter .. " only")
+      end
+      if base16_filter == "only" then
+        table.insert(flags, "base16 only")
+      elseif base16_filter == "never" then
+        table.insert(flags, "no base16")
+      end
+      if colored_keys_only then
+        table.insert(flags, have_facets and "coloured keys" or "coloured keys: NO DATA")
+      end
+      if glow_filter == "neon" then
+        table.insert(flags, "neon glow")
+      elseif glow_filter == "loud" then
+        table.insert(flags, "loud glow")
+      end
     end
     local suffix = #flags > 0 and ("  [" .. table.concat(flags, ", ") .. "]") or ""
     if not vim.api.nvim_win_is_valid(win) then
@@ -623,7 +684,7 @@ local function pick_colorscheme()
       0,
       vim.schedule_wrap(function()
         if not closing and vim.api.nvim_win_is_valid(win) then
-          apply_scheme(name)
+          apply_scheme(name, true)
         end
       end)
     )
@@ -654,7 +715,10 @@ local function pick_colorscheme()
     for _, name in ipairs(all_colors) do
       if not favorite_index(name) then
         -- Every filter is a separate AND: they stack in any combination.
-        local shown = (bg_filter == "all" or (bg_filter == "light") == is_light_theme(name))
+        -- favorites_only is the exception and comes first: it hides every
+        -- non-favorite outright, so the other four never get a say.
+        local shown = not favorites_only
+          and (bg_filter == "all" or (bg_filter == "light") == is_light_theme(name))
           and (base16_filter == "all" or (base16_filter == "only") == is_base16(name))
           and (not colored_keys_only or not have_facets or not colorless_key[key_class(name)])
           and (
@@ -670,9 +734,18 @@ local function pick_colorscheme()
       end
     end
 
-    add(hidden > 0 and string.format("%s  (%d hidden — m)", others_header, hidden) or others_header, {
-      header = true,
-    })
+    -- Under favorites_only the others section is empty by definition, so print
+    -- the count as a closing line instead of a header with nothing under it --
+    -- but DO still print it: a list that quietly stops at six entries with no
+    -- statement of what is missing is the failure mode every header here exists
+    -- to prevent.
+    if favorites_only then
+      add(string.format("%s  (%d hidden — m)", others_only_header, hidden), { header = true })
+    else
+      add(hidden > 0 and string.format("%s  (%d hidden — m)", others_header, hidden) or others_header, {
+        header = true,
+      })
+    end
 
     local mode = group_mode_by_key(group_mode_key)
     if mode.groups then
@@ -752,6 +825,11 @@ local function pick_colorscheme()
     stop_timer()
     hidden_cursor.release()
 
+    local fx = vim.g.focusfx
+    if fx == nil or fx.dim ~= false then
+      pcall(function() require("tint").enable() end)
+    end
+
     local name = keep and selected() or nil
     last_selected = name or last_selected
 
@@ -760,7 +838,11 @@ local function pick_colorscheme()
     end
 
     if keep then
-      if name and name ~= current_colorscheme() then
+      -- `preview_dirty` is why the name check alone is not enough: the theme on
+      -- screen may already BE `name`, but applied by the cheap preview path with
+      -- no knobs or overrides. Landing on a theme is the moment the real
+      -- pipeline gets to run, exactly once.
+      if name and (preview_dirty or name ~= current_colorscheme()) then
         apply_scheme(name)
       end
     elseif original ~= "" then
@@ -971,6 +1053,20 @@ local function pick_colorscheme()
     -- own movement keys, so a filter bound to `k` was unreachable without the
     -- cursor jumping first.
     table.insert(rows, { separator = true, text = " filters (stack, any combination)" })
+    -- First, and on its own conceptual level: this one does not stack, it wins.
+    -- `v` because f, F and a are already spoken for elsewhere in the picker and
+    -- the menu's own j/k are off limits.
+    table.insert(rows, {
+      digit = "v",
+      text = string.format(
+        " v %s favorites: %s",
+        favorites_only and "●" or "○",
+        favorites_only and "favorites only (other filters off)" or "show everything"
+      ),
+      act = function()
+        favorites_only = not favorites_only
+      end,
+    })
     table.insert(rows, {
       digit = "d",
       text = string.format(
@@ -1099,7 +1195,7 @@ local function pick_colorscheme()
     mmap("<Down>", mstep(1))
     mmap("<Up>", mstep(-1))
     -- Same trap as the picker: an accidental <C-j> here is window navigation, which
-    -- would drop the menu AND the picker. The menu is eleven rows, so a 5-row jump
+    -- would drop the menu AND the picker. The menu is a dozen rows, so a 5-row jump
     -- would just slam into the ends — one row is the useful behaviour.
     mmap("<C-j>", mstep(1))
     mmap("<C-k>", mstep(-1))
@@ -1170,6 +1266,7 @@ local function pick_colorscheme()
       -- refuse the jump, and say so: silently landing on a row while the title
       -- still claimed "dark only" would be a lie about what the list contains.
       bg_filter, base16_filter, glow_filter, colored_keys_only = "all", "all", "all", false
+      favorites_only = false
       save_view()
       render(name)
       draw_marker()
@@ -1402,16 +1499,49 @@ end, {
   desc = "Remove a colorscheme from picker favorites",
 })
 
--- LazyVim's fzf extra declares <leader>uC inside fzf-lua's own spec, so setting
--- the mapping at startup is not enough: when fzf-lua loads (first use of any fzf
--- picker) lazy.nvim installs that spec's keys and clobbers ours. Declare it on
--- the same spec instead — lazy merges `keys` across specs and the later entry for
--- a given lhs wins, so this survives fzf-lua loading.
+-- Swapped 2026-07-31: the picker moved from <leader>uC to the lowercase
+-- <leader>uc, and LazyVim's conceal-level toggle moved the other way onto uC.
+--
+-- Only the conceal half needs code. Taking <leader>uc for the picker is enough
+-- on its own: LazyVim routes Snacks.toggle's :map through safe_keymap_set,
+-- which SKIPS any lhs a lazy spec already claims, so declaring uc in the spec
+-- below makes LazyVim's conceal toggle quietly decline the key rather than
+-- clobber us. The flip side is that the same guard blocks us from putting
+-- conceal on uC (the fzf extra's spec claims it), which is why the toggle below
+-- swaps in plain vim.keymap.set — we are deliberately overriding that key.
+--
+-- LazyVim's fzf extra also declares the picker key inside fzf-lua's own spec, so
+-- setting the mapping at startup is not enough: when fzf-lua loads (first use of
+-- any fzf picker) lazy.nvim installs that spec's keys and clobbers ours. Declare
+-- it on the same spec instead — lazy merges `keys` across specs and the later
+-- entry for a given lhs wins, so this survives fzf-lua loading.
+vim.api.nvim_create_autocmd("User", {
+  pattern = "VeryLazy",
+  callback = function()
+    vim.schedule(function()
+      -- Rebuild the conceal toggle rather than copying LazyVim's mapping:
+      -- Snacks.toggle's map() also wires the which-key entry and its
+      -- enabled/disabled icon, which a plain keymap copy would not carry.
+      local ok, snacks = pcall(require, "snacks")
+      if not ok or not snacks.toggle then
+        return
+      end
+      local toggle = snacks.toggle.option("conceallevel", {
+        off = 0,
+        on = vim.o.conceallevel > 0 and vim.o.conceallevel or 2,
+        name = "Conceal Level",
+      })
+      toggle.opts.map = vim.keymap.set -- see the header: bypass safe_keymap_set
+      toggle:map("<leader>uC")
+    end)
+  end,
+})
+
 return {
   {
     "ibhagwan/fzf-lua",
     keys = {
-      { "<leader>uC", pick_colorscheme, desc = "Colorscheme" },
+      { "<leader>uc", pick_colorscheme, desc = "Colorscheme" },
       -- <leader>th used to open telescope's colorscheme list (telescope removed
       -- 2026-07-26); same muscle memory, better picker.
       { "<leader>th", pick_colorscheme, desc = "Pick colorscheme" },

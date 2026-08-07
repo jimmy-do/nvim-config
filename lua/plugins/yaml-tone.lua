@@ -46,7 +46,7 @@
 
 local colors = {
   ["@property.yaml"] = "#49638f", -- nested fields (keys)
-  ["@property.yaml.toplevel"] = "#7aa2f7", -- document-root keys only
+  ["YamlKeyD1"] = "#7aa2f7", -- document-root keys only
   ["@punctuation.delimiter.yaml"] = "#ff8c1a", -- colons, commas, periods
   ["@punctuation.special.yaml"] = "#ff8c1a", -- list dashes, anchors
   ["@punctuation.bracket"] = "#f7ff00", -- [] {}
@@ -59,12 +59,12 @@ local colors = {
   -- its text matches that rule, otherwise it stays @string.yaml above. So if a
   -- hex here appears to do nothing, the value is not matching the pattern; run
   -- :Inspect on it to see which capture it actually got.
-  ["@type.yaml.enum"] = "#e0af68", -- Deployment, RollingUpdate, ClusterIP
-  ["@constant.yaml.env"] = "#f7768e", -- LOG_LEVEL, POSTGRES_HOST
-  ["@string.yaml.image"] = "#bb9af7", -- registry.io/api:1.2.3
-  ["@string.yaml.version"] = "#9ece6a", -- apps/v1, 1.2.3
-  ["@string.yaml.url"] = "#73daca", -- https://, oci://
-  ["@string.yaml.path"] = "#a9b1d6", -- /healthz, values.yaml
+  ["@type.yaml"] = "#e0af68", -- Deployment, RollingUpdate, ClusterIP
+  ["@constant.macro.yaml"] = "#f7768e", -- LOG_LEVEL, POSTGRES_HOST
+  ["@string.special.image.yaml"] = "#bb9af7", -- registry.io/api:1.2.3
+  ["@string.special.version.yaml"] = "#9ece6a", -- apps/v1, 1.2.3
+  ["@string.special.url.yaml"] = "#73daca", -- https://, oci://
+  ["@string.special.path.yaml"] = "#a9b1d6", -- /healthz, values.yaml
   -- Quantities (512Mi, 30s) deliberately have no entry: they inherit @number,
   -- so they track the number colour instead of being tunable separately.
 }
@@ -193,14 +193,20 @@ local function apply_guides(color)
   return lit
 end
 
--- :YamlGuide            -> colour the indent guide line using scope_color
--- :YamlGuide #ff0055    -> override the hue live (still forced to max brightness)
+-- :YamlGuide -> DELEGATES to :IndentColor, which is the mechanism that actually
+-- owns the guide colour (indent-ladder.lua: persists to disk, sets
+-- vim.g.indent_scope_color, and refresh_guide() re-derives the animation ramp).
+--
+-- The old scratch version here stamped SnacksIndentScope & co directly, which
+-- lost every race: the ladder samples its colour once per animation (stale
+-- until the next scope change), theme.lua re-pins those groups on delayed
+-- timers after every theme apply, and this file's own BufLeave revert ran a
+-- silent ThemeReload on top. It also force-maximized the hex, so dark colours
+-- came out as the pure hue -- ":YamlGuide 000000" rendered RED. Exact hexes now
+-- reach the screen, and dark ones are legal.
 vim.api.nvim_create_user_command("YamlGuide", function(opts)
-  local color = (opts.args ~= "" and opts.args) or scope_color
-  local lit = apply_guides(color)
-  mark_dirty()
-  vim.notify("YamlGuide applied (" .. color .. " -> " .. lit .. ")")
-end, { nargs = "?", desc = "Colour the yaml indent guide line at max brightness" })
+  vim.cmd("IndentColor " .. opts.args)
+end, { nargs = "?", desc = "Alias for :IndentColor -- the real owner of the guide colour" })
 
 -- Periods (the "." character) are NOT a treesitter node in YAML -- a dot inside
 -- 1.2.3 or foo.bar is just part of the plain scalar / string text, so there's

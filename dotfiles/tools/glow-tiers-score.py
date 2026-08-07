@@ -25,15 +25,16 @@ CUTS = [("neon", 0.50), ("bright", 0.38), ("soft", 0.25), ("faint", 0.12)]
 # yaml VALUE tokens only, one entry per "slot"; first group present wins. Field /
 # property / label groups are intentionally absent -- this measures values.
 SLOTS = [
-    ["@string.yaml.value", "@string.yaml", "@string", "String"],
-    ["@string.yaml.quoted", "@string.yaml", "@string", "String"],
+    # plain AND quoted values are one class now, so ONE slot -- listing it
+    # twice would weight the plain string colour double in the mean.
+    ["@string.yaml", "@string", "String"],
     ["@number.yaml", "@number", "Number"],
     ["@boolean.yaml", "@boolean", "Boolean"],
-    ["@type.yaml.enum"],
-    ["@constant.yaml.env"],
-    ["@string.yaml.image"],
-    ["@string.yaml.version"],
-    ["@string.yaml.url"],
+    ["@type.yaml"],
+    ["@constant.macro.yaml"],
+    ["@string.special.image.yaml"],
+    ["@string.special.version.yaml"],
+    ["@string.special.url.yaml"],
 ]
 
 

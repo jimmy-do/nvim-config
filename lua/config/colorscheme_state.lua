@@ -67,6 +67,31 @@ function M.write_raw_lock(on)
   end
 end
 
+-- Knob-lock persistence: one file per lock, content is the locked value. Unlike
+-- the session-only locks, a persisted lock survives a restart — needed for
+-- :BgTransparencyLock, where booting unlocked means the first theme switch
+-- slams an opaque bg behind a transparent terminal.
+function M.knob_lock_path(name)
+  return vim.fn.stdpath("state") .. "/theme-knob-lock-" .. name
+end
+
+function M.read_knob_lock(name)
+  local ok, lines = pcall(vim.fn.readfile, M.knob_lock_path(name))
+  if not ok or type(lines) ~= "table" then
+    return nil
+  end
+  local v = vim.trim(lines[1] or "")
+  return v ~= "" and v or nil
+end
+
+function M.write_knob_lock(name, value)
+  if value then
+    pcall(vim.fn.writefile, { value }, M.knob_lock_path(name))
+  else
+    pcall(vim.fn.delete, M.knob_lock_path(name))
+  end
+end
+
 -- The scheme to boot with. `default` is theme.lua's hardcoded fallback; a saved
 -- name only wins if it is still installed, so uninstalling a plugin can never
 -- leave nvim starting on a scheme that errors out.
