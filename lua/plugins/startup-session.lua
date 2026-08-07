@@ -163,6 +163,67 @@ local function purge_directory_buffers()
   end
 end
 
+-- The `zshjOMtCn.zsh` buffer that came back on every restore.
+--
+-- zsh's edit-command-line widget (and `fc`) writes the command line to a throwaway
+-- file under $TMPDIR -- `/var/folders/.../zshXXXXXX.zsh` -- and opens nvim on it.
+-- mksession records that path like any other buffer, so it lands in the session
+-- for the cwd and gets `edit`ed on every subsequent restore. The temp file is long
+-- gone by then, so what comes back is an empty buffer named after a file that no
+-- longer exists.
+--
+-- Same two halves as the netrw fix: purge on restore (sessions already written
+-- carry the path) and prune on save (so new ones never do).
+local function is_tempfile(name)
+  if name == "" then
+    return false
+  end
+  local path = vim.fn.fnamemodify(name, ":p")
+  local tmp = vim.env.TMPDIR and vim.fn.fnamemodify(vim.env.TMPDIR, ":p") or nil
+  -- /private/tmp matters as much as /tmp: on macOS /tmp is a symlink to it, and
+  -- a buffer opened through the real path (zsh's edit-command-line scratch files,
+  -- $TMPPREFIX=/tmp/zsh) reports the resolved /private/tmp name — which the bare
+  -- ^/tmp/ pattern missed, so those buffers survived every save and restore.
+  return path:match("^/tmp/") ~= nil
+    or path:match("^/private/tmp/") ~= nil
+    or path:match("^/private/var/folders/") ~= nil
+    or path:match("^/var/folders/") ~= nil
+    or (tmp ~= nil and tmp ~= "" and path:sub(1, #tmp) == tmp)
+end
+
+local function purge_temp_buffers()
+  -- Same window-fallback dance as purge_directory_buffers: a window still showing
+  -- the temp buffer must be pointed somewhere real first, or deleting it strands
+  -- that window on a blank [No Name].
+  local fallback
+  for _, buf in ipairs(vim.api.nvim_list_bufs()) do
+    local name = vim.api.nvim_buf_get_name(buf)
+    if
+      vim.bo[buf].buflisted
+      and name ~= ""
+      and not is_tempfile(name)
+      and vim.fn.isdirectory(name) ~= 1
+      and vim.fn.filereadable(name) == 1
+    then
+      fallback = buf
+      break
+    end
+  end
+
+  for _, buf in ipairs(vim.api.nvim_list_bufs()) do
+    if vim.api.nvim_buf_is_valid(buf) and is_tempfile(vim.api.nvim_buf_get_name(buf)) then
+      if fallback then
+        for _, win in ipairs(vim.api.nvim_list_wins()) do
+          if vim.api.nvim_win_get_buf(win) == buf then
+            pcall(vim.api.nvim_win_set_buf, win, fallback)
+          end
+        end
+      end
+      pcall(vim.api.nvim_buf_delete, buf, { force = true })
+    end
+  end
+end
+
 local function restore(file)
   local ok, persistence = pcall(require, "persistence")
   if not ok then
@@ -172,6 +233,7 @@ local function restore(file)
   local sourced = pcall(vim.cmd, "silent! source " .. vim.fn.fnameescape(file))
   persistence.fire("LoadPost")
   vim.schedule(purge_directory_buffers)
+  vim.schedule(purge_temp_buffers)
   -- Scheduled, not immediate: `did_filetype` is still set while we are inside the
   -- VimEnter callback, so detecting here would hit the same no-op that caused the
   -- problem. One tick later the flag is clear and `:filetype detect` takes.
@@ -195,7 +257,7 @@ vim.api.nvim_create_autocmd("User", {
     end
     for _, buf in ipairs(vim.api.nvim_list_bufs()) do
       local name = vim.api.nvim_buf_get_name(buf)
-      if vim.bo[buf].filetype == "netrw" or (name ~= "" and vim.fn.isdirectory(name) == 1) then
+      if vim.bo[buf].filetype == "netrw" or (name ~= "" and vim.fn.isdirectory(name) == 1) or is_tempfile(name) then
         pcall(vim.api.nvim_buf_delete, buf, { force = true })
       end
     end
@@ -277,5 +339,10 @@ return {
     "folke/persistence.nvim",
     lazy = false,
     priority = 100,
+    -- need = 0: save the session on EVERY exit, including one with no named
+    -- buffers left. The default (1) skips the save when the last real buffer
+    -- is closed before :qa — so "close everything and quit" resurrected the
+    -- previous session on the next launch instead of coming up clean.
+    opts = { need = 0 },
   },
 }

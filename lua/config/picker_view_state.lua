@@ -21,6 +21,7 @@ local schema = {
   base16_filter = { all = true, only = true, never = true },
   glow_filter = { all = true, loud = true, neon = true },
   colored_keys_only = "boolean",
+  favorites_only = "boolean",
 }
 
 function M.read()

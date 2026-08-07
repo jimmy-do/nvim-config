@@ -3,15 +3,10 @@
 
 local keymap = vim.keymap.set
 
--- Save fast
-keymap("n", "<leader>w", "<cmd>w<cr>", { desc = "Save file" })
-
--- LazyVim also binds <leader>wd (close window) and <leader>wm (zoom), which
--- makes <leader>w an ambiguous prefix: every save stalls the full timeoutlen
--- waiting for a possible d/m. Delete them — window close stays on <C-w>c and
--- zoom stays on <leader>uZ — so save fires instantly.
-pcall(vim.keymap.del, "n", "<leader>wd")
-pcall(vim.keymap.del, "n", "<leader>wm")
+-- <leader>w is the WINDOWS prefix (LazyVim maps it to <c-w>), so which-key
+-- pops the window menu. It used to be <cmd>w<cr> (save), which meant no menu
+-- ever appeared and every press echoed a "file 70L, 3128B" write message that
+-- stacked up in noice's bottom-right view. Save is :w (or LazyVim's <C-s>).
 
 -- Bare q kept starting accidental macro recordings ("recording @w" in the
 -- statusline). Recording moves to Q (whose default, replay-last-macro, is
@@ -177,7 +172,8 @@ vim.keymap.set({ "n", "x" }, "<C-;>", ":", { desc = "Command mode (no Shift)" })
 --   q/  from normal mode        -- history of /searches
 --   <C-f> while already typing  -- dumps the half-typed cmdline into it
 -- That is the answer to "navigating previous commands": edit history as text.
-vim.keymap.set("n", "<leader>;", "q:", { desc = "Command-line window (history)" })
+-- NOTE: no <leader>; alias here -- that key belongs to focus-fx (wincmd p,
+-- mirroring tmux prefix-;). Use q: / q/ directly; they are mapped above.
 
 -- ...and for the cases where popping a window is overkill, make the one-line
 -- prompt behave like every other text field on macOS. Ghostty has
@@ -226,3 +222,126 @@ vim.keymap.set("c", "<M-h>", "<S-Left>", { desc = "Back a word" })
 vim.keymap.set("c", "<M-l>", "<S-Right>", { desc = "Forward a word" })
 vim.keymap.set("c", "<M-b>", "<S-Left>", { desc = "Back a word" })
 vim.keymap.set("c", "<M-f>", "<S-Right>", { desc = "Forward a word" })
+
+-- Shrink FLOOR, shared by the sticky mode and the one-shot <M-*> maps below.
+--
+-- Ghostty sends Cmd+J as ESC-prefixed `j`, and ESC+j is exactly what <M-j> is:
+-- by the time nvim sees the bytes, Cmd+J and Opt+J are the same keypress and no
+-- mapping can tell them apart. So a Cmd+J aimed at something else lands on
+-- `resize -3`, and holding it walked a window from 19 lines down to 4 (measured
+-- 2026-07-31) with nothing to stop it at zero.
+--
+-- The floor is the fix that works regardless of which key sent it. Shrinking
+-- stops at a window that is still usable instead of collapsing to a sliver you
+-- then have to rebuild by hand; growing is never restricted.
+local MIN_H, MIN_W = 4, 12
+
+local function resize_guarded(cmd, amount)
+  local shrinking = cmd:find("%-$") ~= nil
+  if shrinking then
+    local vertical = cmd:find("^vertical") ~= nil
+    local cur = vertical and vim.fn.winwidth(0) or vim.fn.winheight(0)
+    local floor = vertical and MIN_W or MIN_H
+    if cur <= floor then
+      return -- already at the floor: a no-op beats collapsing it further
+    end
+    amount = math.min(amount, cur - floor)
+  end
+  pcall(vim.cmd, cmd .. amount)
+end
+
+-- Sticky resize mode (tmux-style): <leader>r, then hold h/j/k/l as long as you
+-- like. No leader spam — the loop keeps reading keys until you press something
+-- that isn't a resize key, and that key is fed back to nvim so nothing is eaten.
+vim.keymap.set("n", "<leader>r", function()
+  local step = 3
+  local actions = {
+    h = "vertical resize -",
+    l = "vertical resize +",
+    j = "resize -",
+    k = "resize +",
+    H = "vertical resize -",
+    L = "vertical resize +",
+    J = "resize -",
+    K = "resize +",
+  }
+  -- The indicator is a FLOAT, not an echo, and that is not a style choice.
+  --
+  -- Measured 2026-07-31: with nvim_echo the message line was blank for the
+  -- entire loop -- the one thing telling you a sticky mode is active never
+  -- appeared. noice owns msg_show and renders it from a scheduled callback,
+  -- and getcharstr() blocks the main loop, so that callback cannot run until
+  -- after you have already left the mode. Redrawing before the echo does not
+  -- help; the message never reaches the screen at all.
+  --
+  -- A float we own is painted synchronously by the redraw below, so it survives
+  -- the blocking read. focusable=false + enter=false keeps it out of window
+  -- navigation and stops it firing WinEnter at focus-fx.
+  local hint = " -- RESIZE --  h/l width   j/k height   CAPS = 10   = equalize   <Esc> done "
+  local hint_buf = vim.api.nvim_create_buf(false, true)
+  vim.api.nvim_buf_set_lines(hint_buf, 0, -1, false, { hint })
+  local ok_win, hint_win = pcall(vim.api.nvim_open_win, hint_buf, false, {
+    relative = "editor",
+    anchor = "SW",
+    row = vim.o.lines - 1,
+    col = 0,
+    width = math.min(#hint, vim.o.columns),
+    height = 1,
+    style = "minimal",
+    focusable = false,
+    zindex = 250,
+  })
+  if ok_win then
+    vim.wo[hint_win].winhl = "Normal:ModeMsg"
+  end
+
+  local function close_hint()
+    if ok_win and vim.api.nvim_win_is_valid(hint_win) then
+      pcall(vim.api.nvim_win_close, hint_win, true)
+    end
+    if vim.api.nvim_buf_is_valid(hint_buf) then
+      pcall(vim.api.nvim_buf_delete, hint_buf, { force = true })
+    end
+  end
+
+  while true do
+    -- Paint before blocking: a resize repaints the screen, and without this the
+    -- float would only appear after the NEXT keypress.
+    vim.cmd("redraw")
+    local ok, key = pcall(vim.fn.getcharstr)
+    if not ok then
+      break
+    end
+    if key == "\27" or key == "q" then
+      break
+    elseif key == "=" then
+      vim.cmd("wincmd =")
+    elseif actions[key] then
+      -- capitals move in bigger jumps
+      local amount = key:match("%u") and 10 or step
+      resize_guarded(actions[key], amount)
+    else
+      vim.api.nvim_feedkeys(key, "n", false)
+      break
+    end
+  end
+  close_hint()
+  vim.cmd("redraw")
+end, { desc = "Resize mode (h/j/k/l)" })
+
+-- Direct one-shot resizes, no arrow-key reach.
+-- Routed through resize_guarded, not a raw <cmd>resize<cr>: <M-j> is also what
+-- Cmd+J arrives as (see the floor above), so this is the pair most likely to be
+-- pressed by accident.
+vim.keymap.set("n", "<M-h>", function()
+  resize_guarded("vertical resize -", 3)
+end, { desc = "Width -" })
+vim.keymap.set("n", "<M-l>", function()
+  resize_guarded("vertical resize +", 3)
+end, { desc = "Width +" })
+vim.keymap.set("n", "<M-j>", function()
+  resize_guarded("resize -", 3)
+end, { desc = "Height -" })
+vim.keymap.set("n", "<M-k>", function()
+  resize_guarded("resize +", 3)
+end, { desc = "Height +" })

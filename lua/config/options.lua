@@ -3,10 +3,12 @@
 -- Add any additional options here
 vim.opt.clipboard = "unnamedplus"
 
--- How long nvim waits mid-chord to see if more keys are coming. LazyVim's
--- default 300ms is what makes ambiguous leader maps feel laggy; 150ms is still
--- plenty to finish a chord.
-vim.opt.timeoutlen = 150
+-- How long nvim waits mid-chord to see if more keys are coming. 150ms was too
+-- tight: any pause mid-chord (or a burst where the keys land in separate reads)
+-- aborted the sequence and the leader map silently did nothing. The stall this
+-- was originally lowered to dodge is fixed properly in keymaps.lua by deleting
+-- the ambiguous <leader>w prefixes, so a roomy value costs nothing.
+vim.opt.timeoutlen = 400
 
 -- Keep 8 lines of context between the cursor and the top/bottom of the window.
 -- LazyVim's default is 4, which still lets you land close enough to an edge that
