@@ -113,7 +113,28 @@ local anim = {
   -- Brightness never changes, so the guide never approaches the backdrop and the
   -- dim bar cannot occur. That is the POINT of this shape, not a side effect --
   -- do not add a brightness component to it.
+  --
+  -- 2026-08-06: these three are now only the FALLBACK. By default the cycle is
+  -- derived from the colorscheme itself (`cycle_from_theme`), so gday on gruvbox
+  -- cycles gruvbox's own hues instead of the starship trio. The starship colours
+  -- stay here because they are still the right answer when a theme has nothing
+  -- saturated enough to sample (see derive_cycle).
   cycle_colors = { "#2ff5ff", "#aaff00", "#ffc21e" },
+  -- Sample the live colorscheme for the cycle instead of using cycle_colors.
+  -- Set false to pin cycle_colors for every theme.
+  cycle_from_theme = true,
+  -- How many hues in the loop. 3 is the shape everything was tuned against; 4+
+  -- shortens each leg (each leg gets CYCLE_STEPS/n frames).
+  cycle_count = 3,
+  -- A sampled colour is only a candidate above these. Below them a theme's
+  -- greys and muted comment colours get picked and the "cycle" turns into a
+  -- brightness wobble -- which is the one thing this shape must never do.
+  cycle_min_sat = 0.30,
+  cycle_min_val = 0.35,
+  -- Per-colorscheme overrides: cycle_overrides["gruvbox"] = { "#...", ... }.
+  -- Set at runtime with :IndentCycle (persisted) or edited here. Beats
+  -- derivation; loses to nothing except :IndentColor pinning the FIRST entry.
+  cycle_overrides = {},
   -- Milliseconds for one full trip through all three and back to the first.
   cycle_period = 7800,
   -- How many breathe cycles before the guide settles at its resting colour and
@@ -181,7 +202,14 @@ local LIFT_PREFIX = "IndentLadderLift"
 local REST = "IndentLadderRest"
 local resting_hl = nil
 local CYCLE_PREFIX = "IndentLadderCycle"
-local CYCLE_STEPS = 96 -- around the whole loop; 32 per leg on a 3-colour cycle
+-- Steps around the whole loop. This must be >= the number of FRAMES in one
+-- cycle, or the step and the frame beat against each other and the cycle stalls
+-- and jumps: at 96 steps over cycle_period 7800ms a step lands every 81ms while
+-- breathe_fps 20 paints every 50ms, so most frames repainted the same colour and
+-- then lurched. Measured max per-step jump on gruvbox's derived colours: 28/765
+-- at 96 steps, 16 at 192. 7800/50 = 156 frames, so 192 leaves headroom if
+-- breathe_fps or cycle_period is retuned. Keep it above 1000/breathe_fps worth.
+local CYCLE_STEPS = 192
 
 local WHITE = { 255, 255, 255 }
 
@@ -247,6 +275,51 @@ end
 -- these, so the ColorScheme autocmd below drops the key to force a rebuild.
 local ramp_key = nil
 
+-- HSV, used by BOTH the hue cycle's interpolation (below) and the theme
+-- derivation (further down). Defined here because build_cycle needs it.
+local function rgb_to_hsv(c)
+  local r, g, b = c[1] / 255, c[2] / 255, c[3] / 255
+  local mx, mn = math.max(r, g, b), math.min(r, g, b)
+  local d = mx - mn
+  local h = 0
+  if d > 0 then
+    if mx == r then
+      h = ((g - b) / d) % 6
+    elseif mx == g then
+      h = (b - r) / d + 2
+    else
+      h = (r - g) / d + 4
+    end
+    h = h * 60
+  end
+  return h, (mx > 0 and d / mx or 0), mx
+end
+
+local function hsv_to_rgb(h, s, v)
+  local c = v * s
+  local x = c * (1 - math.abs((h / 60) % 2 - 1))
+  local m = v - c
+  local r, g, b = 0, 0, 0
+  local seg = math.floor(h / 60) % 6
+  if seg == 0 then
+    r, g, b = c, x, 0
+  elseif seg == 1 then
+    r, g, b = x, c, 0
+  elseif seg == 2 then
+    r, g, b = 0, c, x
+  elseif seg == 3 then
+    r, g, b = 0, x, c
+  elseif seg == 4 then
+    r, g, b = x, 0, c
+  else
+    r, g, b = c, 0, x
+  end
+  local function q(f)
+    return math.max(0, math.min(255, math.floor((f + m) * 255 + 0.5)))
+  end
+  return { q(r), q(g), q(b) }
+end
+
 local function build_ramp(dim, base)
   local key = table.concat(dim, ",") .. "|" .. table.concat(base, ",")
   if key == ramp_key then
@@ -270,17 +343,69 @@ local function build_cycle(colors)
     return
   end
   local n = #colors
-  local rgb = {}
+  local hsv = {}
   for i, c in ipairs(colors) do
-    rgb[i] = { unpack_rgb(tonumber(c:sub(2), 16)) }
+    local h, s, v = rgb_to_hsv({ unpack_rgb(tonumber(c:sub(2), 16)) })
+    hsv[i] = { h, s, v }
   end
+
+  -- INTERPOLATE THE HUE AROUND THE WHEEL, not the RGB channels.
+  --
+  -- This is why the cyan -> red-orange leg teleported. Two near-complementary
+  -- colours blended in RGB (linear or not) pass through GREY: the midpoint of
+  -- cyan->red is a washed pale nothing, there is no intermediate hue anywhere
+  -- on the leg, so what you see is a crossfade between two colours rather than
+  -- a colour changing. The eye reads a crossfade through grey as a cut.
+  -- Sweeping the hue instead passes cyan -> blue -> magenta -> red, every step
+  -- a real colour. It is also the only interpolation that KEEPS the constant
+  -- brightness this shape depends on -- s and v are carried across unchanged
+  -- when the endpoints share them, which the derived colours always do.
+  --
+  -- Always travel in the increasing-hue direction, so a closed loop goes one
+  -- way around the wheel and the legs sum to exactly 360 degrees. Taking the
+  -- shortest arc per leg independently would reverse direction on one of them
+  -- and the cycle would visibly rock back and forth.
+
+  -- Steps are allocated to each leg by its LENGTH, not evenly.
+  --
+  -- Giving every leg CYCLE_STEPS/n was the other half of the "slideshow on
+  -- gruvbox, smooth on habamax" report: a 3-colour loop always has one long leg
+  -- and two short ones, and with an even split the long leg has to cover ~3x
+  -- the colour distance in the same number of frames. So the cycle crawls, then
+  -- lurches. Themes whose sampled colours happen to sit close together (habamax)
+  -- never showed it; saturated themes always did. Distance-proportional
+  -- allocation makes the perceived SPEED constant on every leg -- measured max
+  -- per-step jump on gruvbox 16 -> 12, starship 35 -> 21. In hue terms the leg
+  -- length IS the arc it has to cover, so this now literally means "degrees per
+  -- frame is the same on every leg".
+  local legs, total = {}, 0
+  for i = 1, n do
+    local d = (hsv[i % n + 1][1] - hsv[i][1]) % 360
+    if d < 1e-6 then
+      d = 360 / n -- identical hues: give the leg a share rather than stalling
+    end
+    legs[i] = d
+    total = total + d
+  end
+
   for i = 0, CYCLE_STEPS - 1 do
-    -- Position around a CLOSED loop: the last colour blends back into the
+    -- Arc travelled around a CLOSED loop: the last colour sweeps back into the
     -- first, so the cycle has no seam and no direction change.
-    local pos = i / CYCLE_STEPS * n
-    local a = math.floor(pos) % n
-    local c1, c2 = rgb[a + 1], rgb[(a + 1) % n + 1]
-    pcall(vim.api.nvim_set_hl, 0, CYCLE_PREFIX .. i, { fg = hex(blend(c1, c2, pos - math.floor(pos))) })
+    local t = i / CYCLE_STEPS * total
+    local leg, frac, acc = n, 1, 0
+    for k = 1, n do
+      if t <= acc + legs[k] or k == n then
+        leg = k
+        frac = math.min(1, (t - acc) / math.max(legs[k], 1e-6))
+        break
+      end
+      acc = acc + legs[k]
+    end
+    local a, b = hsv[leg], hsv[leg % n + 1]
+    local h = (a[1] + legs[leg] * frac) % 360
+    local s = a[2] + (b[2] - a[2]) * frac
+    local v = a[3] + (b[3] - a[3]) * frac
+    pcall(vim.api.nvim_set_hl, 0, CYCLE_PREFIX .. i, { fg = hex(hsv_to_rgb(h, s, v)) })
   end
   cycle_key = key
 end
@@ -302,6 +427,166 @@ local function group_fg(name)
     return { unpack_rgb(hl.fg) }
   end
   return nil
+end
+
+-- ---- theme-derived hue cycle (2026-08-06) -----------------------------------
+--
+-- The cycle used to be three hardcoded starship colours. On a warm theme like
+-- gruvbox that meant day mode lit up in colours the rest of the screen does not
+-- contain. These sample the colorscheme instead.
+--
+-- The whole point of the cycle is CONSTANT BRIGHTNESS -- that immunity is why
+-- the dim-bar failure mode is structurally impossible under transparency. So
+-- sampled colours are taken for their HUE only: saturation and value are
+-- flattened onto the anchor's before the ramp is built. Never let a sampled
+-- value through unnormalised.
+
+-- Sampled in this order; treesitter captures first because they are what the
+-- buffer actually renders, with the classic groups as the fallback for themes
+-- that only define those. Deliberately NOT sampling Comment/LineNr/NonText --
+-- those are the theme's greys and would fail the saturation gate anyway.
+local CYCLE_SOURCES = {
+  "@function",
+  "@keyword",
+  "@string",
+  "@constant",
+  "@type",
+  "@variable.member",
+  "@number",
+  "@operator",
+  "Function",
+  "Keyword",
+  "String",
+  "Type",
+  "Constant",
+  "Identifier",
+  "Special",
+  "Statement",
+}
+
+local function hue_dist(a, b)
+  local d = math.abs(a - b) % 360
+  return d > 180 and 360 - d or d
+end
+
+-- Pick `count` maximally hue-separated colours out of the theme, anchored at
+-- `anchor` (the guide's resting colour, so rest == cycle start and there is no
+-- jump into the cycle -- the same invariant cycle_colors[1] used to carry).
+-- Returns nil when the theme has fewer than `count` usable hues, which is the
+-- signal to fall back to anim.cycle_colors.
+local function derive_cycle(anchor, count)
+  count = math.max(2, count or 3)
+  local ah = rgb_to_hsv(anchor)
+
+  local seen, cands = {}, {}
+  local sum_s, sum_v, n = 0, 0, 0
+  for _, g in ipairs(CYCLE_SOURCES) do
+    local c = group_fg(g)
+    if c then
+      local h, s, v = rgb_to_hsv(c)
+      if s >= (anim.cycle_min_sat or 0.30) and v >= (anim.cycle_min_val or 0.35) then
+        sum_s, sum_v, n = sum_s + s, sum_v + v, n + 1
+        local bucket = math.floor(h / 12) -- collapse near-identical hues
+        if not seen[bucket] then
+          seen[bucket] = true
+          cands[#cands + 1] = h
+        end
+      end
+    end
+  end
+  if #cands < count - 1 or n == 0 then
+    return nil
+  end
+
+  -- Saturation and value come from the THEME's own average, not from the
+  -- anchor. Taking them from the anchor was the first cut and it produced
+  -- #00ffff / #ff1b00 on gruvbox -- neon hues that share nothing with the rest
+  -- of the screen, which is the exact complaint this change exists to fix.
+  -- The floors keep the guide reading as a highlight (it must sit above body
+  -- text) without letting it go fluorescent.
+  local as = math.max(0.45, math.min(0.92, sum_s / n))
+  local av = math.max(0.72, math.min(0.98, sum_v / n * 1.15))
+
+  -- Greedy farthest-point: each pick is the candidate furthest (in hue) from
+  -- everything already chosen. Three colours a few degrees apart would make the
+  -- cycle read as static, which is worse than the hardcoded trio.
+  local picked = { ah }
+  while #picked < count and #cands > 0 do
+    local best, best_i, best_d = nil, nil, -1
+    for i, h in ipairs(cands) do
+      local d = math.huge
+      for _, p in ipairs(picked) do
+        d = math.min(d, hue_dist(h, p))
+      end
+      if d > best_d then
+        best, best_i, best_d = h, i, d
+      end
+    end
+    if best_d < 25 then
+      break -- nothing left that is visibly a different hue
+    end
+    picked[#picked + 1] = best
+    table.remove(cands, best_i)
+  end
+  if #picked < count then
+    return nil
+  end
+
+  -- Walk the wheel in one direction from the anchor, so the loop has no
+  -- direction change. (One long leg is unavoidable on any closed 3-colour loop;
+  -- do not try to fix that by reordering.)
+  local rest = {}
+  for i = 2, #picked do
+    rest[#rest + 1] = picked[i]
+  end
+  table.sort(rest, function(a, b)
+    return (a - ah) % 360 < (b - ah) % 360
+  end)
+
+  local out = { hex(hsv_to_rgb(ah, as, av)) }
+  for _, h in ipairs(rest) do
+    out[#out + 1] = hex(hsv_to_rgb(h, as, av))
+  end
+  return out
+end
+
+-- Order of authority for the cycle:
+--   1. a per-colorscheme override (:IndentCycle / anim.cycle_overrides)
+--   2. colours derived from the live colorscheme  <- the default
+--   3. anim.cycle_colors, the starship trio, as the fallback
+-- An explicit :IndentColor always wins entry 1 whichever path runs, because
+-- entry 1 is ALSO the guide's resting colour (rest == cycle start, so the fill
+-- lands on the colour the cycle returns to and there is no jump into it).
+--
+-- `explicit` is vim.g.indent_scope_color or nil; `theme_base` is the raw
+-- config.hl colour. theme_base is only ever used as a HUE here -- on gruvbox it
+-- is #5f6c1f dark olive, and resting the guide on that raw is the historical
+-- "fills in and stays dim" bug. derive_cycle lifts it.
+local function resolve_cycle(explicit, theme_base)
+  local function with_explicit(list)
+    local out = {}
+    for i, c in ipairs(list) do
+      out[i] = (i == 1 and explicit) or c
+    end
+    return out
+  end
+  local over = anim.cycle_overrides and anim.cycle_overrides[vim.g.colors_name or "default"]
+  if type(over) == "table" and #over > 1 then
+    return with_explicit(over)
+  end
+  if anim.cycle_from_theme ~= false and theme_base then
+    local anchor = theme_base
+    if explicit then
+      anchor = { unpack_rgb(tonumber(explicit:sub(2), 16)) }
+    end
+    local derived = derive_cycle(anchor, anim.cycle_count)
+    if derived then
+      -- derive_cycle lifts the anchor's saturation/value; an explicit
+      -- :IndentColor is a deliberate choice and must be returned verbatim.
+      return with_explicit(derived)
+    end
+  end
+  return with_explicit(anim.cycle_colors or {})
 end
 
 local ns = vim.api.nvim_create_namespace("indent_ladder")
@@ -732,13 +1017,25 @@ local function animate(buf, col, from, to, origin)
   -- owner, persisted in vim.g.indent_scope_color), then the first cycle colour
   -- (his own, and the one the cycle returns to, so rest == cycle start), and the
   -- theme group only as a last resort when neither is configured.
+  --
+  -- 2026-08-06: the cycle (and therefore the resting colour) is now resolved
+  -- per COLORSCHEME -- see resolve_cycle. The order of authority is unchanged;
+  -- what changed is that the middle rung derives from the live theme instead of
+  -- always being the hardcoded starship trio.
   local base = group_fg(config.hl)
-  local chosen = vim.g.indent_scope_color
-    or (type(anim.cycle_colors) == "table" and anim.cycle_colors[1])
+  local explicit = vim.g.indent_scope_color
+  if type(explicit) ~= "string" or not explicit:match("^#%x%x%x%x%x%x$") then
+    explicit = nil
+  end
+  local cycle = resolve_cycle(explicit, base)
+  local chosen = cycle[1]
   if type(chosen) == "string" and chosen:match("^#%x%x%x%x%x%x$") then
     base = { unpack_rgb(tonumber(chosen:sub(2), 16)) }
   end
-  local dim = group_fg("SnacksIndent") or group_fg("NonText")
+  -- Under transparency this is overwritten with TERMINAL_BG a few lines down, so
+  -- don't pay for the two highlight lookups -- which on his config (bg_transparency
+  -- pinned to 100) is EVERY animation, in both gday and gnight.
+  local dim = not transparent and (group_fg("SnacksIndent") or group_fg("NonText")) or nil
 
   -- WHAT "FADED TO NOTHING" MEANS UNDER TRANSPARENCY (fixed 2026-08-01).
   --
@@ -776,12 +1073,9 @@ local function animate(buf, col, from, to, origin)
   end
   -- Day mode (transparent) cycles hue; night mode (opaque) keeps the tonal
   -- fade-to-nothing. Nothing else in the animation differs between them.
-  local cycling = transparent
-    and anim.breathe
-    and type(anim.cycle_colors) == "table"
-    and #anim.cycle_colors > 1
+  local cycling = transparent and anim.breathe and #cycle > 1
   if cycling then
-    build_cycle(anim.cycle_colors)
+    build_cycle(cycle)
   end
   local elig = {} -- per-animation row-eligibility memo (see draw)
   local trail = math.max(1, anim.trail)
@@ -935,7 +1229,15 @@ local function animate(buf, col, from, to, origin)
       --
       -- Only under transparency. Opaque windows already work: the theme paints
       -- SnacksIndent at exactly Normal.bg, so level 0 is genuinely invisible.
-      if transparent then
+      --
+      -- 2026-08-06: `and not cycling`. While the hue cycle runs, `level` is
+      -- pinned to 1 (brightness is constant -- that IS the shape), so `faded`
+      -- is always exactly `base` and `at_backdrop` can never be true. This whole
+      -- block was three linear-light blends per frame, forever, to reach a
+      -- branch that cannot be taken. It stays reachable for the transparent
+      -- NON-cycling case (cycle of one colour, or breathe off), which is the
+      -- configuration it was written for.
+      if transparent and not cycling then
         local faded = level <= 1 and blend(dim, base, level) or nil
         local at_backdrop = faded ~= nil
           and math.abs(faded[1] - dim[1]) <= CLEAR_EPSILON
@@ -981,7 +1283,15 @@ local function animate(buf, col, from, to, origin)
         elig = {}
         anim_dirty = false
       end
-      pcall(vim.api.nvim_set_hl, 0, GLOW, { fg = glow })
+      -- Skipped while cycling: `glow` is blend(dim, base, 1) == base every frame
+      -- there, and lit_group is a CYCLE_* group, so this was rewriting GLOW to
+      -- the identical colour ~192 times per cycle for a group nothing was using.
+      -- GLOW is still the fill's group (cycle_step is nil until the fill ends)
+      -- and still the settle colour at line ~1155, so it must keep being written
+      -- on every non-cycling frame.
+      if not cycle_step then
+        pcall(vim.api.nvim_set_hl, 0, GLOW, { fg = glow })
+      end
 
       -- THE BREATHE'S FRAMES WERE NEVER REACHING THE SCREEN (2026-08-02). This
       -- is the bug behind "it lights up once and then it is just static".
@@ -1238,6 +1548,22 @@ local function note_scroll()
     end)
   )
 end
+
+-- scroll_timer is created lazily and reused for the life of the process, so it
+-- is one handle rather than a leak -- but it is still an OPEN handle at exit,
+-- and a handle that outlives the loop is exactly what makes uv_loop_close spin.
+-- Give it, and the animation timer, an explicit teardown.
+vim.api.nvim_create_autocmd("VimLeavePre", {
+  group = vim.api.nvim_create_augroup("IndentLadderTeardown", { clear = true }),
+  callback = function()
+    stop_timer()
+    if scroll_timer and not scroll_timer:is_closing() then
+      scroll_timer:stop()
+      scroll_timer:close()
+    end
+    scroll_timer = nil
+  end,
+})
 
 local group = vim.api.nvim_create_augroup("IndentLadder", { clear = true })
 vim.api.nvim_create_autocmd(
@@ -1502,6 +1828,96 @@ do
     end
   end
 end
+
+-- ---- :IndentCycle ------------------------------------------------------------
+--
+-- Override the day-mode hue cycle FOR THE CURRENT COLORSCHEME. Without one the
+-- cycle is derived from the theme (resolve_cycle), which is what you want
+-- almost always -- this exists for the theme where the derivation picks hues
+-- you do not like.
+--
+--   :IndentCycle                       show what the cycle resolves to right now
+--   :IndentCycle #2ff5ff #aaff00 #ffc21e   pin these for this theme (persisted)
+--   :IndentCycle!                      drop the override, back to derived
+--
+-- From Lua: require nothing -- set anim.cycle_overrides in this file, or call
+--   vim.fn.IndentCycleSet({ "#...", "#..." })     -- current theme
+-- Entry 1 is overridden by :IndentColor if one is set; the rest are used as-is.
+local CYCLE_FILE = vim.fn.stdpath("data") .. "/indent-cycle-overrides.json"
+
+local function save_cycles()
+  local ok, txt = pcall(vim.json.encode, anim.cycle_overrides or {})
+  if ok then
+    pcall(vim.fn.writefile, { txt }, CYCLE_FILE)
+  end
+end
+
+-- The public override hook. `colors` is a list of #rrggbb (2+ entries), or nil
+-- to clear. `theme` defaults to the live colorscheme.
+local function set_cycle(colors, theme)
+  theme = theme or vim.g.colors_name or "default"
+  anim.cycle_overrides = anim.cycle_overrides or {}
+  anim.cycle_overrides[theme] = colors
+  save_cycles()
+  invalidate_ramp()
+  refresh_guide()
+end
+
+_G.IndentCycleSet = set_cycle
+
+do
+  local ok, lines = pcall(vim.fn.readfile, CYCLE_FILE)
+  if ok and type(lines) == "table" and lines[1] then
+    local ok2, tbl = pcall(vim.json.decode, lines[1])
+    if ok2 and type(tbl) == "table" then
+      anim.cycle_overrides = anim.cycle_overrides or {}
+      for k, v in pairs(tbl) do
+        anim.cycle_overrides[k] = v
+      end
+    end
+  end
+end
+
+vim.api.nvim_create_user_command("IndentCycle", function(opts)
+  local theme = vim.g.colors_name or "default"
+  if opts.bang then
+    set_cycle(nil, theme)
+    vim.notify("IndentCycle: override cleared for " .. theme .. ", back to theme-derived", vim.log.levels.INFO)
+    return
+  end
+  local args = vim.split(vim.trim(opts.args), "%s+", { trimempty = true })
+  if #args == 0 then
+    local base = group_fg(config.hl)
+    local explicit = vim.g.indent_scope_color
+    if type(explicit) ~= "string" or not explicit:match("^#%x%x%x%x%x%x$") then
+      explicit = nil
+    end
+    local resolved = resolve_cycle(explicit, base)
+    local src = (anim.cycle_overrides or {})[theme] and "override"
+      or (anim.cycle_from_theme ~= false and "derived from theme" or "anim.cycle_colors")
+    vim.notify(
+      "IndentCycle [" .. theme .. "] (" .. src .. "): " .. table.concat(resolved, "  "),
+      vim.log.levels.INFO
+    )
+    return
+  end
+  for _, a in ipairs(args) do
+    if not a:match("^#%x%x%x%x%x%x$") then
+      vim.notify("IndentCycle: not a #rrggbb -- " .. a, vim.log.levels.ERROR)
+      return
+    end
+  end
+  if #args < 2 then
+    vim.notify("IndentCycle: need at least 2 colours (a 1-colour cycle is static)", vim.log.levels.ERROR)
+    return
+  end
+  set_cycle(args, theme)
+  vim.notify("IndentCycle [" .. theme .. "]: " .. table.concat(args, "  "), vim.log.levels.INFO)
+end, {
+  nargs = "*",
+  bang = true,
+  desc = "Override the day-mode indent hue cycle for the current colorscheme (! to clear)",
+})
 
 -- :IndentLadderDebug -- why does the lit guide end where it ends?
 --

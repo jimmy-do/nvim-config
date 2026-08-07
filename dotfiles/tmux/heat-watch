@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# heat-watch — notice the SLOW heater: something that has been burning CPU for
-# hours without ever tripping a temperature alarm.
+# heat-watch — notice the SLOW heater: something that is burning CPU right now
+# and has been for a long time, without ever tripping a temperature alarm.
 #
 # WHY NOT A TEMP THRESHOLD: the case this exists for was an orphaned process
 # from an earlier session that ran ~8 hours and topped out around 150F. That
@@ -12,40 +12,82 @@
 # whatever the thermometer says. Temperature is used only as corroboration in
 # the notification text, never as the gate.
 #
+# WHY BURN IS A DELTA, NOT A LIFETIME AVERAGE. This used to score processes on
+# cputime/elapsed since launch. That measures what a process has averaged over
+# its whole life, which is the wrong question in both directions:
+#
+#   - A long-lived editor that idled for six hours and started pinning a core
+#     three minutes ago has a minuscule lifetime average. It was INVISIBLE.
+#   - A process that burned hard early and has been idle since keeps a high
+#     lifetime average forever, and got nagged at 15m/1h/4h/12h about work it
+#     finished hours ago.
+#
+# The orphan case only worked because there, burn and lifetime coincide. So burn
+# is now measured between consecutive runs -- cputime delta over elapsed delta --
+# which is the burn happening NOW. Sustained-ness is tracked separately, as the
+# elapsed timestamp at which the current burn began (`bs` in the state file).
+#
+# The lifetime average is still used for exactly one thing: when a burn is first
+# observed, it decides whether that burn started just now or has been going since
+# launch. Without that, a hog already running when heat-watch first sees it would
+# restart its 15-minute clock from zero -- which is precisely the 8-hour-orphan
+# case this script exists for.
+#
 # Called by temp-probe (already backgrounded off the status bar's critical
-# path), with the current CPU temp in F as $1. Writes the current offender to
-# $TMPDIR/tmux-hog for the tmux segment, and fires a macOS notification on an
-# escalating schedule so a long-lived hog nags rather than telling you once.
+# path, on a ~10s tick), with the current CPU temp in F as $1. Writes the worst
+# current offender to $TMPDIR/tmux-hog for the tmux segment, and fires a macOS
+# notification on an escalating schedule so a long-lived hog nags rather than
+# telling you once.
 set -u
 
 cpu_f="${1:-0}"
 
 hog_file="${TMPDIR:-/tmp}/tmux-hog"
 state="${TMPDIR:-/tmp}/tmux-heat-state"
+# PIDs listed here (one per line) are never notified about -- for a render or a
+# build you have deliberately left running and do not want laddered at. Pruned
+# to live PIDs on every run, so an entry dies with its process and can never be
+# inherited by a recycled PID.
+ignore="${TMPDIR:-/tmp}/tmux-hog-ignore"
 
-# A process qualifies at 0.40 average cores held since launch. WindowServer
-# idles around 0.15 over days, so this sits clear of normal desktop noise while
-# still catching a single-threaded test loop (which pins ~1.0).
-# All three are env-overridable so the alert path can be exercised on demand
-# (HOG_MINS=0 TIERS=0 heat-watch) instead of only after a real 15-minute burn.
+# A process qualifies at 0.40 cores held. WindowServer idles around 0.15, so
+# this sits clear of normal desktop noise while still catching a single-threaded
+# test loop (which pins ~1.0).
+# All of these are env-overridable so the alert path can be exercised on demand
+# instead of only after a real 15-minute burn -- but note that a delta needs two
+# runs, so testing means calling heat-watch TWICE (see HEAT-HANDOFF.md).
 HOG_BURN=${HOG_BURN:-0.40}
-# ...and only after 15 minutes. Below that it is a build, a test run, or a video
-# export -- work you started and are waiting on, not something that got away.
+# ...and only after 15 minutes of sustained burn. Below that it is a build, a
+# test run, or a video export -- work you started and are waiting on, not
+# something that got away.
 HOG_MINS=${HOG_MINS:-15}
 # Ages (minutes) at which a still-running hog re-notifies. Escalating rather
 # than repeating: it tells you at 15m, again at 1h, then 4h and 12h, so an
-# ignored banner does not become a silent one.
+# ignored banner does not become a silent one. Deliberately STOPS after 12h --
+# by then it is something you have knowingly left running, and a banner every
+# 12h forever is just noise you would learn to dismiss.
 TIERS=${TIERS:-"15 60 240 720"}
+# Most banners to fire in a single run. Several hogs crossing a tier on the same
+# tick should not produce a stack of notifications.
+MAX_NOTIFY=${MAX_NOTIFY:-3}
 
-now=$(date +%s)
+[ -f "$state" ] || : > "$state" 2>/dev/null
+[ -f "$ignore" ] || : > "$ignore" 2>/dev/null
 
-# --- find the worst sustained burner ---------------------------------------
-# Same burn = cputime/elapsed metric as the `hogs` command. System daemons are
-# excluded by path: they legitimately accumulate CPU forever and are not
-# something the user would kill anyway. Everything the user can actually
-# launch -- and therefore accidentally orphan -- lives outside these prefixes.
-read -r hog_pid hog_burn hog_mins hog_name <<EOF
-$(ps -axo pid=,ppid=,time=,etime=,comm= | awk -v minburn="$HOG_BURN" -v minmins="$HOG_MINS" '
+snap="${TMPDIR:-/tmp}/tmux-heat-snap.$$"
+trap 'rm -f "$snap" "$state.tmp.$$" "$ignore.tmp.$$" "$hog_file.tmp.$$" 2>/dev/null' EXIT
+ps -axo pid=,time=,etime=,comm= > "$snap" 2>/dev/null || exit 0
+
+# --- score every process against the previous tick --------------------------
+# System daemons are excluded by path: they legitimately accumulate CPU forever
+# and are not something the user would kill anyway. Everything the user can
+# actually launch -- and therefore accidentally orphan -- lives outside these
+# prefixes.
+#
+# Three files in, in this order: state (previous tick), ignore list, ps snapshot.
+out=$(awk -v minburn="$HOG_BURN" -v minmins="$HOG_MINS" -v tiers="$TIERS" \
+          -v statefile="$state.tmp.$$" -v ignfile="$ignore.tmp.$$" \
+          -v f_state="$state" -v f_ign="$ignore" '
   function secs(t,   d, p, n, s) {
     d = 0
     if (t ~ /-/) { split(t, p, "-"); d = p[1]; t = p[2] }
@@ -54,68 +96,129 @@ $(ps -axo pid=,ppid=,time=,etime=,comm= | awk -v minburn="$HOG_BURN" -v minmins=
     else if (n == 2) return d*86400 + s[1]*60 + s[2]
     else             return d*86400 + s[1]
   }
-  {
-    pid = $1; ppid = $2; cput = $3; el = $4
-    cmd = ""
-    for (i = 5; i <= NF; i++) cmd = cmd (i > 5 ? " " : "") $i
-    if (cmd ~ /^\/System\//)      next
-    if (cmd ~ /^\/usr\/libexec\//) next
-    if (cmd ~ /^\/usr\/sbin\//)   next
-    if (cmd ~ /^\/usr\/bin\//)    next
-    if (cmd ~ /^\/Library\/Apple\//) next
-    e = secs(el)
-    if (e <= 0) next
-    burn = secs(cput) / e
-    mins = e / 60
-    if (burn < minburn || mins < minmins) next
-    if (burn > best) { best = burn; bp = pid; bm = mins; bc = cmd }
-  }
-  END {
-    if (!bp) exit
-    # Bare basename: the bar has ~15 columns for this, not a full argv.
-    n = split(bc, parts, "/")
-    printf "%s %.2f %d %s\n", bp, best, bm, parts[n]
-  }
-')
-EOF
 
-if [ -z "${hog_pid:-}" ]; then
-  # Nothing qualifies -- clear the bar segment and forget prior state, so the
-  # next hog starts its escalation ladder from the bottom.
-  rm -f "$hog_file" "$state" 2>/dev/null
-  exit 0
+  # state: pid elapsed cputime burn_since tier
+  # burn_since is elapsed-seconds at which the current burn began, or -1 for
+  # "not burning". 0 is meaningful and distinct: burning since launch.
+  FILENAME == f_state { p_el[$1] = $2; p_cp[$1] = $3; p_bs[$1] = $4; p_ti[$1] = $5; next }
+  FILENAME == f_ign   { if ($1 != "") ign[$1] = 1; next }
+
+  {
+    pid = $1; cput = secs($2); el = secs($3)
+    cmd = ""
+    for (i = 4; i <= NF; i++) cmd = cmd (i > 4 ? " " : "") $i
+    if (cmd ~ /^\/System\//)         next
+    if (cmd ~ /^\/usr\/libexec\//)   next
+    if (cmd ~ /^\/usr\/sbin\//)      next
+    if (cmd ~ /^\/usr\/bin\//)       next
+    if (cmd ~ /^\/Library\/Apple\//) next
+    if (el <= 0) next
+
+    live[pid] = 1
+
+    # PID reuse guard: elapsed only ever grows for a given process. A pid whose
+    # elapsed went BACKWARDS is a different process wearing the same number, so
+    # its history is discarded rather than blended into a bogus delta.
+    known = (pid in p_el) && (el >= p_el[pid])
+
+    # tier -1 = never notified, so that tier 0 is a usable value and the
+    # documented TIERS=0 test override actually fires. With 0 as the sentinel it
+    # could not: a tier has to EXCEED the last one fired.
+    bs = -1; tier = -1; burn = -1
+    if (known) {
+      dt = el - p_el[pid]
+      bs = p_bs[pid] + 0; tier = p_ti[pid] + 0
+      # dt == 0 means two runs inside the same second: no new information, so
+      # carry the previous verdict rather than dividing by zero.
+      if (dt > 0) burn = (cput - p_cp[pid]) / dt
+      else        burn = (bs >= 0) ? minburn : -1
+    }
+
+    if (burn >= minburn) {
+      if (bs < 0) {
+        # Burn just became visible. Was it already running before we looked?
+        # A lifetime average at or above the threshold says yes -- credit the
+        # burn to launch. Otherwise it started on this tick.
+        bs = (cput / el >= minburn) ? 0 : el
+      }
+    } else if (burn >= 0) {
+      bs = -1; tier = -1       # measured, and not burning: reset the ladder
+    }
+    # burn < 0 (first sighting, no delta yet) leaves bs/tier untouched.
+
+    # Persist anything with meaningful CPU or an in-progress burn. Idle
+    # processes are dropped, which keeps the file small; one of them starting to
+    # burn simply gets its baseline on the next tick. Rewritten from the live ps
+    # every run, so dead PIDs fall out on their own -- no pruning pass, no
+    # unbounded growth, no stale entry waiting for a recycled PID.
+    if (cput > 0 || bs >= 0) printf "%s %d %d %d %d\n", pid, el, cput, bs, tier > statefile
+
+    if (bs < 0) next
+    mins = int((el - bs) / 60)
+    if (mins < minmins) next
+
+    n = split(cmd, parts, "/")
+    name = parts[n]
+
+    # Worst CURRENT burner drives the bar segment.
+    if (burn > worst_b) { worst_b = burn; worst_n = name; worst_m = mins }
+
+    if (pid in ign) next
+
+    # Fire the highest tier this process has aged past but not been told about.
+    # `found` rather than a truthy `due`, for the same reason tier starts at -1:
+    # 0 is a legitimate tier value and must not read as "nothing due".
+    due = -1; found = 0
+    nt = split(tiers, tl, " ")
+    for (i = 1; i <= nt; i++) {
+      if (mins >= tl[i] + 0 && tl[i] + 0 > tier) { due = tl[i] + 0; found = 1 }
+    }
+    if (found) printf "HOG %s %.2f %d %d %s\n", pid, burn, mins, due, name
+  }
+
+  END {
+    # Ignore list rewritten to live PIDs only, same self-pruning contract.
+    for (p in ign) if (p in live) print p > ignfile
+    if (worst_n != "") printf "WORST %s %.2f %d\n", worst_n, worst_b, worst_m
+  }
+' "$state" "$ignore" "$snap" 2>/dev/null)
+
+mv -f "$state.tmp.$$" "$state" 2>/dev/null || : > "$state" 2>/dev/null
+[ -f "$ignore.tmp.$$" ] && mv -f "$ignore.tmp.$$" "$ignore" 2>/dev/null || : > "$ignore" 2>/dev/null
+
+# --- bar segment ------------------------------------------------------------
+worst=$(printf '%s\n' "$out" | awk '$1 == "WORST" { $1 = ""; sub(/^ /, ""); print; exit }')
+if [ -z "$worst" ]; then
+  rm -f "$hog_file" 2>/dev/null
+else
+  printf '%s\n' "$worst" > "$hog_file.tmp.$$" 2>/dev/null \
+    && mv -f "$hog_file.tmp.$$" "$hog_file" 2>/dev/null
 fi
 
-printf '%s %s %s\n' "$hog_name" "$hog_burn" "$hog_mins" > "$hog_file.tmp.$$" 2>/dev/null \
-  && mv -f "$hog_file.tmp.$$" "$hog_file" 2>/dev/null
-rm -f "$hog_file.tmp.$$" 2>/dev/null
-
-# --- escalating notification -----------------------------------------------
-# State is one line: "<pid> <highest tier already notified>". Keyed on PID so a
-# different runaway starts fresh, and so a restarted process is treated as new.
-last_pid=''; last_tier=0
-[ -f "$state" ] && read -r last_pid last_tier < "$state" 2>/dev/null
-[ "$last_pid" = "$hog_pid" ] || last_tier=0
-
-due=0
-for t in $TIERS; do
-  # Fire the highest tier this process has aged past but not yet been told about.
-  [ "$hog_mins" -ge "$t" ] && [ "$t" -gt "${last_tier:-0}" ] && due=$t
-done
-
-if [ "$due" -gt 0 ]; then
-  if [ "$hog_mins" -ge 60 ]; then
-    age=$(awk -v m="$hog_mins" 'BEGIN{ printf "%.1fh", m/60 }')
+# --- escalating notifications ----------------------------------------------
+# Every hog carries its own tier in the state file, so a second runaway can no
+# longer reset the first one's ladder and re-nag you from 15m.
+printf '%s\n' "$out" | awk '$1 == "HOG"' | head -n "$MAX_NOTIFY" | while read -r _ pid burn mins due name; do
+  [ -n "${pid:-}" ] || continue
+  if [ "$mins" -ge 60 ]; then
+    age=$(awk -v m="$mins" 'BEGIN{ printf "%.1fh", m/60 }')
   else
-    age="${hog_mins}m"
+    age="${mins}m"
   fi
   # Temp rides along as corroboration only -- the alert already fired on time.
-  msg="${hog_name} · ${hog_burn} cores · ${age}"
+  msg="${name} · ${burn} cores · ${age}"
   [ "$cpu_f" -gt 0 ] 2>/dev/null && msg="$msg · ${cpu_f}°F"
   # Quoting: the process name is interpolated into AppleScript source, so any
   # embedded quote would break the script. Strip them rather than escape.
   safe=$(printf '%s' "$msg" | tr -d '"\\')
-  osascript -e "display notification \"$safe\" with title \"still burning\" subtitle \"pid $hog_pid — hogs to inspect\"" \
+  osascript -e "display notification \"$safe\" with title \"still burning\" subtitle \"pid $pid — hogs to inspect\"" \
     >/dev/null 2>&1
-  printf '%s %s\n' "$hog_pid" "$due" > "$state" 2>/dev/null
-fi
+  # The tier written to state is the one we just fired, so this hog resumes from
+  # here rather than repeating. Done as a targeted rewrite because the awk pass
+  # above had already finished by the time the banner went out.
+  awk -v p="$pid" -v d="$due" '$1 == p { $5 = d } { print }' "$state" > "$state.n.$$" 2>/dev/null \
+    && mv -f "$state.n.$$" "$state" 2>/dev/null
+  rm -f "$state.n.$$" 2>/dev/null
+done
+
+exit 0

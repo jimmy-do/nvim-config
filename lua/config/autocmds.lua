@@ -64,3 +64,7 @@ vim.api.nvim_create_autocmd("ModeChanged", {
     pcall(vim.cmd, 'normal! gv"+y`>')
   end,
 })
+
+-- Bound the exit path: `:qa` once left an nvim spinning at 100% CPU for 36
+-- minutes inside libuv's loop teardown. See lua/config/exit_watchdog.lua.
+require("config.exit_watchdog")
