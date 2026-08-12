@@ -33,6 +33,20 @@ hue_for() {
 }
 
 tmux list-sessions -F '#{session_name}' 2>/dev/null | while IFS= read -r name; do
+  # Precomputed uppercase session name for the status-left pill.
+  #
+  # status-left used to hold `#(echo '#{session_name}' | tr a-z A-Z)`, which forks
+  # a shell AND tr on every status refresh, forever, to uppercase a string that
+  # changes only when a session is created or renamed. Both of those already run
+  # this script (see the session-created / session-renamed hooks in tmux.conf), so
+  # the value is stamped once here and simply interpolated by the status line.
+  #
+  # Stamped BEFORE the pin/no-change early-exits below on purpose: a pinned hue or
+  # an unchanged hue must not skip the rename that brought us here.
+  upper=$(printf %s "$name" | tr 'a-z' 'A-Z')
+  [ "$(tmux show-options -t "$name" -qv @session_upper)" = "$upper" ] || \
+    tmux set-option -t "$name" @session_upper "$upper"
+
   [ -n "$(tmux show-options -t "$name" -qv @session_hue_pin)" ] && continue
   want=$(hue_for "$name")
   cur=$(tmux show-options -t "$name" -qv @session_hue)

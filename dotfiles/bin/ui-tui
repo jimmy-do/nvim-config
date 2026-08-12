@@ -3,8 +3,9 @@
 
     ui-tui                 no args, q quits
 
-Left: the nine surfaces (tmux-bar, tmux-color, tmux-chip, tmux-pane,
-tmux-pane-lines, tmux-copy, cc-fg, cc-fg-dim, cc-em) with what each is set
+Left: the eleven surfaces (tmux-bar, tmux-color, tmux-chip, tmux-pane,
+tmux-pane-lines, tmux-copy, tmux-float, cc-fg, cc-fg-dim, cc-code, cc-bold)
+with what each is set
 to RIGHT NOW. Right: the palette for the selected surface -- scraped from
 that command's own bare listing, so each surface offers exactly what its
 command offers (cc-fg's luminance band, tmux's saturated set, all of it).
@@ -43,11 +44,13 @@ SURFACES = [
     ("tmux-pane",       "pane title pills"),
     ("tmux-pane-lines", "pane dividers"),
     ("tmux-copy",       "copy mode accent"),
+    ("tmux-float",      "the floax scratch window's border"),
     ("cc-fg",           "claude body text, active pane"),
     ("cc-fg-dim",       "claude body text, inactive panes"),
-    ("cc-em",           "claude emphasis (ANSI blue)"),
+    ("cc-code",         "claude inline `code` (also patches the binary)"),
+    ("cc-bold",         "claude **bold** (ghostty bold-color)"),
 ]
-TMUX_SET = {s for s, _ in SURFACES[:6]}
+TMUX_SET = {s for s, _ in SURFACES[:7]}
 
 ANSI = re.compile(r"\x1b\[[0-9;]*m")
 # \W* skips any leading "you are here" marker (*, the dot, whitespace)

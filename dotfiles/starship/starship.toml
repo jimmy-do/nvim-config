@@ -203,6 +203,16 @@ pill_viridian        = '#19ff79'   # Y 0.73  deep green, sat 0.90.           14.
 pill_honey           = '#ffd919'   # Y 0.71  amber_glow with more lift.      14.51 / 2.56
 pill_sandglow        = '#ffcc66'   # Y 0.65  softest, warmest of the set.    13.45 / 2.38
 
+# ---- OPPOSITE-ARC tertiaries. Everything above lives between hue 40 and 190,
+# the same half of the wheel as acid teal (#00ffc8, hue 167) and the UV/violet
+# family. These three sit on the warm arc instead, so teal + purple + one of
+# these reads as three distinct steps rather than an interpolation. Azure was
+# the alternative and it loses: hue ~210 falls BETWEEN teal and purple, so at a
+# glance it reads as a washed-out teal rather than its own colour.
+pill_brass           = '#e0af68'   # muted amber, the safe one. warm neutral vs purple
+pill_hot_gold        = '#ffcc33'   # brass with the chroma turned up
+pill_tangerine       = '#ff9e64'   # orange lean, most aggressive against acid teal
+
 # ---- tmux-only colors: `tmux-bar` / `tmux-pane` / `tmux-pane-lines` read
 # these ALONGSIDE the pill_* table, and `pill` now offers them too (wear them
 # with `pill logos ink` -- see below). `pill2` still never sees them.

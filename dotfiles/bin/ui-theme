@@ -8,15 +8,38 @@
     ui-theme show <name>   print one preset without applying it
     ui-theme rm <name>     delete a preset
 
-One preset = the nine colours the individual commands own:
+One preset = the eleven colours the individual commands own:
 
     tmux-bar tmux-color tmux-chip tmux-pane tmux-pane-lines tmux-copy
-    cc-fg cc-fg-dim cc-em
+    tmux-float cc-fg cc-fg-dim cc-code cc-bold cc-em cc-head cc-strike
+
+PLUS every other Claude Code theme key, stored under "cc-keys" and replayed
+through `cc-key` (claude, success, error, promptBorder, the diff*/rainbow_*
+families, the Shimmer twins -- whatever the live theme json carries). The
+keys are stored PER THEME FILE and written straight to that file, so phosphor
+and tokyo-night keep their own palettes instead of one flattening the other.
+That includes text/inactive/permission, which cc-fg/cc-fg-dim/cc-code also
+own: those read tmux/Ghostty/the binary rather than the json, so only writing
+the json restores them reliably. Jsons are written LAST, after the commands.
+
+PLUS the shell prompt, stored under "prompt": the LIVE engine's colours, read
+and written here because neither engine has an owning command left (see the
+note beside PROMPT). Oh My Posh = the `palette` dict of the .omp.json;
+starship = the seg_*/logo_* lines. A preset saved under the other engine is
+skipped on apply, not written.
+
+cc-em is captured again. It was dropped when truecolor bypassed ANSI blue and
+left it painting nothing; on 2026-08-11 the CC binary was patched so emphasis
+emits an ANSI index once more, and cc-em was rewired from 4/12 to 3/11.
+cc-head (## headings, 4/12) and cc-strike (~~struck~~, 5/13) joined at the
+same time. All three are Ghostty palette slots, so a preset that predates
+them restores nothing for those surfaces and leaves the live value alone.
 
 READS the same way ui-colors does (block headers in tmux.conf, `current`
-from the cc commands). APPLIES by invoking each command with the stored hex
--- they own their own block rewriting, live-apply and theme mirroring, so
-this file never touches tmux.conf or the Ghostty config itself.
+from the cc commands, the live theme json for cc-keys). APPLIES by invoking
+each command with the stored hex -- they own their own block rewriting,
+live-apply and theme mirroring, so this file never touches tmux.conf, the
+Ghostty config or the theme jsons itself.
 
 tmux-chip note: a manual `tmux-chip <hex>` PINS the current session's chip.
 Applying a preset sets the global default, then runs `tmux-chip auto` so
@@ -26,7 +49,7 @@ staying pinned to the preset's. The global default keeps the preset value.
 Presets are JSON files in ~/.config/nvim/dotfiles/ui-themes/, one per name,
 so they travel with the dotfiles.
 """
-import json, os, re, subprocess, sys
+import json, os, re, shutil, subprocess, sys, tempfile
 
 HOME = os.path.expanduser("~")
 STARSHIP = f"{HOME}/.config/starship.toml"
@@ -39,9 +62,62 @@ PREV = "_previous"
 
 # Apply order: chrome first, chips before the auto handback, text last.
 TMUX_SURFACES = ["tmux-bar", "tmux-color", "tmux-chip",
-                 "tmux-pane", "tmux-pane-lines", "tmux-copy"]
-CC_SURFACES = ["cc-fg", "cc-fg-dim", "cc-em"]
+                 "tmux-pane", "tmux-pane-lines", "tmux-copy", "tmux-float"]
+CC_SURFACES = ["cc-fg", "cc-fg-dim", "cc-code", "cc-bold",
+               "cc-em", "cc-head", "cc-strike"]
 SURFACES = TMUX_SURFACES + CC_SURFACES
+
+# Nothing retired at the moment. cc-em USED to live here: it drove ANSI blue
+# (4/12), which truecolor bypassed, so it painted nothing. It was rewired to
+# ANSI yellow (3/11) on 2026-08-11 once the CC binary was patched to emit an
+# index for emphasis, and is a live surface again.
+LEGACY = []
+
+# The Claude Code themes, read and written PER FILE for the cc-keys block.
+#
+# Not via `cc-key`: that command stamps one value into every theme so a value
+# survives a theme switch, which is right when you are picking a colour and
+# wrong when you are restoring a scheme -- phosphor and tokyo-night hold
+# genuinely different palettes, and replaying 49 keys through cc-key flattens
+# whichever one you did not snapshot into the other. So the preset stores each
+# theme's keys under its own filename and each file is written back on its own.
+CC_THEMES = [f"{HOME}/.claude/themes/tokyo-night-terminal-dark.json",
+             f"{HOME}/.claude/themes/phosphor.json"]
+CC_KEYS = "cc-keys"
+# EVERY hex key is captured, including text / inactive / permission, which
+# cc-fg / cc-fg-dim / cc-code also own. Excluding them was a hole: those
+# commands read their value from tmux, Ghostty and the CC binary, NOT from the
+# theme json, so a json scrambled behind their back looks unchanged to them and
+# they never write -- measured, the owned keys were the only ones a full
+# restore left wrong. The json is therefore written LAST on apply, after those
+# commands have done their own layers, so the snapshot's exact value wins.
+HEX = re.compile(r"^#[0-9a-fA-F]{6}$")
+
+# The shell prompt. TWO engines exist and ~/.config/zsh/.prompt-engine picks
+# one at shell start; only the live one is captured, and a preset saved under
+# one engine is skipped (loudly) under the other rather than writing colours
+# into a prompt that is not running.
+#
+#   posh      Oh My Posh -- the whole scheme is the `palette` dict in
+#             tokyonight-devops.omp.json; every segment refers to it as
+#             "p:<name>", so those 17 entries ARE the prompt's colours.
+#   starship  the seg_* field colours + logo_* icon colours in starship.toml.
+#
+# Neither has an owning command to delegate to. `pill`/`pill2` are RETIRED:
+# starship's prompt moved from background-filled pills to seg_* driving text
+# colour directly, and the pill-managed markers went with it, so every `pill`
+# invocation now dies on "markers not found". Do NOT restore those markers to
+# make this easier -- pill's build_block() emits only seg_*/logo_* lines, so a
+# marker around the wider palette region would have `pill <name>` delete the
+# whole pill_*/tmux_*/text_* catalog.
+#
+# starship.toml is still read constantly as the NAME TABLE every one of these
+# commands resolves colour names against, engine or no engine.
+PROMPT = "prompt"
+PROMPT_RE = re.compile(r"^((?:seg|logo)_[a-z0-9_]+)(\s*=\s*')(#[0-9a-fA-F]{6})(')",
+                       re.M)
+ENGINE_STATE = f"{HOME}/.config/zsh/.prompt-engine"
+POSH = f"{HOME}/.config/zsh/oh-my-posh/tokyonight-devops.omp.json"
 
 PROG = os.path.basename(sys.argv[0])
 
@@ -98,6 +174,166 @@ def cc_current(cmd):
         return None
 
 
+def theme_name(path):
+    return os.path.basename(path)[:-5]
+
+
+def cc_keys_current():
+    """{theme name: {key: hex}} -- each theme file read on its own."""
+    out = {}
+    for path in CC_THEMES:
+        try:
+            with open(path, encoding="utf-8") as f:
+                over = json.load(f).get("overrides", {})
+        except (OSError, json.JSONDecodeError):
+            continue
+        keys = {k: v.lower() for k, v in over.items()
+                if isinstance(v, str) and HEX.match(v)}
+        if keys:
+            out[theme_name(path)] = keys
+    return out
+
+
+def cc_keys_write(name, keys):
+    """Set these keys in ONE theme file. Never touches the other theme, and
+    never removes a key the preset does not carry."""
+    path = next((p for p in CC_THEMES if theme_name(p) == name), None)
+    if not path:
+        return 0
+    try:
+        with open(path, encoding="utf-8") as f:
+            doc = json.load(f)
+    except (OSError, json.JSONDecodeError) as e:
+        die(f"cc-keys: cannot read {os.path.basename(path)} ({e})")
+    over = doc.setdefault("overrides", {})
+    n = 0
+    for k, v in keys.items():
+        if over.get(k, "").lower() != v.lower():
+            over[k] = v
+            n += 1
+    if n:
+        fd, tmp = tempfile.mkstemp(dir=os.path.dirname(os.path.realpath(path)))
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            json.dump(doc, f, indent=2)
+            f.write("\n")
+        shutil.move(tmp, os.path.realpath(path))
+    return n
+
+
+def cc_keys_flat(keys):
+    """A preset saved before the per-theme split is one flat dict. Treat it as
+    belonging to the live theme only -- that is the one it was read from."""
+    if keys and all(isinstance(v, str) for v in keys.values()):
+        return {theme_name(CC_THEMES[0]): keys}
+    return keys or {}
+
+
+def glyphs(s):
+    return sum(1 for c in s
+               if 0xE000 <= ord(c) <= 0xF8FF or 0xF0000 <= ord(c) <= 0xFFFFD)
+
+
+def engine():
+    """Which prompt is actually running: 'posh' or 'starship'."""
+    try:
+        with open(ENGINE_STATE, encoding="utf-8") as f:
+            return "posh" if f.read().strip().startswith("posh") else "starship"
+    except OSError:
+        return "starship"          # what prompt-engine.zsh defaults to
+
+
+def posh_palette(src):
+    """The `palette` object of the .omp.json, as raw text and as a dict."""
+    i = src.find('"palette"')
+    if i < 0:
+        return None, {}
+    start = src.find("{", i)
+    depth, j = 0, start
+    while j < len(src):
+        if src[j] == "{":
+            depth += 1
+        elif src[j] == "}":
+            depth -= 1
+            if depth == 0:
+                break
+        j += 1
+    body = src[start:j + 1]
+    return (start, j + 1), {m.group(1): m.group(2).lower() for m in
+                            re.finditer(r'"([^"]+)"\s*:\s*"(#[0-9a-fA-F]{6})"', body)}
+
+
+def prompt_current():
+    """The live engine's colours. {} when the file is missing."""
+    eng = engine()
+    if eng == "posh":
+        try:
+            src = open(POSH, encoding="utf-8").read()
+        except OSError:
+            return {}
+        _, pal = posh_palette(src)
+        return {"engine": eng, "colors": pal} if pal else {}
+    try:
+        src = open(STARSHIP, encoding="utf-8").read()
+    except OSError:
+        return {}
+    cols = {m.group(1): m.group(3).lower() for m in PROMPT_RE.finditer(src)}
+    return {"engine": eng, "colors": cols} if cols else {}
+
+
+def prompt_headline(vals):
+    """The handful worth a swatch strip -- the rest is icon brand colours."""
+    cols = (vals or {}).get("colors") or {}
+    if (vals or {}).get("engine") == "posh":
+        return {k: v for k, v in cols.items() if not k.endswith("-brand")}
+    return {k[4:]: v for k, v in cols.items() if k.startswith("seg_")}
+
+
+def prompt_write(vals):
+    """Replace each stored name's hex in place. Never inserts, never reflows."""
+    eng, cols = vals.get("engine"), vals.get("colors") or {}
+    path = os.path.realpath(POSH if eng == "posh" else STARSHIP)
+    src = open(path, encoding="utf-8").read()
+
+    if eng == "posh":
+        span, _ = posh_palette(src)
+        if not span:
+            die("prompt: no `palette` object in the omp.json; left untouched")
+        a, b = span
+
+        def sub(m):
+            want = cols.get(m.group(1))
+            return f'"{m.group(1)}": "{want or m.group(2)}"'
+
+        body = re.sub(r'"([^"]+)"\s*:\s*"(#[0-9a-fA-F]{6})"', sub, src[a:b])
+        new = src[:a] + body + src[b:]
+    else:
+        def sub(m):
+            want = cols.get(m.group(1))
+            return m.group(1) + m.group(2) + (want or m.group(3)) + m.group(4)
+
+        new = PROMPT_RE.sub(sub, src)
+
+    # Nothing but hex digits may move: same length, same Nerd Font glyphs.
+    if len(new) != len(src):
+        die(f"prompt: length would change; {os.path.basename(path)} untouched")
+    if glyphs(new) != glyphs(src):
+        die(f"prompt: glyph count would change; {os.path.basename(path)} untouched")
+    try:
+        if eng == "posh":
+            json.loads(new)
+        else:
+            import tomllib
+            tomllib.loads(new)
+    except Exception as e:
+        die(f"prompt: result would not parse ({e}); {os.path.basename(path)} untouched")
+    # realpath above: these are symlinks into the dotfiles, and replacing the
+    # link itself would break the checkout.
+    fd, tmp = tempfile.mkstemp(dir=os.path.dirname(path))
+    with os.fdopen(fd, "w", encoding="utf-8") as f:
+        f.write(new)
+    shutil.move(tmp, path)
+
+
 def capture():
     theme = {}
     missing = []
@@ -109,6 +345,10 @@ def capture():
         (theme.__setitem__(s, h) if h else missing.append(s))
     if missing:
         die(f"could not read: {', '.join(missing)}")
+    theme[CC_KEYS] = cc_keys_current()
+    vals = prompt_current()
+    if vals:
+        theme[PROMPT] = vals
     return theme
 
 
@@ -145,47 +385,166 @@ def listing():
         if not isinstance(theme, dict):
             continue
         strip = "".join(swatch(theme[s]) for s in SURFACES if theme.get(s))
+        segs = prompt_headline(theme.get(PROMPT))
+        if segs:
+            strip += " " + "".join(swatch(h) for h in segs.values())
         mark = " *" if theme == live else ""
         label = "previous (auto-saved on apply)" if name == PREV else ""
         print(f"  {name:<16} {strip}{mark}  \033[2m{label}\033[0m")
     print(f"\n  order: {' '.join(SURFACES)}   * = current scheme")
+    print(f"  \033[2m{PROG} help  for the commands\033[0m")
 
 
 def show(name, theme):
     print(f"{name}:")
-    for s in SURFACES:
+    for s in SURFACES + [s for s in LEGACY if theme.get(s)]:
         h = theme.get(s)
         if h:
             print(f"  {s:<16} {swatch(h)} {h}  {NAMES.get(h.lower(), '(raw hex)')}")
         else:
-            print(f"  {s:<16} (not in preset)")
+            print(f"  {s:<16} \033[2m(not in preset)\033[0m")
+    per = cc_keys_flat(theme.get(CC_KEYS))
+    if per:
+        for tname in sorted(per):
+            keys = per[tname]
+            strip = "".join(swatch(h) for h in keys.values())
+            print(f"  {CC_KEYS:<16} {strip}")
+            print(f"  {'':<16} \033[2m{tname}: {len(keys)} keys — "
+                  f"{', '.join(sorted(keys))}\033[0m")
+    else:
+        print(f"  {CC_KEYS:<16} \033[2m(not in preset -- pre-cc-keys snapshot)\033[0m")
+    vals = theme.get(PROMPT) or {}
+    cols = vals.get("colors") or {}
+    head = prompt_headline(vals)
+    if cols:
+        strip = "".join(swatch(h) for h in head.values())
+        rest = len(cols) - len(head)
+        print(f"  {PROMPT:<16} {strip}")
+        print(f"  {'':<16} \033[2m{vals.get('engine')}: "
+              f"{', '.join(f'{f}={h}' for f, h in head.items())}"
+              + (f"  + {rest} icon brand colours" if rest else "") + "\033[0m")
+    else:
+        print(f"  {PROMPT:<16} \033[2m(not in preset -- pre-prompt snapshot)\033[0m")
 
 
 def apply(name, theme):
-    missing = [s for s in SURFACES if not theme.get(s)]
-    if missing:
-        die(f"'{name}' is missing: {', '.join(missing)}")
     live = capture()
+    surfaces = [s for s in SURFACES + LEGACY if theme.get(s)]
+    # capture() no longer reads the legacy surfaces, so read them here --
+    # without this a legacy value always looks changed and gets rewritten,
+    # stomping that command's own `-` previous for no colour change.
+    for s in LEGACY:
+        if theme.get(s):
+            live[s] = cc_current(s) or ""
+    absent = [s for s in SURFACES if not theme.get(s)]
     # cc-fg and friends refuse a no-op write; skipping is also what keeps an
     # identity apply from stomping each command's own `-` previous.
-    todo = [s for s in SURFACES if live.get(s, "").lower() != theme[s].lower()]
-    if not todo:
+    todo = [s for s in surfaces if live.get(s, "").lower() != theme[s].lower()]
+    # Per theme file, and written straight to that file -- see CC_THEMES.
+    # No Shimmer ordering needed: nothing is derived when the json is the
+    # thing being written, so a stored twin lands exactly as stored.
+    want = cc_keys_flat(theme.get(CC_KEYS))
+    have = cc_keys_flat(live.get(CC_KEYS))
+    keys = {t: {k: v for k, v in ks.items()
+                if (have.get(t) or {}).get(k) != v.lower()}
+            for t, ks in want.items()}
+    keys = {t: ks for t, ks in keys.items() if ks}
+    nkeys = sum(len(ks) for ks in keys.values())
+    pwant = theme.get(PROMPT) or {}
+    phave = live.get(PROMPT) or {}
+    # A preset saved under the other engine describes a prompt that is not
+    # running -- skip it rather than writing colours nothing will read.
+    wrong_engine = bool(pwant) and pwant.get("engine") != phave.get("engine")
+    pill_todo = [] if wrong_engine else sorted(
+        k for k, v in (pwant.get("colors") or {}).items()
+        if (phave.get("colors") or {}).get(k) != v.lower())
+    if not todo and not keys and not pill_todo:
         print(f"'{name}' is already the current scheme -- nothing to do")
         return
     store(PREV, live)
+    if pill_todo:
+        prompt_write(pwant)
     for s in todo:
         r = subprocess.run([f"{BIN}/{s}", theme[s]], capture_output=True, text=True)
         if r.returncode != 0:
             die(f"{s} {theme[s]} failed:\n{r.stderr.strip()}")
+    for tname, ks in keys.items():
+        cc_keys_write(tname, ks)
     # Unpin this session's chip so session-hue owns it again; the global
     # default set by the line above keeps the preset's colour.
     subprocess.run([f"{BIN}/tmux-chip", "auto"], capture_output=True, text=True)
-    print(f"applied '{name}' -- `{PROG} -` goes back")
+    done = f"{len(todo)} surface{'' if len(todo) == 1 else 's'}"
+    if keys:
+        done += (f", {nkeys} cc-key{'' if nkeys == 1 else 's'} across "
+                 f"{len(keys)} theme{'' if len(keys) == 1 else 's'}")
+    if pill_todo:
+        done += f", {len(pill_todo)} prompt colour{'' if len(pill_todo) == 1 else 's'}"
+    print(f"applied '{name}' ({done}) -- `{PROG} -` goes back")
+    if pill_todo:
+        print("\033[2m  prompt lands on the next one (starship re-reads "
+              "each prompt)\033[0m")
+    if wrong_engine:
+        print(f"\033[2m  prompt SKIPPED: preset is a {pwant.get('engine')} "
+              f"prompt, {phave.get('engine')} is running\033[0m")
+    if absent:
+        print(f"\033[2m  not in this preset, left alone: "
+              f"{', '.join(absent)}\033[0m")
+    if not want:
+        print(f"\033[2m  no cc-keys block -- re-`{PROG} save {name}` to add one\033[0m")
+
+
+B = "\033[1m"
+D = "\033[2m"
+R = "\033[0m"
+
+
+def usage():
+    print(f"""
+  {B}{PROG}{R}  {D}-- snapshot the whole UI colour scheme as a named preset{R}
+
+  {B}{PROG}{R}                  {D}list the presets, swatches and all{R}
+  {B}{PROG} save{R} <name>       {D}snapshot the CURRENT scheme under <name>{R}
+  {B}{PROG}{R} <name>            {D}apply a preset (auto-saves `_previous` first){R}
+  {B}{PROG} -{R}                 {D}back to the scheme before the last apply{R}
+  {B}{PROG} show{R} <name>       {D}print one preset without applying it{R}
+  {B}{PROG} rm{R} <name>         {D}delete a preset{R}
+  {B}{PROG} help{R}              {D}this{R}
+
+  {B}one preset covers{R}
+    {' '.join(TMUX_SURFACES)}
+    {' '.join(CC_SURFACES)}
+    {D}+ cc-keys: every other Claude Code theme key (claude glyph, success,
+      error, promptBorder, userMessageBackground, diff*, rainbow_*, the
+      Shimmer twins ...) via `cc-key`{R}
+    {D}+ prompt: the LIVE prompt engine's colours -- Oh My Posh's palette
+      dict, or starship's seg_*/logo_* (pill/pill2 are retired){R}
+
+  {D}text/inactive/permission are NOT in cc-keys -- cc-fg, cc-fg-dim and
+  cc-code own those and also patch the binary. PLUS the shell prompt, stored under "prompt": the LIVE engine's colours, read
+and written here because neither engine has an owning command left (see the
+note beside PROMPT). Oh My Posh = the `palette` dict of the .omp.json;
+starship = the seg_*/logo_* lines. A preset saved under the other engine is
+skipped on apply, not written.
+
+cc-em is no longer captured
+  (truecolor bypassed ANSI blue); an old preset carrying it still applies.
+  A preset missing a surface leaves that surface alone -- re-save to fill in.{R}
+
+  {B}safety nets, newest first{R}
+    {D}_previous{R}          {D}rewritten by every apply; `{PROG} -` uses it{R}
+    {D}tui-startup{R}        {D}rewritten every time `ui-tui` launches{R}
+    {D}each command's `-`{R} {D}per-surface, untouched by any of this{R}
+
+  {D}presets live in {THEME_DIR}{R}
+  {D}see also: ui-colors (read-only dump), ui-tui (interactive picker){R}
+""")
 
 
 def main(argv):
     if not argv:
         return listing()
+    if argv[0] in ("help", "-h", "--help", "-help"):
+        return usage()
     if argv[0] == "save":
         if len(argv) != 2:
             die("save takes exactly one name")
@@ -224,7 +583,8 @@ def main(argv):
         if theme is None:
             die(f"no preset named '{argv[0]}' -- bare `{PROG}` lists them")
         return apply(argv[0], theme)
-    die(f"usage: {PROG} [save <name> | <name> | - | show <name> | rm <name>]")
+    usage()
+    die(f"don't know what to do with: {' '.join(argv)}")
 
 
 if __name__ == "__main__":
