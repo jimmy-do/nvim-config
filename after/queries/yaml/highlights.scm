@@ -286,10 +286,23 @@
 ; whatever it looks like. Must stay at the end of this file -- it re-tags values
 ; the enum and symbol rules already claimed, and at equal priority the last
 ; capture wins.
+;
+; EXCEPT a bare lowercase word, which stays a symbol. `- name: http` defines a
+; port that `port: http` references three times in the same manifest, and with
+; this rule unguarded the definition rendered as prose while every reference
+; rendered as a symbol -- the two ends of one reference in two colours.
+;
+; This overrides the note above about `- name: build` being prose. That call was
+; made for GitHub Actions, where a step name is a label; the same shape in k8s is
+; an identifier other fields point at, and identifiers win -- a wrong colour on a
+; step label costs nothing, a broken reference pair costs a lookup. Multi-word
+; and CamelCase names (`Checkout`, `Configure AWS credentials`) do not match the
+; pattern and stay prose, which is what the rule was written for.
 ((block_mapping_pair
    key: (flow_node (plain_scalar (string_scalar) @_prosekey))
    value: (flow_node (plain_scalar (string_scalar) @string)))
- (#any-of? @_prosekey "name" "description" "title" "summary" "displayName"))
+ (#any-of? @_prosekey "name" "description" "title" "summary" "displayName")
+ (#not-lua-match? @string "^%l[%l%-]*$"))
 
 ; ============================================================================
 ; Value SHAPES, quoted — the same vocabulary, for `"…"` and `'…'`

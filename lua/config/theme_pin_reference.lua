@@ -13,9 +13,47 @@
 -- (:Sepia 40, save, :Sepia 40 = sepia 80 on a dial still reading 40). Written
 -- once per theme and then frozen -- that is the entire job.
 return {
+  -- Written by hand at theme-creation time, NOT auto-captured. Must stay equal
+  -- to acidwave's knobs in theme_config_saved.lua (all neutral). If this drifts
+  -- from that file, the difference becomes a delta and drags every pinned hex.
+  ["acidwave"] = {
+    sepia_amount = 0,
+    fg_lightness = 50,
+    fg_saturation = 50,
+  },
+  ["adwaita"] = {
+    sepia_amount = 0,
+    fg_lightness = 50,
+    fg_saturation = 50,
+  },
+  ["arctic"] = {
+    sepia_amount = 0,
+    fg_lightness = 50,
+    fg_saturation = 50,
+  },
+  ["astrodark"] = {
+    sepia_amount = 0,
+    fg_lightness = 50,
+    fg_saturation = 50,
+  },
+  ["ayu"] = {
+    sepia_amount = 0,
+    fg_lightness = 50,
+    fg_saturation = 50,
+  },
+  ["bamboo"] = {
+    sepia_amount = 0,
+    fg_lightness = 50,
+    fg_saturation = 50,
+  },
   ["base16-everforest-dark-hard"] = {
     sepia_amount = 0,
     fg_lightness = 70,
+    fg_saturation = 50,
+  },
+  ["base16-gruvbox-dark-medium-forest"] = {
+    sepia_amount = 0,
+    fg_lightness = 50,
     fg_saturation = 50,
   },
   ["base16-gruvbox-material-dark-hard"] = {
@@ -38,8 +76,28 @@ return {
     fg_lightness = 50,
     fg_saturation = 50,
   },
+  ["base16-mountain"] = {
+    sepia_amount = 0,
+    fg_lightness = 50,
+    fg_saturation = 50,
+  },
+  ["base16-nebula"] = {
+    sepia_amount = 0,
+    fg_lightness = 50,
+    fg_saturation = 50,
+  },
+  ["base16-neovim-dark"] = {
+    sepia_amount = 0,
+    fg_lightness = 50,
+    fg_saturation = 50,
+  },
   ["base16-tokyo-night-storm"] = {
     sepia_amount = -35,
+    fg_lightness = 50,
+    fg_saturation = 50,
+  },
+  ["dracula-soft"] = {
+    sepia_amount = 0,
     fg_lightness = 50,
     fg_saturation = 50,
   },
@@ -49,6 +107,11 @@ return {
     fg_saturation = 50,
   },
   ["icyv2"] = {
+    sepia_amount = 0,
+    fg_lightness = 50,
+    fg_saturation = 50,
+  },
+  ["kanagawa"] = {
     sepia_amount = 0,
     fg_lightness = 50,
     fg_saturation = 50,
@@ -73,7 +136,22 @@ return {
     fg_lightness = 50,
     fg_saturation = 99,
   },
+  ["nvim-retrobox"] = {
+    sepia_amount = 0,
+    fg_lightness = 50,
+    fg_saturation = 99,
+  },
+  ["onedark_dark"] = {
+    sepia_amount = 0,
+    fg_lightness = 50,
+    fg_saturation = 50,
+  },
   ["palenightv2"] = {
+    sepia_amount = 0,
+    fg_lightness = 50,
+    fg_saturation = 50,
+  },
+  ["retrobox"] = {
     sepia_amount = 0,
     fg_lightness = 50,
     fg_saturation = 50,
@@ -82,6 +160,11 @@ return {
     sepia_amount = 0,
     fg_lightness = 60,
     fg_saturation = 90,
+  },
+  ["tokyonight-storm"] = {
+    sepia_amount = 0,
+    fg_lightness = 50,
+    fg_saturation = 50,
   },
 }
 

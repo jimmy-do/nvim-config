@@ -152,6 +152,31 @@ local function inspect_candidates(row, col)
       tier = DECOR_TIER,
     })
   end
+
+  -- EPHEMERAL extmarks are invisible to vim.inspect_pos. yaml-key-depth paints
+  -- the key rungs (YamlKeyD1..D8) from an on_win decoration provider, so they
+  -- exist only for the duration of a redraw and the loop above reports NO
+  -- extmarks at all on a yaml key. :HiHere therefore answered with the
+  -- treesitter group underneath -- @property.yaml, a colour nothing on screen is
+  -- using -- and put THAT hex on the clipboard.
+  --
+  -- theme.lua's :HlColor resolver already asks the painter directly for exactly
+  -- this reason (see its comment at the __yaml_key_depth_group_at call). Two
+  -- resolvers with one of them wrong is how :HiHere and :HlColor came to
+  -- disagree about the same cell. Ranked at the priority the rungs really use
+  -- (200), which puts it above the captures and below the matchadd overlays --
+  -- the same slot theme.lua gives it.
+  --
+  -- Only became visible in helm buffers on 2026-08-06: before the parser fix
+  -- nothing was painted there, so the treesitter group WAS the truth. In plain
+  -- yaml this had been wrong all along.
+  if type(_G.__yaml_key_depth_group_at) == "function" then
+    local ok_rung, rung = pcall(_G.__yaml_key_depth_group_at, 0, row, col)
+    if ok_rung and rung then
+      table.insert(out, { group = rung, priority = 200, source = "keydepth", tier = DECOR_TIER })
+    end
+  end
+
   return out
 end
 

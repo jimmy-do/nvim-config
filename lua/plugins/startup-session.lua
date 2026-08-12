@@ -128,6 +128,12 @@ end
 --     `$argadd`/`edit`, so old sessions have to be cleaned as they load;
 --   * prune on save (see the SessionSavePre autocmd) — clears the arglist so
 --     newly written sessions never contain a directory in the first place.
+-- Empty the arglist. Called on both restore and save — see the long note at the
+-- SessionSavePre autocmd for why it is emptied outright rather than filtered.
+local function clear_arglist()
+  pcall(vim.cmd, "silent! %argdelete")
+end
+
 local function purge_directory_buffers()
   -- A window showing the listing needs somewhere else to go first, otherwise
   -- deleting the buffer leaves it on a blank [No Name].
@@ -154,13 +160,11 @@ local function purge_directory_buffers()
     end
   end
 
-  -- The arglist entry is what mksession turns back into `$argadd`, so drop it
-  -- too or this session re-saves the same directory on exit.
-  for i = vim.fn.argc(-1) - 1, 0, -1 do
-    if vim.fn.isdirectory(vim.fn.argv(i)) == 1 then
-      pcall(vim.cmd, i .. "argdelete")
-    end
-  end
+  -- The arglist entry is what mksession turns back into `$argadd`, so it has to
+  -- go too, or this session re-saves the same directory on exit. Every session
+  -- already on disk carries its stale args, so they are cleaned as they load
+  -- rather than only when re-saved.
+  clear_arglist()
 end
 
 -- The `zshjOMtCn.zsh` buffer that came back on every restore.
@@ -246,15 +250,36 @@ end
 -- arglist, so without this every save re-writes `$argadd <dir>` + `edit <dir>`
 -- and the listing is back on the next restore. Fired for both <leader>qs and the
 -- automatic VimLeavePre save.
+--
+-- The prune EMPTIES the arglist rather than filtering it, because the directory
+-- case was never the real bug — persisting the arglist at all is. `mks!` (all
+-- persistence.nvim does, init.lua:70) writes the arglist unconditionally;
+-- 'sessionoptions' has no flag to suppress it. So any `nvim <file>` launched
+-- from the shell lands in that project's session forever:
+--
+--   nvim ~/.claude/CLAUDE.md   ->  session gets `$argadd` + `edit` for it
+--   next bare `nvim`           ->  session sourced, file reopens
+--   :bd                        ->  buffer dies, ARG SURVIVES
+--   exit                       ->  same line written back. Loop.
+--
+-- `:bd` can never win that; `:argdelete` would, and nobody types it. Filtering
+-- by "outside cwd" only moved the loop in-project (`nvim notes.md` here still
+-- stuck), so the arglist goes entirely.
+--
+-- Nothing here needs it to survive a restart: `:n`/`:argdo` are within-session,
+-- and the window layout comes from the session's own badd/edit lines, not args.
+-- Buffers are untouched — opening a file from anywhere and leaving it in the
+-- buffer list is fine and usually wanted. It is specifically the arglist, which
+-- mksession replays as `edit`, that must not persist.
+--
+-- Note this only matters because bare `nvim` auto-restores (the VimEnter hook
+-- below). Stock LazyVim writes the same stray args; you just never source them
+-- unless you press <leader>ql, so the artifact stays invisible.
 vim.api.nvim_create_autocmd("User", {
   pattern = "PersistenceSavePre",
   group = vim.api.nvim_create_augroup("jimmy_session_no_dirs", { clear = true }),
   callback = function()
-    for i = vim.fn.argc(-1) - 1, 0, -1 do
-      if vim.fn.isdirectory(vim.fn.argv(i)) == 1 then
-        pcall(vim.cmd, i .. "argdelete")
-      end
-    end
+    clear_arglist()
     for _, buf in ipairs(vim.api.nvim_list_bufs()) do
       local name = vim.api.nvim_buf_get_name(buf)
       if vim.bo[buf].filetype == "netrw" or (name ~= "" and vim.fn.isdirectory(name) == 1) or is_tempfile(name) then

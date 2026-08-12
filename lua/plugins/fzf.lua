@@ -66,53 +66,35 @@ local function lsp_references()
   })
 end
 
-local hash_comment_extensions = {
-  bash = true,
-  conf = true,
-  dockerfile = true,
-  hcl = true,
-  makefile = true,
-  py = true,
-  rb = true,
-  sh = true,
-  tf = true,
-  tfvars = true,
-  toml = true,
-  yaml = true,
-  yml = true,
-  zsh = true,
-}
-
-local slash_comment_extensions = {
-  c = true,
-  cc = true,
-  cpp = true,
-  css = true,
-  go = true,
-  hcl = true,
-  java = true,
-  js = true,
-  jsx = true,
-  less = true,
-  rs = true,
-  scss = true,
-  tf = true,
-  ts = true,
-  tsx = true,
-}
-
-local dash_comment_extensions = {
-  lua = true,
-  sql = true,
-}
-
-local function grep_without_comment_lines(line, opts)
+-- NOTE: fzf-lua runs grep in a HEADLESS CHILD PROCESS. Setting `fn_transform`
+-- forces multiprocess (providers/grep.lua), and the child resolves the option
+-- via libuv.load_fn -- which only works on a STRING of Lua source. A plain Lua
+-- closure cannot cross the process boundary, so every line gets dropped and the
+-- picker shows `0/0` with no error. That is why <leader>sw/sg found nothing.
+--
+-- Consequence: the transform runs INSTEAD of fzf-lua's own entry formatter, so
+-- it has to call make_entry.file itself or entries lose icons/colours/paths.
+--
+-- The tables below are duplicated inside the string on purpose: the child has no
+-- access to this file's locals or to LazyVim.
+local grep_transform = [==[return function(line, opts)
   if type(line) ~= "string" then
     return nil
   end
 
-  local utils = require("fzf-lua.utils")
-  local plain = utils.strip_ansi_coloring(line)
+  local hash_comment_extensions = {
+    bash = true, conf = true, dockerfile = true, hcl = true, makefile = true,
+    py = true, rb = true, sh = true, tf = true, tfvars = true, toml = true,
+    yaml = true, yml = true, zsh = true,
+  }
+  local slash_comment_extensions = {
+    c = true, cc = true, cpp = true, css = true, go = true, hcl = true,
+    java = true, js = true, jsx = true, less = true, rs = true, scss = true,
+    tf = true, ts = true, tsx = true,
+  }
+  local dash_comment_extensions = { lua = true, sql = true }
+
+  local plain = require("fzf-lua.utils").strip_ansi_coloring(line)
   if plain:match("^vim%.schedule callback:") or plain:match("^stack traceback:") or plain:match("^%s") then
     return nil
   end
@@ -142,12 +124,13 @@ local function grep_without_comment_lines(line, opts)
   if is_comment then
     return nil
   end
-  return line
-end
+
+  return require("fzf-lua.make_entry").file(line, opts)
+end]==]
 
 local function grep_picker(command, opts)
   return LazyVim.pick(command, vim.tbl_extend("force", {
-    fn_transform = grep_without_comment_lines,
+    fn_transform = grep_transform,
   }, opts or {}))
 end
 
@@ -162,7 +145,7 @@ end
 local function grep_options(opts)
   local options = vim.tbl_extend("force", {}, opts or {})
   options.cwd = options.cwd or grep_directory(options)
-  options.fn_transform = grep_without_comment_lines
+  options.fn_transform = grep_transform
   options.root = nil
   return options
 end
@@ -182,7 +165,7 @@ local function grep_current_file_directory()
 
   require("fzf-lua").live_grep({
     cwd = directory,
-    fn_transform = grep_without_comment_lines,
+    fn_transform = grep_transform,
   })
 end
 

@@ -63,12 +63,14 @@
 -- `{}`: persist_favorite() below finds this block by matching `local favorites =
 -- {` on its own line and a bare `}`, so collapsing it breaks every toggle.
 local favorites = {
+  "acidwave",
   "moonlit",
   "base16-gruvbox-material-dark-hard",
   "base16-everforest-dark-hard",
-  "dracula-soft",
   "base16-tokyo-night-storm",
   "nvim-gruvbox",
+  "nvim-retrobox",
+  "dracula-soft",
 }
 
 -- This file's own path, captured at load time so `f` can rewrite the block above.

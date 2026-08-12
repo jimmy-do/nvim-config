@@ -40,9 +40,12 @@ local SECTIONS = {
   },
   {
     title = "GREP VARIANTS (all fzf-lua -- telescope is disabled in this config)",
-    blurb = "Your grep pickers are CUSTOM: they strip comment lines from results."
-      .. " That is why a heavily-commented yaml file can look under-represented in"
-      .. " a grep hit list -- the match in the comment was filtered on purpose.",
+    blurb = "Two families here, and the difference matters when results disagree."
+      .. " <leader>/ is LazyVim STOCK and shows everything. Everything under"
+      .. " <leader>s is CUSTOM: those strip comment lines from results. That is why"
+      .. " a heavily-commented yaml file can look under-represented in an sg/sw hit"
+      .. " list but fully represented under <leader>/ -- the match was in a comment"
+      .. " and got filtered on purpose. If the counts differ, that is the reason.",
     items = {
       { "<leader>sg", "Live grep, ROOT DIR (the project root, wherever you are in it)." },
       { "<leader>sG", "Live grep, CWD only. Use when root is too wide." },
@@ -51,6 +54,7 @@ local SECTIONS = {
       { "<leader>sC", "Search COMMANDS. Every :Command with its desc -- this is where the theme knobs live." },
       { "<leader>sh", "Search HELP. Vim's own docs, fuzzy." },
       { "", "Inside any picker: <C-n>/<C-p> move, <C-v> opens in a vsplit, <C-t> in a tab, <Esc> cancels." },
+      { "", "IF AN sg/sw/sG/sW PICKER OPENS EMPTY -- '0/0', no error, on a word you can SEE in the file -- that is the comment filter in fzf.lua failing, not rg and not your keys. Cross-check with <leader>/ on the same word: if stock finds it and the custom one does not, the filter is the culprit. It broke exactly this way once (2026-08-11) and it fails SILENTLY, which is why this line exists." },
     },
   },
   {
@@ -61,7 +65,7 @@ local SECTIONS = {
       .. " the explanation, not a bug.",
     items = {
       { "gd", "Go to DEFINITION. Where is this thing declared." },
-      { "gr", "Go to REFERENCES. Every place it is used -- the real 'find usages', when a server exists." },
+      { "gr", "Go to REFERENCES. Every place it is used -- the real 'find usages', when a server exists. Servers installed here: lua, bash, terraform, docker/compose, helm, yaml. NOTHING ELSE. In python/ts/go this does nothing because the server is not installed, and the error you get names treesitter, which is misleading -- it is the fallback talking, not the cause." },
       { "gI", "Go to IMPLEMENTATION." },
       { "gy", "Go to TYPE definition." },
       { "K", "HOVER: docs, type, signature for the thing under the cursor. Press twice to jump INTO the hover window and scroll it." },
@@ -79,7 +83,8 @@ local SECTIONS = {
       { "", "yaml-language-server IS installed here (lazyvim extras.lang.yaml). So on yaml, K failing is usually NOT a missing server -- it is a missing SCHEMA. yamlls only knows a file if it can match it to a JSON schema by filename or by an inline modeline." },
       { "", "Kubernetes manifests and GitHub Actions workflows are matched and DO hover. ArgoCD Application CRDs, Helm values files and bare config yaml are not in SchemaStore by filename, so they hover nothing." },
       { "", "Force a schema on a file by putting this on line 1: # yaml-language-server: $schema=<url>. That is the only way to make K work on a CRD." },
-      { "", "There is no gd/gr for yaml under ANY setup. yaml has no symbols and no cross-references -- there is nothing for a server to jump to. Use <leader>sw. This is not a config gap to fix." },
+      { "", "There is no gr for yaml under ANY setup. yamlls implements no references at all -- yaml has no cross-file symbol graph, so there is nothing to enumerate. gr therefore drops to the treesitter fallback and reports that treesitter does not support this filetype. That message is a red herring: installing a parser fixes nothing. Use <leader>sw. This is not a config gap to fix." },
+      { "", "gd is the ONE partial exception: recent yamlls resolves anchors and aliases, so gd on *common-env jumps to &common-env. Same file only, and only for real yaml anchors -- not for a k8s name referenced by another manifest. If you are chasing a name across files, that is grep, always." },
       { "", ":LspInfo -- what is attached to this buffer. Check it before assuming anything above is broken." },
     },
   },
@@ -133,7 +138,10 @@ local SECTIONS = {
       { "za", "Toggle the fold under the cursor." },
       { "{ / }", "Jump by blank-line-separated block. In yaml this lands on section boundaries." },
       { "%", "Jump to the matching bracket." },
-      { "*", "Search forward for the word under the cursor IN THIS FILE. The local-only counterpart to <leader>sw." },
+      { "*", "Search forward for the word under the cursor IN THIS FILE. The local-only counterpart to <leader>sw. It builds the search FOR you -- no typing the name out -- then jumps to the next occurrence." },
+      { "#", "Same as * but backwards." },
+      { "n / N", "Repeat that jump forwards / backwards. They only REPEAT a search, they cannot start one -- that is what * is for. So: * once, then n n n to walk every hit, N to back up." },
+      { "g*", "Like * but matches substrings too. * on 'app' skips 'apparmor'; g* stops on it." },
       { "<leader>ss", "Document symbols -- see the LSP section. Needs a server." },
     },
   },

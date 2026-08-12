@@ -581,19 +581,46 @@ return {
           vim.api.nvim_set_hl(0, name, { fg = fg, dim = true })
           return name
         end
+        -- 2026-08-10: the index block must own its highlight too, for the same
+        -- reason the caps do -- but against a different thief.
+        --
+        -- Passing `guibg =` inline makes incline mint a group named after the
+        -- colours (`incline__guibg_307a74__guifg_080808`) ONCE and cache it.
+        -- theme.lua's pipeline walks every highlight group, and `get_highlights`
+        -- PROMOTES plugin-injected newcomers into its base cache the first time
+        -- it sees them. So if the pipeline ever clears that group's bg (the
+        -- transparency branch calls clear_bg_attrs when t >= 1), the bg-less
+        -- version becomes the cached base and is re-stamped forever after.
+        -- incline never rebuilds it, because its own cache still says "done".
+        --
+        -- Measured on the live session 2026-08-10: the NC block was
+        -- `{ fg = 526344 }` with no bg and NO `blend` key -- the clear_bg_attrs
+        -- signature, not a blend -- while the focused block kept its bg purely
+        -- because it happened to be created after the last sweep. On screen the
+        -- inactive "1" was #080808 on bare wallpaper: an invisible digit with a
+        -- lone cap floating to its left.
+        --
+        -- Setting the group here re-stamps it on EVERY render, so whatever the
+        -- theme pipeline does to it is corrected on the next redraw instead of
+        -- persisting. Same defence as cap_hl, and it keeps the fix inside
+        -- focus-fx rather than carving an exception into the shared pipeline.
+        local function block_hl(name, fg, bg, bold)
+          vim.api.nvim_set_hl(0, name, { fg = fg, bg = bg, bold = bold or nil })
+          return name
+        end
         if props.focused then
           -- chip follows mode, like the stripe/ring (insert orange, visual
           -- #be73ff = tmux @copy_mode_color); normal keeps the identity teal
           local accent = (_G.FocusFx and _G.FocusFx.mode_accent and _G.FocusFx.mode_accent()) or "#66fff2"
           parts = {
             { "\238\130\182", group = cap_hl("InclineCapFocus", accent) },
-            { idx .. " ", guifg = "#080808", guibg = accent, gui = "bold" },
+            { idx .. " ", group = block_hl("FocusFxInclineIdx", "#080808", accent, true) },
             { " " .. name .. " ", guifg = accent, guibg = CHIP_BG },
           }
         else
           parts = {
             { "\238\130\182", group = cap_hl("InclineCapNC", "#307a74") },
-            { idx .. " ", guifg = "#080808", guibg = "#307a74" },
+            { idx .. " ", group = block_hl("FocusFxInclineIdxNC", "#080808", "#307a74") },
             { " " .. name .. " ", guifg = "#307a74", guibg = CHIP_BG },
           }
         end

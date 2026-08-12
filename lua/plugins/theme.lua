@@ -2236,6 +2236,126 @@ local function apply_yaml_key_ramp()
   apply_yaml_key_rungs(rungs, base)
 end
 
+-- ---------------------------------------------------------------------------
+-- BOLD-COLOR COLLISION GUARD (2026-08-10).
+-- ---------------------------------------------------------------------------
+-- Ghostty's `bold-color` is not a blanket override -- it repaints a bold cell
+-- ONLY when that cell's fg is byte-for-byte the configured `foreground`. So the
+-- instant any yaml colour lands exactly on the terminal's default fg AND has
+-- the bold bit, Ghostty stops drawing our colour and draws bold-color instead.
+--
+-- MEASURED, not theorised (2026-08-10). config.ghostty had foreground #00ffc8
+-- and bold-color #ff3b3b. acidwave's @string.yaml is #00ffc8 and :YamlKeyTopColor
+-- had been set to #00ffc8, so:
+--     bold + #00ffc8  (== default fg)  -> drawn #ff3b3b   RED
+--     bold + #a3b4c1  (deeper rungs)   -> drawn #c4cdd5   fine
+--     bold + #00ff41  (starship path)  -> drawn green     fine
+-- Only the exact match went red, which is why it looked like "bold makes yaml
+-- red" while every other bold thing on screen was untouched.
+--
+-- The fix is one LSB on blue. Not a compromise on the colour -- 1/255 on one
+-- channel is below any display's ability to show it -- but it is enough that the
+-- equality test fails and Ghostty draws what we asked for. Applied ONLY to
+-- colours that would carry the bold bit, so nothing non-bold is ever nudged.
+--
+-- Ghostty's config path is fixed (see the ONE-config-file rule), read once and
+-- cached. If it cannot be read, the guard becomes a no-op rather than guessing a
+-- foreground and nudging colours for no reason.
+local terminal_default_fg_cache = nil
+local function terminal_default_fg()
+  if terminal_default_fg_cache ~= nil then
+    return terminal_default_fg_cache or nil
+  end
+  terminal_default_fg_cache = false
+  local path = vim.env.HOME .. "/Library/Application Support/com.mitchellh.ghostty/config.ghostty"
+  local ok, lines = pcall(vim.fn.readfile, path)
+  if ok and type(lines) == "table" then
+    for _, line in ipairs(lines) do
+      -- First match wins: Ghostty itself takes the FIRST value for a repeated
+      -- key, so a later commented-out or duplicate line is not what is live.
+      local hex = line:match("^%s*foreground%s*=%s*(#?%x%x%x%x%x%x)%s*$")
+      if hex then
+        terminal_default_fg_cache = normalize_hex(hex) or false
+        break
+      end
+    end
+  end
+  return terminal_default_fg_cache or nil
+end
+
+-- Nudge `hex` off the terminal's default foreground, but only when `is_bold` --
+-- a non-bold cell is never touched by bold-color and must render as typed.
+local function dodge_bold_color(hex, is_bold)
+  if not is_bold then
+    return hex
+  end
+  local norm = normalize_hex(hex)
+  local default_fg = terminal_default_fg()
+  if not norm or not default_fg or norm:lower() ~= default_fg:lower() then
+    return hex
+  end
+  -- +1 on blue, or -1 when blue is already maxed so the nudge stays in range.
+  local b = tonumber(norm:sub(6, 7), 16)
+  return norm:sub(1, 5) .. string.format("%02x", b < 255 and b + 1 or b - 1)
+end
+
+-- Sweep EVERY highlight group and dodge the collision on any that is bold and
+-- sits exactly on the terminal's default foreground. Group-agnostic on purpose:
+-- the collision is a property of (bold bit + one exact hex), not of yaml, so
+-- scoping it to the yaml groups would just wait for the next group to land on
+-- that hex. Skips groups with a bg -- bold-color only claims the foreground of
+-- default-fg cells, and a group carrying its own bg is not one.
+local function dodge_bold_color_sweep()
+  if not terminal_default_fg() then
+    return
+  end
+  local ok, all = pcall(vim.api.nvim_get_hl, 0, {})
+  if not ok or type(all) ~= "table" then
+    return
+  end
+  for group, hl in pairs(all) do
+    if type(hl) == "table" and hl.bold and hl.fg and not hl.bg then
+      local nudged = dodge_bold_color(hl.fg, true)
+      if nudged ~= hl.fg and normalize_hex(nudged) ~= normalize_hex(hl.fg) then
+        local adj = vim.deepcopy(hl)
+        adj.fg = nudged
+        pcall(vim.api.nvim_set_hl, 0, group, adj)
+      end
+    end
+  end
+end
+
+-- WEIGHT LADDER, shared by :YamlKeyBold and :YamlValueBold.
+--
+-- Neovim has no weight attribute -- nvim_set_hl{weight=600} errors with
+-- "invalid key: weight" -- so the only way to address more than one weight is
+-- the two attribute bits it DOES have, bold and italic, which the terminal maps
+-- to four font slots. Ghostty points each slot at any face it likes, so the bit
+-- pair becomes a 4-rung ladder:
+--
+--   level 0   neither bit   font-style              Regular
+--   level 1   italic        font-style-italic       SemiBold   (upright)
+--   level 2   bold          font-style-bold         ExtraBold
+--   level 3   bold+italic   font-style-bold-italic  ExtraBold Italic
+--
+-- Level 3 is the MAXIMUM weight the terminal can render and is the only rung
+-- that is also visually italic, because font-style-italic is pointed at an
+-- upright face while font-style-bold-italic is not. That is what makes "maxed
+-- out bold, and italic" a single reachable state rather than a contradiction.
+--
+-- true/false still work and mean level 2 / level 0, so saved configs written
+-- before the ladder existed keep their meaning.
+local function yaml_weight_bits(level)
+  if level == true or level == 2 then
+    return true, false
+  elseif level == 1 then
+    return false, true
+  elseif level == 3 then
+    return true, true
+  end
+  return false, false
+end
+
 -- Stamp a computed rung list. Split out of apply_yaml_key_ramp so the ladder-off
 -- branch stamps through exactly the same code -- bold, the brightness knob and
 -- nocombine are decided here and only here, whatever produced the pct values.
@@ -2290,10 +2410,17 @@ apply_yaml_key_rungs = function(rungs, base)
     if yaml_key_bold ~= nil then
       -- Explicit false, not "leave alone": the pristine cache re-stamp already
       -- ran, so writing false here is what actually clears a forced bold.
-      adj.bold = yaml_key_bold
+      -- Both bits are always written for the same reason -- leaving italic nil
+      -- would let a previous level 1/3 survive a drop back to 0/2.
+      adj.bold, adj.italic = yaml_weight_bits(yaml_key_bold)
     else
       adj.bold = rung.bold == true
+      adj.italic = false
     end
+    -- LAST word on fg, after the ramp, the knobs, the palette and the top-level
+    -- override -- the collision is with the hex that actually reaches the
+    -- terminal, so anything that runs after this would reintroduce it.
+    adj.fg = dodge_bold_color(adj.fg, adj.bold)
     -- yaml keys are ALSO plain @string scalars in the treesitter grammar, so a
     -- key's render stack is @string.yaml UNDER @property.yaml.*. The key group
     -- wins on colour but COMBINES attrs from below — which is how :YamlValueBold
@@ -2351,11 +2478,28 @@ local yaml_value_bold = false
 -- darker on every reload -- same trap documented on apply_evergarden_comment_style.
 local yaml_value_brightness = 50
 
+-- WEIGHT LEVELS (2026-08-09, shared with the key ramp 2026-08-10). Both
+-- yaml_value_bold and yaml_key_bold are levels 0-3, not booleans. The ladder
+-- itself is documented once on yaml_weight_bits, above apply_yaml_key_rungs --
+-- keys and values MUST resolve the bit pair identically or level 3 means one
+-- thing on a key and another on a value.
+--
+-- Level 1 spends the italic bit on weight rather than slant, which is only
+-- sound because font-style-italic is pointed at an UPRIGHT face. If
+-- font-style-italic is ever pointed back at a slanted face, level 1 becomes a
+-- slant again and this ladder silently loses its middle rung -- level 3 is
+-- unaffected, it is slanted by design.
+local yaml_value_weight_bits = yaml_weight_bits
+
 local function apply_yaml_value_style()
+  local want_bold, want_italic = yaml_value_weight_bits(yaml_value_bold)
   for _, group in ipairs(yaml_value_groups) do
     local ok, cur = pcall(vim.api.nvim_get_hl, 0, { name = group, link = false })
     local adj = (ok and type(cur) == "table") and vim.deepcopy(cur) or {}
-    adj.bold = yaml_value_bold
+    -- Both written explicitly, never left nil: the pristine cache re-stamp has
+    -- already run, so writing false is what actually CLEARS a previous level.
+    adj.bold = want_bold
+    adj.italic = want_italic
     if yaml_value_brightness ~= 50 then
       local hex = normalize_hex(adj.fg)
       if hex then
@@ -2364,6 +2508,11 @@ local function apply_yaml_value_style()
         adj.fg = adjust_fg_hsl(hex, yaml_value_brightness, 50)
       end
     end
+    -- Same guard as the key rungs, same reason, same placement: last word on fg.
+    -- This is the path that made ":YamlValueBold turns my font red" -- most
+    -- themes give @string.yaml the same colour the terminal uses as its default
+    -- foreground, so the whole value class collided at once.
+    adj.fg = dodge_bold_color(adj.fg, adj.bold)
     pcall(vim.api.nvim_set_hl, 0, group, adj)
   end
 end
@@ -3124,6 +3273,16 @@ local function adjust_all_highlights()
   -- the live poke is always the newer decision.
   apply_saved_baseline_pins()
   apply_hl_overrides()
+  -- Truly last, and it has to be. The bold-color collision is decided by the
+  -- hex that REACHES the terminal, and both calls above deliberately re-stamp
+  -- exact pinned hexes over everything the pipeline computed -- which is what
+  -- put #00ffc8 back on @string.yaml after apply_yaml_value_style had already
+  -- dodged it (measured 2026-08-10, this is why the first fix looked dead).
+  --
+  -- This does NOT contradict "a pin is an exact colour": the pin's intent is
+  -- that hex ON SCREEN, and without the nudge the screen shows bold-color
+  -- instead. One LSB is the cheapest way to keep the promise.
+  dodge_bold_color_sweep()
 end
 
 -- ── Habamax-specific overrides ───────────────────────────────────────────────
@@ -3902,26 +4061,46 @@ return {
       -- nothing is written to disk.
       vim.api.nvim_create_user_command("YamlValueBold", function(opts)
         local arg = vim.trim(opts.args):lower()
+        -- Level names, so the report reads as a weight rather than a number.
+        local LEVELS = { [0] = "0 off (Regular)", [1] = "1 (SemiBold)", [2] = "2 (ExtraBold)", [3] = "3 (ExtraBold Italic)" }
+        local function level_of(v)
+          if v == true then
+            return 2
+          elseif v == false or v == nil then
+            return 0
+          end
+          return v
+        end
+        local function report()
+          vim.notify("YamlValueBold: " .. (LEVELS[level_of(yaml_value_bold)] or tostring(yaml_value_bold)))
+        end
         if arg == "" then
-          vim.notify("YamlValueBold: " .. (yaml_value_bold and "on" or "off"))
+          report()
           return
         end
-        if arg == "on" then
-          yaml_value_bold = true
+        local num = tonumber(arg)
+        if num and num >= 0 and num <= 3 and num == math.floor(num) then
+          yaml_value_bold = num
+        elseif arg == "on" then
+          yaml_value_bold = 2
+        elseif arg == "max" then
+          -- The heaviest face the terminal can address, italic included.
+          yaml_value_bold = 3
         elseif arg == "off" then
-          yaml_value_bold = false
+          yaml_value_bold = 0
         elseif arg == "toggle" then
-          yaml_value_bold = not yaml_value_bold
+          -- Walks the whole ladder now, not a two-state flip: 0 -> 1 -> 2 -> 3 -> 0.
+          yaml_value_bold = (level_of(yaml_value_bold) + 1) % 4
         else
-          vim.notify("YamlValueBold: expected on, off or toggle", vim.log.levels.ERROR)
+          vim.notify("YamlValueBold: expected 0-3, on, max, off or toggle", vim.log.levels.ERROR)
           return
         end
         apply_theme_adjustments()
-        vim.notify("YamlValueBold: " .. (yaml_value_bold and "on" or "off"))
+        report()
       end, {
         nargs = "?",
         complete = function()
-          return { "on", "off", "toggle" }
+          return { "0", "1", "2", "3", "on", "max", "off", "toggle" }
         end,
         desc = "Bold all yaml values (keys untouched)",
       })
@@ -4773,29 +4952,53 @@ return {
       -- 'off' is an alias for 'none' here; the LOCK reserves 'off' for release.
       vim.api.nvim_create_user_command("YamlKeyBold", function(opts)
         local arg = vim.trim(opts.args):lower()
+        -- Level names, so the report reads as a weight rather than a number.
+        -- Identical to :YamlValueBold's table on purpose: the two knobs drive
+        -- the same yaml_weight_bits ladder and must not describe it differently.
+        local LEVELS = { [0] = "0 none (Regular)", [1] = "1 (SemiBold)", [2] = "2 (ExtraBold)", [3] = "3 (ExtraBold Italic)" }
+        local function report()
+          if yaml_key_bold == nil then
+            vim.notify("YamlKeyBold: default (toplevel rung only)")
+          else
+            local level = yaml_key_bold == true and 2 or yaml_key_bold == false and 0 or yaml_key_bold
+            vim.notify("YamlKeyBold: " .. (LEVELS[level] or tostring(yaml_key_bold)))
+          end
+        end
         if arg == "" then
-          local state = yaml_key_bold == true and "on" or yaml_key_bold == false and "none" or "default"
-          vim.notify("YamlKeyBold: " .. state)
+          report()
           return
         end
-        if arg == "on" then
-          yaml_key_bold = true
+        local num = tonumber(arg)
+        if num and num >= 0 and num <= 3 and num == math.floor(num) then
+          yaml_key_bold = num
+        elseif arg == "on" then
+          yaml_key_bold = 2
+        elseif arg == "max" then
+          -- The heaviest face the terminal can address, italic included.
+          yaml_key_bold = 3
         elseif arg == "none" or arg == "off" then
-          yaml_key_bold = false
+          yaml_key_bold = 0
         elseif arg == "default" then
           yaml_key_bold = nil
+        elseif arg == "toggle" then
+          -- Walks the ladder, matching :YamlValueBold toggle: 0 -> 1 -> 2 -> 3 -> 0.
+          -- 'default' is deliberately NOT in the cycle -- it is a different kind
+          -- of state (defer to the ramp) and would read as a fifth weight.
+          local level = yaml_key_bold == true and 2 or (yaml_key_bold == false or yaml_key_bold == nil) and 0 or yaml_key_bold
+          yaml_key_bold = (level + 1) % 4
         else
-          vim.notify("YamlKeyBold: expected on, none or default", vim.log.levels.ERROR)
+          vim.notify("YamlKeyBold: expected 0-3, on, max, none, default or toggle", vim.log.levels.ERROR)
           return
         end
         apply_theme_adjustments()
+        report()
         vim.defer_fn(_G.__yaml_key_depth_report, 900)
       end, {
         nargs = "?",
         complete = function()
-          return { "on", "none", "default" }
+          return { "0", "1", "2", "3", "on", "max", "none", "default", "toggle" }
         end,
-        desc = "Bold yaml keys: on = all rungs, none = no rungs, default = toplevel only",
+        desc = "Weight yaml keys 0-3 (3 = ExtraBold Italic); default = toplevel rung only",
       })
 
       -- :YamlKeyBrightnessLock <0-100> | off | (report)
