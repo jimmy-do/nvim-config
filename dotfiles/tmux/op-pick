@@ -1,0 +1,81 @@
+#!/usr/bin/env zsh
+# 1Password picker for tmux.
+#
+#   prefix p  ->  fzf over your items  ->  pick a field  ->  clipboard or paste
+#
+# Secrets are never rendered. The preview shows an item's field NAMES only, and
+# the value is fetched exactly once, at the moment you choose what to do with
+# it. That way a secret can't end up in scrollback, in a capture-pane, or in a
+# screenshot of the popup.
+#
+# op calls are strictly serial and every one gets </dev/null: the CLI reads
+# stdin for its own prompts, and concurrent writes 409. A Touch ID prompt here
+# means the 10-minute inactivity lock, not a missing permission.
+
+set -o pipefail
+
+TARGET_PANE="$1"   # pane that invoked the popup; where Ctrl-P types the secret
+
+typeset -g FZF=/opt/homebrew/bin/fzf
+[[ -x "$FZF" ]] || FZF=fzf
+
+die() { print -u2 -- "$1"; sleep 2; exit 1; }
+
+command -v op >/dev/null || die "op CLI not installed"
+
+# --- pick an item ----------------------------------------------------------
+items=$(op item list --format=json </dev/null 2>/dev/null) || die "op item list failed — is 1Password unlocked?"
+[[ -n "$items" ]] || die "no items returned"
+
+rows=$(print -r -- "$items" | jq -r '
+  .[] | [.id, .title, (.vault.name // ""), (.category // "")] | @tsv
+') || die "jq failed"
+[[ -n "$rows" ]] || die "no items"
+
+pick=$(print -r -- "$rows" | env -u NO_COLOR "$FZF" \
+  --delimiter=$'\t' --with-nth=2.. --nth=2.. \
+  --layout=reverse --border=rounded --info=inline-right \
+  --border-label=' 1PASSWORD ' \
+  --prompt='item > ' \
+  --header='Enter copy  |  Ctrl-P paste into pane  |  Esc cancel' \
+  --expect=ctrl-p \
+  --preview='op item get {1} --format=json </dev/null 2>/dev/null | jq -r "\"\(.title)\n\(.category)  ·  \(.vault.name)\n\n fields:\n\" + ([.fields[]? | select(.value != null) | \"   \" + (.label // .id)] | join(\"\n\"))"' \
+  --preview-window='right,55%,wrap,border-left') || exit 0
+
+key=${pick%%$'\n'*}
+line=${pick#*$'\n'}
+[[ -n "$line" ]] || exit 0
+item_id=${line%%$'\t'*}
+
+# --- pick a field ----------------------------------------------------------
+fields=$(op item get "$item_id" --format=json </dev/null 2>/dev/null | jq -r '
+  [.fields[]? | select(.value != null and .value != "") | (.label // .id)] | .[]
+') || die "could not read that item"
+[[ -n "$fields" ]] || die "that item has no readable fields"
+
+count=$(print -r -- "$fields" | grep -c .)
+if [[ "$count" == "1" ]]; then
+  field="$fields"
+else
+  # Put the usual suspect first so Enter is almost always right.
+  ordered=$(print -r -- "$fields" | awk '
+    /^password$/ { first = $0; next }
+    { rest = rest $0 "\n" }
+    END { if (first) printf "%s\n", first; printf "%s", rest }')
+  field=$(print -r -- "$ordered" | env -u NO_COLOR "$FZF" \
+    --layout=reverse --border=rounded --border-label=' FIELD ' \
+    --prompt='field > ' --header='Enter choose  |  Esc cancel') || exit 0
+fi
+[[ -n "$field" ]] || exit 0
+
+secret=$(op item get "$item_id" --fields "label=$field" --reveal </dev/null 2>/dev/null)
+[[ -n "$secret" ]] || die "empty value"
+
+if [[ "$key" == "ctrl-p" && -n "$TARGET_PANE" ]]; then
+  # -l sends the text literally, so metacharacters aren't interpreted as keys.
+  tmux send-keys -t "$TARGET_PANE" -l -- "$secret"
+  tmux display-message -d 2000 "#[fg=#00ffc8]  pasted ${field} into the pane"
+else
+  print -rn -- "$secret" | pbcopy
+  tmux display-message -d 2500 "#[fg=#00ffc8]  ${field} copied — clipboard holds a secret"
+fi
