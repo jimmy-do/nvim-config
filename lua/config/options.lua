@@ -59,6 +59,34 @@ vim.g.lazyvim_picker = "fzf"
 -- Some language servers report $HOME as their root, which makes fzf scan the whole account.
 vim.g.root_spec = { { ".git", "lua" }, "cwd" }
 
+-- Stale-swapfile triage. A hard kill (the 2026-08-12 accidental restart) leaves
+-- swapfiles behind, and every later open of the same file nags with W325 even
+-- though nothing else has it open. swapinfo() tells us whether the owning nvim
+-- is still alive and whether the swap holds unsaved edits, so decide silently:
+--   owner alive            -> leave v:swapchoice empty: real collision, do prompt
+--   owner dead, no edits   -> delete the swap and open normally ("d")
+--   owner dead, has edits  -> open anyway ("e") but say so; :recover still works
+-- Lives in options.lua, not autocmds.lua: SwapExists must be registered before
+-- the first file opens, and autocmds.lua only loads on VeryLazy.
+vim.api.nvim_create_autocmd("SwapExists", {
+  group = vim.api.nvim_create_augroup("jimmy_swap_triage", { clear = true }),
+  callback = function()
+    local swapname = vim.v.swapname
+    local info = vim.fn.swapinfo(swapname)
+    if info.error or (info.pid and info.pid > 0 and vim.uv.kill(info.pid, 0) == 0) then
+      return -- unreadable swap or live owner: fall through to the normal prompt
+    end
+    if info.dirty == 0 then
+      vim.v.swapchoice = "d"
+    else
+      vim.v.swapchoice = "e"
+      vim.schedule(function()
+        vim.notify("Swap from a dead nvim had unsaved edits (kept): " .. swapname .. " — :recover to inspect", vim.log.levels.WARN)
+      end)
+    end
+  end,
+})
+
 -- Remote-plugin providers, all off.
 --
 -- These are the legacy python/ruby/perl/node RPC hosts, needed only by plugins

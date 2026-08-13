@@ -289,6 +289,30 @@ vim.api.nvim_create_autocmd("User", {
   end,
 })
 
+-- Crash insurance: persistence only saves on VimLeavePre, so a hard kill (power
+-- loss, accidental restart) loses the whole session — the 2026-08-12 restart
+-- wiped it exactly this way. A 60s timer bounds that loss to a minute. Goes
+-- through persistence.fire("SavePre"/"SavePost") like the plugin's own exit
+-- handler does, so the arglist/netrw prune above runs on every autosave too
+-- (a bare persistence.save() would skip it — the <leader>qs caveat below).
+-- Skipped while no listed file buffer exists: saving then would overwrite a
+-- good session with an empty one from a dashboard or picker-only window.
+local autosave = vim.uv.new_timer()
+autosave:start(60000, 60000, vim.schedule_wrap(function()
+  local ok, persistence = pcall(require, "persistence")
+  if not ok then
+    return
+  end
+  for _, buf in ipairs(vim.api.nvim_list_bufs()) do
+    if vim.bo[buf].buflisted and vim.api.nvim_buf_get_name(buf) ~= "" and vim.bo[buf].buftype == "" then
+      persistence.fire("SavePre")
+      persistence.save()
+      persistence.fire("SavePost")
+      return
+    end
+  end
+end))
+
 vim.api.nvim_create_autocmd("VimEnter", {
   group = vim.api.nvim_create_augroup("jimmy_startup_session", { clear = true }),
   nested = true,
