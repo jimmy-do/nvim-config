@@ -358,3 +358,44 @@ and flash informative when state changes. Every hue must earn its place by meani
 every ON/OFF pair must obey the luminance rule. When you change a colour, grep for its other
 uses first — this config's biggest recurring failure mode is a palette that moves in one place
 and leaves ghosts everywhere else.
+
+---
+
+## 10. 2026-08-13 — prefix w pull-from-float (DONE, verified)
+
+- **choose-tree has no bindable key table** (list-keys: only prefix/root/copy-mode).
+  The only in-chooser hook is the **Enter template**. `bind w`'s choose-tree now passes
+  `tree-grab` as that template: Enter on any **floax row** (session or pane) pulls its
+  pane into the session the chooser was opened from; Enter elsewhere keeps stock
+  `switch-client`. Nothing lost — stock Enter-on-floax attached you to the float
+  fullscreen, never wanted.
+- `pane-move` grew a `pull` verb ($2 = SOURCE pane, dest = current pane; mark not used).
+  It inherits the tmux 3.7b segfault guard and the floax re-create.
+- `tree-grab` gotcha (measured): run-shell has **no current client**, so a bare
+  `switch-client` silently no-ops. It resolves the client via TMUX_PANE's session and
+  uses `switch-client -c`.
+- Verified on throwaway socket `trygrab` (killed after): pull with a second tree open
+  (the segfault condition) — server survived, guard closed the other tree, floax
+  re-created; switch branch confirmed switching. Backups:
+  `tmux.conf.bak-before-tree-grab-20260813`, `pane-move.bak-before-pull-20260813`.
+- Still not done: replacing the FLOAT GUARD refusal with exit-then-switch (approved,
+  lower priority).
+
+## 11. 2026-08-13 — the marked "bright square": FIXED (he ordered it)
+
+- The old diagnosis was WRONG. `#[dim]` is NOT dropped on the cap (measured:
+  dim survives marking). The real cause: tmux hardcodes `attr ^= REVERSE`
+  (an XOR — `pane-border-indicators` does not control it) on every border
+  cell of the MARKED pane; reverse floods the cell bg with the border colour.
+- Fix: `#{?pane_marked,reverse#,,}` prefix on BOTH `pane-border-style` and
+  `pane-active-border-style` (tmux's XOR cancels it), plus `#[noreverse]` at
+  the head of `pane-border-format` (format cells inherit the base attr but
+  skip the XOR). The format prefix is also in the `tmux-pane` generator in
+  `bin/tmux-color` so regeneration keeps it; the style lines are OUTSIDE the
+  managed blocks. Zero look change while nothing is marked.
+- Residual (accepted): a divider cell abutting a marked ACTIVE pane still
+  floods — its style evaluates in the unmarked neighbour's context. Same as
+  before the fix, rare.
+- Verified on nested throwaway servers (sqouter/sqinner, killed): marked
+  inactive + marked active, zero SGR 7 anywhere, pill renders normally.
+  Backup: `tmux.conf.bak-before-square-fix-20260813`.

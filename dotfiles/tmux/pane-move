@@ -1,0 +1,127 @@
+#!/usr/bin/env bash
+# Crash guard for every pane move (join / swap / break).
+#
+# WHY THIS EXISTS -- tmux 3.7b segfaults. Verified from the crash report
+# ~/Library/Logs/DiagnosticReports/tmux-2026-08-13-160758.ips, SIGSEGV,
+# KERN_INVALID_ADDRESS at 0x0:
+#
+#     window_tree_build  +372
+#     mode_tree_build    +140
+#     mode_tree_resize   +36
+#     layout_fix_panes   +108
+#     cmd_join_pane_exec +448
+#
+# Read it bottom-up. join-pane finishes the move and calls layout_fix_panes to
+# re-lay the destination window. That resizes every open MODE TREE on the
+# server -- choose-tree, choose-session, choose-window, the lot -- and a resize
+# makes a mode tree REBUILD itself from scratch. window_tree_build then walks
+# the session/window list, reaches the window join-pane just emptied and
+# destroyed, and dereferences NULL. The whole server dies, taking every session
+# with it: "[server exited unexpectedly]".
+#
+# The trigger is therefore NOT the float and NOT the move itself. It is
+# "a mode tree is open somewhere while a move destroys a window". The float
+# just hits it constantly, because the floax session holds exactly one window
+# with one pane -- moving that pane out ALWAYS destroys a window, so the crash
+# is guaranteed rather than occasional. Moving a pane out of a multi-pane
+# session leaves the window alive and quietly gets away with it.
+#
+# THE GUARD: cancel every mode tree on the server first, THEN move. No tree
+# open means nothing to rebuild means nothing to walk a dead window. The tree
+# you were standing in was going to close on the move anyway, so this costs
+# nothing you would have kept.
+#
+# $1 = verb: join-v | join-h | swap | break | pull
+# $2 = target pane id (%N). Optional -- defaults to the current pane, which is
+#      what the bare prefix binds want. EXCEPT for pull, where $2 is the
+#      SOURCE pane (required) and the destination is always the current pane:
+#      pull is choose-tree's "bring that pane here", so the mark plays no part.
+set -u
+
+verb=${1:?verb required}
+if [ "$verb" = "pull" ]; then
+    src=${2:?pull needs a source pane}
+    dst=$(tmux display-message -p '#{pane_id}')
+else
+    dst=${2:-$(tmux display-message -p '#{pane_id}')}
+fi
+
+say()  { tmux display-message "$1"; }
+fail() { tmux display-message "$1"; exit 0; }
+
+float_session=$(tmux show-option -gqv @floax-session-name)
+: "${float_session:=scratch}"
+
+# --- 1. the mark must exist, or every verb below is a silent no-op ----------
+# (pull carries its own source in $2, so the mark is irrelevant to it)
+if [ "$verb" != "break" ] && [ "$verb" != "pull" ] \
+   && [ -z "$(tmux display-message -p '#{?pane_marked_set,1,}')" ]; then
+    fail "no marked pane -- mark one first (prefix w, then m)"
+fi
+
+if [ "$verb" = "pull" ]; then
+    src_session=$(tmux display-message -p -t "$src" '#{session_name}' 2>/dev/null || true)
+    [ -n "$src_session" ] || fail "that pane is gone"
+else
+    src=$(tmux display-message -p -t '{marked}' '#{pane_id}' 2>/dev/null || true)
+    src_session=$(tmux display-message -p -t '{marked}' '#{session_name}' 2>/dev/null || true)
+fi
+
+# --- 2. refuse a move that is a no-op or eats itself ------------------------
+if [ "$verb" != "break" ] && [ "$src" = "$dst" ]; then
+    fail "marked pane IS this pane -- nothing to move"
+fi
+
+# --- 3. DISARM THE CRASH: close every mode tree on the server ---------------
+# pane_mode is empty for a normal pane; only tree-mode rebuilds through
+# window_tree_build.
+#
+# It MUST be `send-keys q`, the tree's own quit key -- NOT `send-keys -X
+# cancel`. Measured 2026-08-13: choose-tree opened against a session rather
+# than a pane answers `-X cancel` with "not in a mode" and stays open, while
+# #{pane_mode} still reports tree-mode. The guard looked like it worked and the
+# server crashed anyway. A literal `q` routes through the mode's own key table
+# and closes it in every case tested.
+tmux list-panes -a -F '#{pane_id} #{pane_mode}' 2>/dev/null \
+  | while read -r id mode; do
+        case $mode in
+            tree-mode) tmux send-keys -t "$id" q 2>/dev/null ;;
+        esac
+    done
+
+# The close is processed on the server's next loop; the join must not race it.
+tmux display-message -p '' >/dev/null 2>&1
+
+# --- 4. do the move --------------------------------------------------------
+case $verb in
+    join-v) tmux join-pane -v -s '{marked}' -t "$dst" || fail "join failed" ;;
+    join-h) tmux join-pane -h -s '{marked}' -t "$dst" || fail "join failed" ;;
+    swap)   tmux swap-pane  -s '{marked}' -t "$dst"   || fail "swap failed" ;;
+    break)  tmux break-pane -d -s "$dst"              || fail "break failed" ;;
+    pull)   tmux join-pane -v -s "$src" -t "$dst"     || fail "pull failed" ;;
+    *)      fail "pane-move: unknown verb '$verb'" ;;
+esac
+
+# --- 5. the float is a SESSION, so keep it alive ---------------------------
+# Moving the float's only pane out destroys its only window and therefore the
+# floax session itself. prefix o recreates it, but any client parked on it is
+# thrown out first. Re-create it detached, immediately, so the float still
+# exists to toggle back into and no client is left homeless.
+if [ -n "$src_session" ] && [ "$src_session" = "$float_session" ] \
+   && ! tmux has-session -t "=$float_session" 2>/dev/null; then
+    tmux new-session -d -s "$float_session" -c "$HOME"
+    tmux set-option -t "$float_session" status on
+    tmux set-option -t "$float_session" status-position bottom
+    hint=$(tmux show-option -gqv 'status-format[1]')
+    [ -n "$hint" ] && tmux set-option -t "$float_session" 'status-format[0]' "$hint"
+    say "moved out of the float -- float re-created empty"
+    exit 0
+fi
+
+case $verb in
+    join-v) say "joined the marked pane below" ;;
+    join-h) say "joined the marked pane beside" ;;
+    swap)   say "swapped with the marked pane" ;;
+    break)  say "broke that pane out into its own window" ;;
+    pull)   say "pulled that pane in below" ;;
+esac

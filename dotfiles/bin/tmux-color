@@ -455,7 +455,8 @@ MODES = {
             # name. Same meanings, drawn properly:
             #
             #   {BELL}  bell rang          rare and deliberate, so it wins
-            #   {ACT}   unseen output      any output since you last looked
+            #   {ACT}   unseen output      any output since you last looked,
+            #                             except idle Vim/Neovim redraws
             #   {PREV}  last window        a RETURN arrow, not a dot: nothing
             #                              happened here, it just means prefix-;
             #                              goes straight back
@@ -481,7 +482,15 @@ MODES = {
             # deliberate one wins. The return arrow was never news, which is why
             # it no longer competes for that cell at all.
             f'#{{?window_bell_flag,#[fg={B}] {BELL},'
-            f'#{{?window_activity_flag,#[fg={B}] {ACT},  }}}}'
+            # Vim/Neovim receive FocusLost on every tmux window switch and may
+            # answer with terminal redraw/control output. tmux records that as
+            # activity after the window has become inactive, so an untouched
+            # editor immediately acquired a sticky "work" dot. Keep monitoring
+            # enabled for real background jobs, but suppress the marker when the
+            # window's active pane is resting in Vim/Neovim.
+            f'#{{?#{{&&:#{{window_activity_flag}},'
+            f'#{{==:#{{m/ri:^(n?vim)$,#{{pane_current_command}}}},0}}}},'
+            f'#[fg={B}] {ACT},  }}}}'
             f' #[default]"',
         ],
     },
@@ -576,13 +585,19 @@ MODES = {
             # signal went with the lead-in.
             f'set -g pane-border-format '
             f'"'
+            # noreverse first: the marked-square fix (see the pane_marked
+            # `reverse` prefix on the border styles above the tmux-pane block)
+            # pre-sets reverse in the base style so tmux's hardcoded XOR on the
+            # marked pane's border cells cancels out. Format-drawn cells skip
+            # the XOR but inherit the base attr, so the format sheds it here.
+            # No-op whenever nothing is marked.
+            f'#[noreverse]'
             # --- ONE colour decision, made once, used by cap + body + cap ---
             f'#{{?#{{||:#{{pane_dead}},'
             f'#{{m/r:^(ssh|mosh|sudo|doas|su)$,#{{pane_current_command}}}}}},'
             f'#{{?pane_active,#[fg=#FF8500],#[fg=#7a4000]}},'
             f'#{{?pane_active,#{{?pane_in_mode,#[fg={CM}],#[fg={NB}]}},#[fg={ND}]}}}}'
             f'#{{?pane_zoomed_flag,{ZLCAP},{SLANT_L}}}'
-            # --- Reactor Tag: fully lit angular index module ---
             f'#{{?#{{||:#{{pane_dead}},'
             f'#{{m/r:^(ssh|mosh|sudo|doas|su)$,#{{pane_current_command}}}}}},'
             f'#{{?pane_active,#[fg={I}#,bg=#FF8500#,bold],#[fg={I}#,bg=#7a4000#,bold]}},'
@@ -603,7 +618,9 @@ MODES = {
             # single trailing space and the number field ends flush against the
             # label's edge. A bare digit has no such bleed and sits correctly on
             # the single shared trailing space at the end of this group.
-            f'#{{?pane_active, {HERE} ,'
+            # HERE badge removed 2026-08-13: U+EEA7 renders as tofu in this
+            # font, and colour already carries focus (see ON/OFF note above).
+            f'#{{?pane_active,,'
             f'#{{?#{{&&:#{{pane_last}},#{{>:#{{window_panes}},1}}}}, {LAST_PANE} ,}}}} '
             # Hard diagonal cut from the lit index module into the dark body.
             f'#{{?#{{||:#{{pane_dead}},'

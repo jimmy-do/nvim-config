@@ -23,17 +23,17 @@ need_mark() {
 case $verb in
   join-v)
     need_mark || exit 0
-    tmux join-pane -v -s '{marked}' -t "$pane" && say "joined the marked pane below" ;;
+    exec "$HOME/.config/nvim/dotfiles/tmux/pane-move" join-v "$pane" ;;
   join-h)
     need_mark || exit 0
-    tmux join-pane -h -s '{marked}' -t "$pane" && say "joined the marked pane beside" ;;
+    exec "$HOME/.config/nvim/dotfiles/tmux/pane-move" join-h "$pane" ;;
   swap)
     need_mark || exit 0
-    tmux swap-pane -s '{marked}' -t "$pane" && say "swapped with the marked pane" ;;
+    exec "$HOME/.config/nvim/dotfiles/tmux/pane-move" swap "$pane" ;;
   break)
     # -d so breaking a pane out does not yank you to the new window while the
     # chooser is still open.
-    tmux break-pane -d -s "$pane" && say "broke that pane out into its own window" ;;
+    exec "$HOME/.config/nvim/dotfiles/tmux/pane-move" break "$pane" ;;
   kill)
     tmux kill-pane -t "$pane" && say "killed that pane" ;;
   rename)

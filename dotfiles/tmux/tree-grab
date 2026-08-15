@@ -1,0 +1,42 @@
+#!/usr/bin/env bash
+# choose-tree template for prefix w (Enter key).
+#
+# choose-tree's key table is FIXED in tmux -- there is no bindable tree-mode
+# table (list-keys shows only prefix/root/copy-mode), so the ONLY per-item
+# gesture a config can own is the TEMPLATE that Enter runs. This script IS
+# that template: Enter on a row belonging to the float session pulls its pane
+# into the session you pressed prefix w from; Enter anywhere else does exactly
+# what stock tmux does (switch-client to the chosen target).
+#
+# Overloading Enter for float rows loses nothing: the stock action there was
+# "attach this client to the floax session fullscreen", which is never wanted
+# (the float is a popup surface, not a place to live).
+#
+# Runs via run-shell, so TMUX_PANE / display-message resolve to the pane the
+# chooser was opened from -- that pane is the pull destination.
+# The move routes through pane-move (verb `pull`), which carries the tmux 3.7b
+# crash guard and re-creates the floax session if the pull emptied it.
+set -u
+
+target=${1:?target required}
+
+float_session=$(tmux show-option -gqv @floax-session-name)
+: "${float_session:=scratch}"
+
+sess=$(tmux display-message -p -t "$target" '#{session_name}' 2>/dev/null || true)
+[ -n "$sess" ] || exit 0   # target vanished between draw and Enter
+
+if [ "$sess" = "$float_session" ]; then
+    # Session row or pane row alike: resolve to the concrete pane and pull it.
+    pane=$(tmux display-message -p -t "$target" '#{pane_id}')
+    exec "$(dirname "$0")/pane-move" pull "$pane"
+fi
+
+# Stock behaviour, minus a run-shell trap: a shell spawned by run-shell has no
+# "current client", so a bare switch-client silently does nothing (measured on
+# the trygrab socket). Resolve the client through TMUX_PANE's session instead.
+client=$(tmux list-clients \
+    -t "$(tmux display-message -p -t "${TMUX_PANE:?}" '#{session_name}')" \
+    -F '#{client_name}' | head -1)
+[ -n "$client" ] || exit 0
+exec tmux switch-client -c "$client" -t "$target"

@@ -1,0 +1,36 @@
+#!/usr/bin/env bash
+# One-shot phosphor pulse on pane focus. A token prevents an older pulse from
+# dimming a newer one when pane switches happen in quick succession.
+set -u
+
+token="$$"
+bright=$(tmux show-option -gv @pane_lines_bright 2>/dev/null || printf '#66fff2')
+previous_token=$(tmux show-option -gv @focus_pulse_token 2>/dev/null || true)
+
+refresh_all() {
+  tmux list-clients -F '#{client_name}' 2>/dev/null | while IFS= read -r client; do
+    # Full repaint: `refresh-client -S` updates only the status bar, while the
+    # pulse lives in pane borders.
+    [ -n "$client" ] && tmux refresh-client -t "$client"
+  done
+}
+
+tmux set-option -gq @focus_pulse_token "$token"
+# A second pane hop can arrive during the first pulse. Preserve the original
+# resting colour instead of snapshotting the already-pulsed ice value.
+if [ -z "$previous_token" ]; then
+  tmux set-option -gq @pane_lines_rest "$bright"
+fi
+tmux set-option -gq @pane_lines_bright '#ffffff'
+refresh_all
+
+# Start the dwell after the full redraw returns. Shader-heavy Ghostty clients
+# can spend most of a 200ms pulse repainting, leaving no visible hold frame.
+sleep 0.55
+
+[ "$(tmux show-option -gv @focus_pulse_token 2>/dev/null)" = "$token" ] || exit 0
+rest=$(tmux show-option -gv @pane_lines_rest 2>/dev/null || printf '#66fff2')
+tmux set-option -gq @pane_lines_bright "$rest"
+tmux set-option -gu @focus_pulse_token 2>/dev/null || true
+tmux set-option -gu @pane_lines_rest 2>/dev/null || true
+refresh_all
