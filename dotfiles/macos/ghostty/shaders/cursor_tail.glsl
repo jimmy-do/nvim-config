@@ -12,10 +12,10 @@ vec3 sRGBToLinear(vec3 c) {
 // the call just darkened the trail (0.5 -> 0.21). THAT is why the trail was "too dark".
 // ⚠️ If you ever set `alpha-blending = linear` or `linear-corrected`, PUT IT BACK.
 vec4 TRAIL_COLOR = vec4(iCurrentCursorColor.rgb, iCurrentCursorColor.a); // for custom color: vec4(0.2, 0.6, 1.0, 0.5); (wrap in sRGBToLinear for correct brightness)
-const float DURATION = 0.30; // in seconds. VENDORED+TUNED: was 0.09 ("way too goddamn fast").
-const float MAX_TRAIL_LENGTH = 0.2;
+const float DURATION = 0.55; // Luxury-smooth: deliberately lingering rather than responsive.
+const float MAX_TRAIL_LENGTH = 0.30; // Longer body makes the slow interpolation legible.
 const float THRESHOLD_MIN_DISTANCE = 3.0; // KNOB 1 2026-07-27 (was 1.5): scroll steps are 1-2 cells and spawned a trail per frame; pane jumps are far bigger and keep theirs. Revert: 1.5
-const float BLUR = 2.0; // blur size in pixels (for antialiasing)
+const float BLUR = 3.0; // Silky antialiasing for diagonals and the moving edge.
 
 // COMET FADE, take two (2026-07-22). Take one had three separate alpha
 // regimes -- a glow fringe, a quadratic body ramp, and the AA edge -- meeting
@@ -24,7 +24,11 @@ const float BLUR = 2.0; // blur size in pixels (for antialiasing)
 // motion axis with smoothstep (C1-continuous, so there is no visible band
 // where the fade begins or ends), and the tail floor is high enough that the
 // tail still reads as the cursor colour, never as grey murk. No fringe layer.
-const float TAIL_FADE = 0.35; // alpha at the tail end; 1.0 at the head
+const float TAIL_FADE = 0.18; // Long, gentle luminance ramp into the bright head.
+// Distance is measured in cursor-cell widths. Short editing motions whisper;
+// word jumps ramp in; pane-scale jumps get the full comet.
+const float SPEED_FADE_START = 3.0;
+const float SPEED_FADE_FULL = 10.0;
 
 // --- CONSTANTS for easing functions ---
 const float PI = 3.14159265359;
@@ -74,9 +78,12 @@ const float SPRING_DAMPING = 0.9;
 //     return x == 1.0 ? 1.0 : 1.0 - pow(2.0, -10.0 * x);
 // }
 
-// EaseOutCirc
+// Quintic smootherstep: zero velocity AND zero acceleration at both ends.
+// Unlike EaseOutCirc, it has no near-vertical launch slope, so the cursor body
+// glides into motion and settles without a perceptual snap.
 float ease(float x) {
-    return sqrt(1.0 - pow(x - 1.0, 2.0));
+    x = clamp(x, 0.0, 1.0);
+    return x * x * x * (x * (x * 6.0 - 15.0) + 10.0);
 }
 
 // // EaseOutBack
@@ -267,9 +274,19 @@ void mainImage(out vec4 fragColor, in vec2 fragCoord){
         vec2 axis = head_center - tail_center;
         float axisLen2 = max(dot(axis, axis), 1e-6);
         float along = clamp(dot(vu - tail_center, axis) / axisLen2, 0.0, 1.0);
-        float comet = mix(TAIL_FADE, 1.0, smoothstep(0.0, 1.0, along));
+        // Hold the dimmest value over the very tip, then roll continuously into
+        // the bright head. This reads as light shedding from the cursor instead
+        // of a uniformly bright rubber band.
+        float comet = mix(TAIL_FADE, 1.0, smoothstep(0.06, 1.0, along));
 
         float trailAlpha = clamp(antialising(sdfTrail), 0.0, 1.0) * comet;
+
+        // Motion-sensitive intensity. iTimeCursorChange gives us distance, not
+        // velocity history, but distance-per-cursor-event is the useful signal:
+        // typing and tiny edits stay calm while deliberate navigation lights up.
+        float distanceCells = lineLength / max(currentCursor.z, 1e-6);
+        float motionEnergy = smoothstep(SPEED_FADE_START, SPEED_FADE_FULL, distanceCells);
+        trailAlpha *= motionEnergy;
 
         // Belt and braces for the degenerate frames the max() above makes
         // merely finite rather than meaningful: when head and tail coincide the
