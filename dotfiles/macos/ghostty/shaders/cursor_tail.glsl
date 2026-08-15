@@ -12,8 +12,9 @@ vec3 sRGBToLinear(vec3 c) {
 // the call just darkened the trail (0.5 -> 0.21). THAT is why the trail was "too dark".
 // ⚠️ If you ever set `alpha-blending = linear` or `linear-corrected`, PUT IT BACK.
 vec4 TRAIL_COLOR = vec4(iCurrentCursorColor.rgb, iCurrentCursorColor.a); // for custom color: vec4(0.2, 0.6, 1.0, 0.5); (wrap in sRGBToLinear for correct brightness)
-const float DURATION = 0.55; // Luxury-smooth: deliberately lingering rather than responsive.
-const float MAX_TRAIL_LENGTH = 0.30; // Longer body makes the slow interpolation legible.
+const float DURATION = 0.48; // Slightly quicker, while quintic easing preserves the glide.
+const float MOVE_CLASS_THRESHOLD = 0.30; // Short/long timing boundary; independent of visual length.
+const float MAX_TRAIL_LENGTH = 0.34; // Slightly longer comet without changing move classification.
 const float THRESHOLD_MIN_DISTANCE = 3.0; // KNOB 1 2026-07-27 (was 1.5): scroll steps are 1-2 cells and spawned a trail per frame; pane jumps are far bigger and keep theirs. Revert: 1.5
 const float BLUR = 3.0; // Silky antialiasing for diagonals and the moving edge.
 
@@ -232,8 +233,8 @@ void mainImage(out vec4 fragColor, in vec2 fragCoord){
         float head_eased = 0.0;
         float tail_eased = 0.0;
 
-        float isLongMove = step(MAX_TRAIL_LENGTH, lineLength);
-        float distanceRatio = clamp(lineLength / MAX_TRAIL_LENGTH, 0.0, 1.0);
+        float isLongMove = step(MOVE_CLASS_THRESHOLD, lineLength);
+        float distanceRatio = clamp(lineLength / MOVE_CLASS_THRESHOLD, 0.0, 1.0);
 
         // The head always travels; the old short branch set it to 1.0 on frame
         // one, instantly drawing the whole start-to-destination span. Give
