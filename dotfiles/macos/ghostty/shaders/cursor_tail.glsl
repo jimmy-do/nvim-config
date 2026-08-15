@@ -159,6 +159,24 @@ float getSdfParallelogram(in vec2 p, in vec2 v0, in vec2 v1, in vec2 v2, in vec2
     return s * sqrt(d);
 }
 
+// Stable motion-aligned rectangular beam for diagonal travel. An oriented-box
+// SDF avoids the four independently moving corners of the old parallelogram
+// without the conspicuous circular end caps of a capsule.
+float getSdfMotionBeam(in vec2 p, in vec2 a, in vec2 b, in vec2 cursorSize) {
+    vec2 ba = b - a;
+    float baLen2 = max(dot(ba, ba), 1e-12);
+    vec2 axis = ba * inversesqrt(baLen2);
+    vec2 normal = vec2(-axis.y, axis.x);
+    vec2 halfCursor = cursorSize * 0.5;
+    float halfLength = sqrt(baLen2) * 0.5 + dot(abs(axis), halfCursor);
+    float halfWidth = dot(abs(normal), halfCursor);
+    vec2 local = vec2(dot(p - (a + b) * 0.5, axis),
+                      dot(p - (a + b) * 0.5, normal));
+    float corner = min(halfWidth, min(halfCursor.x, halfCursor.y)) * 0.12;
+    vec2 q = abs(local) - vec2(halfLength, halfWidth) + corner;
+    return length(max(q, 0.0)) + min(max(q.x, q.y), 0.0) - corner;
+}
+
 vec2 normalize(vec2 value, float isPosition) {
     return (value * 2.0 - (iResolution.xy * isPosition)) / iResolution.y;
 }
@@ -233,29 +251,16 @@ void mainImage(out vec4 fragColor, in vec2 fragCoord){
         float isVertical = step(delta_abs.x, threshold);
         float isStraightMove = max(isHorizontal, isVertical);
 
-        // -- Making the parallelogram sdf (diagonal move) --
-
-        // animate the TOP-LEFT corners
-        vec2 head_pos_tl = mix(previousCursor.xy, currentCursor.xy, head_eased);
-        vec2 tail_pos_tl = mix(previousCursor.xy, currentCursor.xy, tail_eased);
-
-        float isTopRightLeading = determineIfTopRightIsLeading(currentCursor.xy, previousCursor.xy);
-        float isBottomLeftLeading = 1.0 - isTopRightLeading;
-        
-        // v0, v1 : "front" of the trail (head)
-        vec2 v0 = vec2(head_pos_tl.x + currentCursor.z * isTopRightLeading, head_pos_tl.y - currentCursor.w);
-        vec2 v1 = vec2(head_pos_tl.x + currentCursor.z * isBottomLeftLeading, head_pos_tl.y);
-        
-        // v2, v3: "back" of the trail (tail)
-        vec2 v2 = vec2(tail_pos_tl.x + currentCursor.z * isBottomLeftLeading, tail_pos_tl.y);
-        vec2 v3 = vec2(tail_pos_tl.x + currentCursor.z * isTopRightLeading, tail_pos_tl.y - previousCursor.w);
-
-        float sdfTrail_diag = getSdfParallelogram(vu, v0, v1, v2, v3);
-
-        // -- Making the rectangle sdf (straight move) --
-
         vec2 head_center = mix(centerCP, centerCC, head_eased);
         vec2 tail_center = mix(centerCP, centerCC, tail_eased);
+
+        // Diagonal path: one stable segment instead of a deforming four-corner
+        // parallelogram. Horizontal/vertical paths retain the proven rectangle.
+        float sdfTrail_diag = getSdfMotionBeam(
+            vu, tail_center, head_center, currentCursor.zw
+        );
+
+        // -- Making the rectangle sdf (straight move) --
 
         vec2 min_center = min(head_center, tail_center);
         vec2 max_center = max(head_center, tail_center);
