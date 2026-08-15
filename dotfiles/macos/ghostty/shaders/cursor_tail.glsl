@@ -232,17 +232,24 @@ void mainImage(out vec4 fragColor, in vec2 fragCoord){
         float head_eased = 0.0;
         float tail_eased = 0.0;
 
-        float tail_delay_factor = MAX_TRAIL_LENGTH / lineLength;
-
         float isLongMove = step(MAX_TRAIL_LENGTH, lineLength);
+        float distanceRatio = clamp(lineLength / MAX_TRAIL_LENGTH, 0.0, 1.0);
 
-        float head_eased_short = ease(progress);
-        float tail_eased_short = ease(smoothstep(tail_delay_factor, 1.0, progress));
-        float head_eased_long = 1.0;
-        float tail_eased_long = ease(progress);
+        // The head always travels; the old short branch set it to 1.0 on frame
+        // one, instantly drawing the whole start-to-destination span. Give
+        // short moves a modest distance-scaled tail delay so the comet grows
+        // behind a moving cursor instead of appearing fully formed.
+        head_eased = ease(progress);
+        float shortDelay = mix(0.04, 0.16, distanceRatio);
+        float tail_eased_short = ease(smoothstep(shortDelay, 1.0, progress));
 
-        head_eased = mix(head_eased_long, head_eased_short, isLongMove);
-        tail_eased = mix(tail_eased_long, tail_eased_short, isLongMove);
+        // Preserve the established long-move shape: its delay is the maximum
+        // trail length expressed as a fraction of the total jump. Clamp below
+        // 1.0 so smoothstep never receives equal or reversed edges at the
+        // short/long boundary.
+        float longDelay = clamp(MAX_TRAIL_LENGTH / lineLength, 0.02, 0.92);
+        float tail_eased_long = ease(smoothstep(longDelay, 1.0, progress));
+        tail_eased = mix(tail_eased_short, tail_eased_long, isLongMove);
 
         // detect straight moves
         vec2 delta_abs = abs(centerCC - centerCP); 
