@@ -69,7 +69,7 @@ local anim = {
   -- colour (the guide fades until it is indistinguishable from every other guide,
   -- i.e. reads as fully dark/off), 1 is the resting lit colour, and >1 pushes on
   -- past it toward white. So 0 -> 1 is a full dark-to-max swing.
-  breathe = true, -- false disables the breathe; the guide just rests when filled
+  breathe = false, -- keep the one-shot fill, then rest; no colour cycling
   -- 0.0 is CORRECT and deliberate: the swing must go from max contrast all the
   -- way down to nothing. Do NOT raise this to "soften" the fade -- tried 0.55
   -- on 2026-07-31 and it was immediately rejected ("how the fuck is it fading
@@ -787,7 +787,11 @@ end
 -- `hl_for` is an optional function(line) -> highlight group, used by the animation
 -- to give each row its own leading-edge brightness; nil means the theme group.
 -- Pure drawing: no scope detection, so the timer can call it every frame.
--- Live extmarks, keyed by line -> { id, hl }. Reused across frames.
+-- Desired decorations, keyed by line -> highlight group. These are emitted as
+-- ephemeral extmarks by the decoration provider below, only for the current
+-- window. Persistent extmarks are buffer-scoped, so when the same buffer was
+-- open in two splits Neovim necessarily painted (and animated) the guide in
+-- BOTH. Ephemeral provider marks let us make the overlay genuinely window-local.
 --
 -- The previous version cleared the whole namespace and recreated every extmark on
 -- each of the ~33 frames. That churn is what made the fill look choppy and made the
@@ -798,16 +802,38 @@ end
 local active = {}
 local active_buf = nil
 
+local function redraw_current()
+  local win = vim.api.nvim_get_current_win()
+  if vim.api.nvim_win_is_valid(win) then
+    pcall(vim.api.nvim__redraw, { win = win, valid = false })
+  end
+end
+
 local function clear_marks(buf)
-  if active_buf and vim.api.nvim_buf_is_valid(active_buf) then
-    vim.api.nvim_buf_clear_namespace(active_buf, ns, 0, -1)
-  end
-  if buf and buf ~= active_buf and vim.api.nvim_buf_is_valid(buf) then
-    vim.api.nvim_buf_clear_namespace(buf, ns, 0, -1)
-  end
   active = {}
   active_buf = buf
+  redraw_current()
 end
+
+vim.api.nvim_set_decoration_provider(ns, {
+  on_win = function(_, win, buf)
+    return win == vim.api.nvim_get_current_win() and buf == active_buf
+  end,
+  on_line = function(_, _, buf, row)
+    local hl = active[row + 1]
+    if not hl then
+      return
+    end
+    vim.api.nvim_buf_set_extmark(buf, ns, row, 0, {
+      virt_text = { { config.char, hl } },
+      virt_text_win_col = active.col,
+      virt_text_pos = "overlay",
+      hl_mode = "replace",
+      priority = config.priority,
+      ephemeral = true,
+    })
+  end,
+})
 
 -- `cache` (optional) memoises the "does this row carry a guide at all" test for
 -- the life of one animation. Without it every frame re-runs two vim.fn calls per
@@ -821,7 +847,7 @@ local function draw(buf, col, lo, hi, hl_for, cache)
   lo = math.max(lo, vim.fn.line("w0"))
   hi = math.min(hi, vim.fn.line("w$"))
 
-  local want = {}
+  local want = { col = col }
   for l = lo, hi do
     -- Only draw where the column falls inside the line's indentation
     -- whitespace (or on a blank continuation line) -- never over real text.
@@ -840,35 +866,22 @@ local function draw(buf, col, lo, hi, hl_for, cache)
     end
   end
 
-  -- Retire rows that should no longer carry a guide.
-  for l, m in pairs(active) do
-    if not want[l] then
-      pcall(vim.api.nvim_buf_del_extmark, buf, ns, m.id)
-      active[l] = nil
+  local changed = active.col ~= col
+  for l, hl in pairs(active) do
+    if l ~= "col" and want[l] ~= hl then
+      changed = true
+      break
     end
   end
-
-  -- Add new rows, and update only those whose GROUP actually changed.
   for l, hl in pairs(want) do
-    local m = active[l]
-    if not (m and m.hl == hl) then
-      local ok, id = pcall(vim.api.nvim_buf_set_extmark, buf, ns, l - 1, 0, {
-        id = m and m.id or nil, -- reuse the id so this is an update, not a churn
-        virt_text = { { config.char, hl } },
-        virt_text_win_col = col,
-        virt_text_pos = "overlay",
-        -- "replace", not "combine": combine composites our colour with the dim
-        -- SnacksIndent guide already painted at that cell, which muted the flash
-        -- -- the pulse never got near white because it was being averaged with a
-        -- near-background colour every frame.
-        hl_mode = "replace",
-        priority = config.priority,
-        ephemeral = false,
-      })
-      if ok then
-        active[l] = { id = id, hl = hl }
-      end
+    if active[l] ~= hl then
+      changed = true
+      break
     end
+  end
+  active = want
+  if changed then
+    redraw_current()
   end
 end
 
@@ -1125,6 +1138,17 @@ local function animate(buf, col, from, to, origin)
       -- Smoothstep eases in AND out, keeping the middle -- where most of the travel
       -- happens -- at a steady rate.
       local p = t * t * (3 - 2 * t)
+
+      -- The fill is the only animation we want. Once it reaches both scope
+      -- boundaries, replace its per-row animation groups with the stable theme
+      -- colour and shut the timer down completely. Merely setting breathe=false
+      -- without this exit left an idle 20fps timer alive forever.
+      if t >= 1 and not anim.breathe then
+        pcall(vim.api.nvim_set_hl, 0, GLOW, { fg = hex(base) })
+        draw(buf, col, from, to)
+        stop_timer()
+        return
+      end
 
       -- Breathe: starts only once the fill is COMPLETE (t=1), then runs forever
       -- while the cursor stays in this scope.
@@ -1570,6 +1594,19 @@ vim.api.nvim_create_autocmd(
   { "CursorMoved", "CursorMovedI", "BufWinEnter", "TextChanged", "TextChangedI", "ColorScheme" },
   { group = group, callback = schedule }
 )
+vim.api.nvim_create_autocmd("WinEnter", {
+  group = group,
+  callback = function()
+    -- Ephemeral marks from the previous redraw must disappear from the window
+    -- we just left, even when both windows show the same buffer. Empty the
+    -- desired frame before forcing that redraw; schedule() then paints the new
+    -- window from its own cursor/scope.
+    active = {}
+    active_buf = vim.api.nvim_get_current_buf()
+    pcall(vim.api.nvim__redraw, { valid = false })
+    schedule()
+  end,
+})
 vim.api.nvim_create_autocmd("WinScrolled", {
   group = group,
   callback = function()
