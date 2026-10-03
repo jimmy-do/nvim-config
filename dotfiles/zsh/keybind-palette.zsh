@@ -122,7 +122,8 @@ _keys_data() {
 
   _keys_add 'tmux · panes' 'Ctrl-h/j/k/l' 'Move directly between tmux panes.' 'Ctrl-j' 'tmux forwards these keys into detected Vim-like or fzf processes instead of switching panes.'
   _keys_add 'tmux · panes' 'Prefix h/j/k/l' 'Select the pane left / down / up / right.' 'Ctrl-a, then h' 'Direct pane navigation independent of the running app.'
-  _keys_add 'tmux · panes' 'Prefix | / Prefix -' 'Split horizontally / vertically in the current directory.' 'Ctrl-a, then |' 'Your custom splits replace tmux’s quote and percent keys.'
+  _keys_add 'tmux · panes' 'Prefix | / Prefix -' 'Split beside / below the current pane in the current directory.' 'Ctrl-a, then |' 'Your custom splits replace tmux’s quote and percent keys.'
+  _keys_add 'tmux · panes' 'Prefix _' 'Create a full-width pane below all existing panes.' 'Ctrl-a, then Shift--' 'Unlike Prefix -, this spans the entire tmux window instead of only splitting the active pane.'
   _keys_add 'tmux · panes' 'Prefix H/J/K/L' 'Resize five cells toward the chosen direction.' 'Ctrl-a, then hold L' 'These bindings are repeatable.'
   _keys_add 'tmux · panes' 'Prefix R' 'Enter persistent pane-resize mode.' 'Ctrl-a, then Shift-r; tap or hold h/j/k/l' 'No more prefix presses: lowercase moves 1 cell, uppercase moves 5.'
   _keys_add 'tmux · panes' 'Esc / q / Enter' 'Leave persistent pane-resize mode.' 'Press q when the pane looks right' 'These cancel keys apply after entering resize mode with Prefix R.'
