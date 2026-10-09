@@ -5,6 +5,15 @@ Personal LazyVim-based Neovim configuration for local development and temporary 
 This `macos-dotfiles` branch adds the current Ghostty and Karabiner-Elements
 configuration. Use `main` for the cross-platform Neovim/tmux-only setup.
 
+> **Note (2026-10-09):** the current config is on
+> `feat/antigravity-youtube-terminal-tools`, now the default branch. `main` is
+> frozen at 2026-06-07; an existing clone on `main` needs
+> `git fetch origin && git switch feat/antigravity-youtube-terminal-tools`.
+> `dotfiles/macos/ghostty/config.ghostty` is a stale copy (last commit
+> 2026-07-30) -- the live Ghostty config is in the separate `ghostty-config`
+> repo, so the Ghostty symlink steps below install an old file. The shaders in
+> `dotfiles/macos/ghostty/shaders/` are current.
+
 ## Supported Environments
 
 - macOS
