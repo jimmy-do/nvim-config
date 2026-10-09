@@ -4,8 +4,8 @@
 set -u
 
 token="$$"
-bright=$(tmux show-option -gv @pane_lines_bright 2>/dev/null || printf '#66fff2')
-previous_token=$(tmux show-option -gv @focus_pulse_token 2>/dev/null || true)
+pulse='#ffffff'
+bright=$(tmux show-option -gv @pane_lines_bright 2>/dev/null || true)
 
 refresh_all() {
   tmux list-clients -F '#{client_name}' 2>/dev/null | while IFS= read -r client; do
@@ -16,12 +16,16 @@ refresh_all() {
 }
 
 tmux set-option -gq @focus_pulse_token "$token"
-# A second pane hop can arrive during the first pulse. Preserve the original
-# resting colour instead of snapshotting the already-pulsed ice value.
-if [ -z "$previous_token" ]; then
+# Never snapshot the pulse colour as the resting one. The old guard keyed this
+# on the token, but an overlapping pulse could read the white value, then see
+# the token cleared by the pulse before it, and save white as "rest" -- after
+# which every pulse restored to white for good. @pane_lines_rest is now sticky
+# and only ever takes a non-pulse value; the config's managed line is the
+# last-resort source.
+if [ -n "$bright" ] && [ "$bright" != "$pulse" ]; then
   tmux set-option -gq @pane_lines_rest "$bright"
 fi
-tmux set-option -gq @pane_lines_bright '#ffffff'
+tmux set-option -gq @pane_lines_bright "$pulse"
 refresh_all
 
 # Start the dwell after the full redraw returns. Shader-heavy Ghostty clients
@@ -29,8 +33,10 @@ refresh_all
 sleep 0.55
 
 [ "$(tmux show-option -gv @focus_pulse_token 2>/dev/null)" = "$token" ] || exit 0
-rest=$(tmux show-option -gv @pane_lines_rest 2>/dev/null || printf '#66fff2')
-tmux set-option -gq @pane_lines_bright "$rest"
+rest=$(tmux show-option -gv @pane_lines_rest 2>/dev/null || true)
+if [ -z "$rest" ] || [ "$rest" = "$pulse" ]; then
+  rest=$(sed -n 's/^set -g @pane_lines_bright "\(#[0-9A-Fa-f]*\)".*/\1/p' "$(dirname "$(readlink -f "$0")")/tmux.conf" | head -n1)
+fi
+tmux set-option -gq @pane_lines_bright "${rest:-#66fff2}"
 tmux set-option -gu @focus_pulse_token 2>/dev/null || true
-tmux set-option -gu @pane_lines_rest 2>/dev/null || true
 refresh_all

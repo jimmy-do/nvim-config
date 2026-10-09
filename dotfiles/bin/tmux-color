@@ -83,6 +83,11 @@ TMUX_CONF = os.path.realpath(f"{HOME}/.tmux.conf")
 STATE_DIR = os.environ.get("XDG_STATE_HOME", f"{HOME}/.local/state")
 
 INK = "#080808"          # knockout text on a lit slab -- never recolored
+# Row 1's state pills (RESIZE / ZOOMED / TALL). Fixed, NOT the bar colour: at
+# BRIGHT they were the same teal as the WAIT chip and the tree, so every mode
+# read as one. Synth pink is the complement of the teal bar and is already the
+# MODE colour in tmux.conf; only the pill wears it, the cheatsheet stays BRIGHT.
+POP = "#FF2E97"
 DIM_SCALE = 0.48         # BRIGHT -> DIM
 SUNK_SCALE = 0.20        # BRIGHT -> scrollbar trough
 NUM_SCALE = 1.00         # Reactor Tag: fully lit angular index module
@@ -251,7 +256,7 @@ MODES = {
             # difference is the only thing distinguishing the two rows at a
             # glance. All of them are bold, dots included.
             f'set -g status-format[1] "#{{?#{{==:#{{client_key_table}},resize}},'
-            f'#[fg={B}]#[bg=default]{LCAP}#[fg={I}]#[bg={B}]#[bold] RESIZE #[fg={B}]#[bg=default]#[nobold]{RCAP}  '
+            f'#[fg={POP}]#[bg=default]{LCAP}#[fg={I}]#[bg={POP}]#[bold] RESIZE #[fg={POP}]#[bg=default]#[nobold]{RCAP}  '
             f'#[fg={B}]#[bg=default]h/j/k/l#[fg={D}] 1 cell  ·  '
             f'#[fg={B}]H/J/K/L#[fg={D}] 5 cells  ·  '
             f'#[fg={B}]Esc / q / Enter#[fg={D}] done,'
@@ -291,16 +296,16 @@ MODES = {
             # Zoomed: the one branch that is not about keys but about a lie the
             # screen is telling you -- the pane you see is not its real size.
             f'#{{?window_zoomed_flag,'
-            f'#[fg={B}]#[bg=default]{LCAP}#[fg={I}]#[bg={B}]#[bold] {ZOOM} ZOOMED '
-            f'#[fg={B}]#[bg=default]#[nobold]{RCAP}  '
+            f'#[fg={POP}]#[bg=default]{LCAP}#[fg={I}]#[bg={POP}]#[bold] {ZOOM} ZOOMED '
+            f'#[fg={POP}]#[bg=default]#[nobold]{RCAP}  '
             f'#[fg={B}]#{{pane_current_command}}#[fg={D}] · #{{b:pane_current_path}}'
             f'  #[fg={D}]prefix z restores,'
             # Height-zoom (@dimzoom): same slab, different icon and different
             # restore key. Kept as its own branch below the real zoom so the
             # two states can never both claim the row.
             f'#{{?@dimzoom,'
-            f'#[fg={B}]#[bg=default]{LCAP}#[fg={I}]#[bg={B}]#[bold] {TALL} TALL '
-            f'#[fg={B}]#[bg=default]#[nobold]{RCAP}  '
+            f'#[fg={POP}]#[bg=default]{LCAP}#[fg={I}]#[bg={POP}]#[bold] {TALL} TALL '
+            f'#[fg={POP}]#[bg=default]#[nobold]{RCAP}  '
             f'#[fg={B}]#{{pane_current_command}}#[fg={D}] · #{{b:pane_current_path}}'
             f'  #[fg={D}]prefix Z restores,'
             # The else-branch rule. BRIGHT, like the dividers: it is the bar's
@@ -1036,7 +1041,7 @@ def preview(bright):
     # it, and a mode chip at the left -- the row's own shapes, none of the
     # window strip's. Whatever `tmux-color` and `tmux-chip` are set to is not
     # this command's business and is deliberately absent from the sample.
-    return (fg(bright) + LCAP + swatch(bright, " ZOOMED ") + fg(bright) + RCAP +
+    return (fg(POP) + LCAP + swatch(POP, " ZOOMED ") + fg(bright) + RCAP +
             fg(bright) + " " + "═" * 8 +
             fg(dim) + " 2 panes · 4 win " + "\033[0m")
 
