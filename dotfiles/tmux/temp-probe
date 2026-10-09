@@ -23,7 +23,7 @@ lock="$cache.lock"
 # the reading forever, so anything older than 60s (vs a ~1s sample) is treated
 # as abandoned and cleared.
 if ! mkdir "$lock" 2>/dev/null; then
-  lmt=$(stat -f %m "$lock" 2>/dev/null || echo 0)
+  lmt=$(stat -c %Y "$lock" 2>/dev/null || stat -f %m "$lock" 2>/dev/null || echo 0)
   [ $(( $(date +%s) - lmt )) -gt 60 ] || exit 0
   rmdir "$lock" 2>/dev/null
   mkdir "$lock" 2>/dev/null || exit 0
