@@ -373,8 +373,7 @@ MODES = {
             # Single space before the clock chip (the helper emits one trailing
             # space, which is enough) and a 12-hour AM/PM clock, not 24h.
             # %-l (not %l) = no-pad hour, so no phantom space inside the pill.
-            f'#[fg={B}]#[bg=default]{LCAP}#[fg={I}]#[bg={B}]#[bold]%-l:%M:%S %p'
-            f'#[fg={B}]#[bg=default]#[nobold]{RCAP}"',
+            f'#[fg={B}]#[bg=default]#[bold]%-l:%M:%S %p#[nobold]"',
             # The rail between inactive windows: the hairline slant, U+E0BB.
             # It leans the same way as the chip shear, so the whole window strip
             # reads as one cut instead of a chip shape plus an unrelated ASCII-ish
