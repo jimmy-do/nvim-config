@@ -8,6 +8,8 @@ This directory contains the macOS-only portion of the dotfiles:
 > **Note (2026-10-09):** `ghostty/config.ghostty` here is a stale copy (last
 > commit 2026-07-30). The live config is in the separate `ghostty-config` repo.
 > `ghostty/shaders/` is current -- the live config's shader symlinks point here.
+> `karabiner/karabiner.json` here is stale too (2026-06-07, 4 rules; live has
+> 15). The live one is `karabiner/karabiner.json` in the `dotfiles-config` repo.
 
 ## Requirements
 

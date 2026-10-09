@@ -13,6 +13,8 @@ configuration. Use `main` for the cross-platform Neovim/tmux-only setup.
 > 2026-07-30) -- the live Ghostty config is in the separate `ghostty-config`
 > repo, so the Ghostty symlink steps below install an old file. The shaders in
 > `dotfiles/macos/ghostty/shaders/` are current.
+> `dotfiles/macos/karabiner/karabiner.json` is stale as well (2026-06-07, 4
+> rules; live has 15) -- the live one is in the `dotfiles-config` repo.
 
 ## Supported Environments
 
