@@ -59,7 +59,7 @@ float_status() {
 # the shader each one is a real cursor jump, so it fired comets from all over.
 #
 # The shader cannot see windows, only the cursor colour, so the float's cursor is
-# tagged #c8ffff -- an invisible nudge off cursor-color #c8fff4 -- and the shader
+# tagged #5affd8 -- an invisible nudge off cursor-color #5affdc -- and the shader
 # draws no trail while it sees that colour, nor on the jump in or out.
 #
 # Set once, not per press: each set-option is another repaint. Tried and
@@ -69,8 +69,8 @@ float_status() {
 float_cursor_tag() {
     local w
     for w in $(tmux list-windows -t "=$float_session" -F '#{window_id}'); do
-        [ "$(tmux show-option -wqv -t "$w" cursor-colour)" = '#c8ffff' ] \
-            || tmux set-option -w -t "$w" cursor-colour '#c8ffff'
+        [ "$(tmux show-option -wqv -t "$w" cursor-colour)" = '#5affd8' ] \
+            || tmux set-option -w -t "$w" cursor-colour '#5affd8'
     done
 }
 

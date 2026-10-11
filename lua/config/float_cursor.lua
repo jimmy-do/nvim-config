@@ -3,8 +3,8 @@
 -- WHY: Ghostty's cursor_tail shader trails every cursor jump, and a float
 -- opening is a jump from wherever the cursor happened to be -- the comet flies
 -- in from an arbitrary spot. The shader cannot see windows, but it CAN see the
--- cursor colour, so floats tag it: #c4fff4 inside a float, an invisible 4/255
--- off Ghostty's cursor-color (#c8fff4). The shader drops the trail on any jump
+-- cursor colour, so floats tag it: #56ffdc inside a float, an invisible 4/255
+-- off Ghostty's cursor-color (#5affdc). The shader drops the trail on any jump
 -- whose colour changed, i.e. one that crossed a float boundary. The tmux float
 -- does the same with cursor-colour (dotfiles/tmux/floax-toggle).
 --
@@ -16,7 +16,7 @@
 local M = {}
 
 local GROUP = "FloatTrailCursor"
-local TAGGED = { bg = "#c4fff4", fg = "#151515" }
+local TAGGED = { bg = "#56ffdc", fg = "#151515" }
 local PLAIN = { reverse = true }
 
 local tagged = nil
