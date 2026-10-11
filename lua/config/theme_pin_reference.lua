@@ -13,9 +13,6 @@
 -- (:Sepia 40, save, :Sepia 40 = sepia 80 on a dial still reading 40). Written
 -- once per theme and then frozen -- that is the entire job.
 return {
-  -- Written by hand at theme-creation time, NOT auto-captured. Must stay equal
-  -- to acidwave's knobs in theme_config_saved.lua (all neutral). If this drifts
-  -- from that file, the difference becomes a delta and drags every pinned hex.
   ["acidwave"] = {
     sepia_amount = 0,
     fg_lightness = 50,
@@ -93,6 +90,11 @@ return {
   },
   ["base16-tokyo-night-storm"] = {
     sepia_amount = -35,
+    fg_lightness = 50,
+    fg_saturation = 50,
+  },
+  ["base16-tokyo-night-terminal-storm"] = {
+    sepia_amount = 0,
     fg_lightness = 50,
     fg_saturation = 50,
   },
