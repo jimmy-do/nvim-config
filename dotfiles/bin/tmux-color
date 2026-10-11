@@ -88,6 +88,13 @@ INK = "#080808"          # knockout text on a lit slab -- never recolored
 # read as one. Synth pink is the complement of the teal bar and is already the
 # MODE colour in tmux.conf; only the pill wears it, the cheatsheet stays BRIGHT.
 POP = "#FF2E97"
+# The window rail's unseen-output mark wears the SESSION CHIP's colour. A LIVE
+# format reference like CM below, not a baked hex: it is the same expression
+# window-status-current-format paints the chip with, so the mark follows the
+# session hue with no regeneration. The mark's shape (the Pip-Boy, see ACT) is
+# what sets it apart from the dim rail now, not a foreign colour -- fixed
+# ambers, a red, a white-hot and a Pip-Boy green were all tried and dropped.
+NEWS = "#{?@session_hue_lit,#{@session_hue_lit},#{@session_hue}}"
 DIM_SCALE = 0.48         # BRIGHT -> DIM
 SUNK_SCALE = 0.20        # BRIGHT -> scrollbar trough
 NUM_SCALE = 1.00         # Reactor Tag: fully lit angular index module
@@ -188,7 +195,12 @@ BELL = chr(0xF0092)   # bell -- window rang
 # ACT is the WINDOW rail's activity dot and stays U+F111, untouched. It was
 # briefly changed to the fisheye below; the window rail is not this command's
 # to restyle, so it went back. Do not "unify" the two rails again.
-ACT = chr(0xF111)     # solid dot -- window has unseen output (WINDOW RAIL)
+ACT = chr(0x100000)   # Pip-Boy -- window has unseen output (WINDOW RAIL)
+# A hand-drawn glyph from the FalloutGlyphs font, not a Nerd Font icon: Nerd
+# Fonts has nothing Fallout beyond the radiation trefoil (U+F043C, the mark
+# before this one; U+F111 solid dot before that). U+100001 in the same font is
+# the Vault Boy head. Built by dotfiles-config/scripts/build-fallout-glyph-font.py
+# and mapped in config.ghostty; without that font this renders as a blank box.
 # PANE_UNSEEN is the pane pill's own dot and is deliberately allowed to differ.
 PANE_UNSEEN = chr(0x25C9)  # fisheye -- pane has output you have not seen
 # 25C9 FISHEYE, a dot inside a ring, over the plain 25CF disc it replaced. Both
@@ -499,7 +511,7 @@ MODES = {
             # window's active pane is resting in Vim/Neovim.
             f'#{{?#{{&&:#{{window_activity_flag}},'
             f'#{{==:#{{m/ri:^(n?vim)$,#{{pane_current_command}}}},0}}}},'
-            f'#[fg={B}] {ACT},  }}}}'
+            f'#[fg={NEWS}] {ACT},  }}}}'
             f' #[default]"',
         ],
     },
