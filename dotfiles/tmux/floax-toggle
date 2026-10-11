@@ -50,6 +50,30 @@ float_status() {
     tmux set-option -t "$float_session" 'status-format[0]' "$hint"
 }
 
+# NO CURSOR TRAILS IN THE FLOAT, for Ghostty's cursor_tail shader.
+#
+# The float is a tmux popup, and a popup makes tmux repaint the WHOLE screen for
+# every bit of output from the program inside it. Measured with a second client
+# and a raw byte capture: ~180 repaints/sec with Claude Code in the float, and
+# between repaints the cursor is exposed wherever that program was mid-draw. To
+# the shader each one is a real cursor jump, so it fired comets from all over.
+#
+# The shader cannot see windows, only the cursor colour, so the float's cursor is
+# tagged #c8ffff -- an invisible nudge off cursor-color #c8fff4 -- and the shader
+# draws no trail while it sees that colour, nor on the jump in or out.
+#
+# Set once, not per press: each set-option is another repaint. Tried and
+# rejected: hiding the pane cursor for the first 0.7s (the program in the float
+# shows it again itself) and swapping tag colours after opening (more repaints).
+# cursor-colour is a window option, hence the loop.
+float_cursor_tag() {
+    local w
+    for w in $(tmux list-windows -t "=$float_session" -F '#{window_id}'); do
+        [ "$(tmux show-option -wqv -t "$w" cursor-colour)" = '#c8ffff' ] \
+            || tmux set-option -w -t "$w" cursor-colour '#c8ffff'
+    done
+}
+
 if ! tmux has-session -t "=$float_session" 2>/dev/null; then
     tmux new-session -d -s "$float_session" \
         -c "$(tmux display-message -p '#{pane_current_path}')"
@@ -60,6 +84,10 @@ current=$(tmux display-message -p '#{session_name}')
 clients=$(tmux list-clients -F '#{client_name}' | wc -l | tr -d ' ')
 
 if [ "$current" != "$float_session" ] || [ "$clients" -gt 1 ]; then
+    if [ "$current" != "$float_session" ]; then
+        # Opening.
+        float_cursor_tag
+    fi
     exec "$FLOAX_SH"
 fi
 

@@ -130,7 +130,9 @@ return {
     "folke/snacks.nvim",
     opts = function(_, opts)
       opts.scroll = vim.tbl_deep_extend("force", opts.scroll or {}, {
-        enabled = true,
+        -- 2026-10-11: OFF at Jimmy's request. Flip back to true to restore the
+        -- glide; the animate settings below are kept for that.
+        enabled = false,
         animate = {
           -- step = ms per line, total = hard cap. Higher = more glide. A ~20-line
           -- half-page (u/d) now rides ~15*20=300ms instead of the old 180 cap;

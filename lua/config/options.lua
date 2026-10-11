@@ -32,11 +32,14 @@ vim.opt.sidescrolloff = 8
 -- guicursor WINS while nvim is focused, so a shape with no blink flag here stays
 -- solid regardless of the Ghostty setting.
 vim.opt.guicursor = {
-  "n-v-c-sm:block", -- normal/visual/command: solid block, no blink
-  "i-ci-ve:ver25-blinkwait500-blinkon500-blinkoff500",
-  "r-cr-o:hor20-blinkwait500-blinkon500-blinkoff500",
-  "t:block-TermCursor", -- terminal: solid block too
+  -- FloatTrailCursor on every shape: see lua/config/float_cursor.lua.
+  "n-v-c-sm:block-FloatTrailCursor", -- normal/visual/command: solid block, no blink
+  "i-ci-ve:ver25-blinkwait500-blinkon500-blinkoff500-FloatTrailCursor",
+  "r-cr-o:hor20-blinkwait500-blinkon500-blinkoff500-FloatTrailCursor",
+  "t:block-FloatTrailCursor", -- terminal: solid block too
 }
+-- Must run before hidden_cursor.setup() below captures guicursor as its fallback.
+require("config.float_cursor").setup()
 
 -- :ThemeRawLock — if the lock file exists, come up in raw mode before the
 -- first colorscheme loads, so the pipeline never stamps anything to undo.
